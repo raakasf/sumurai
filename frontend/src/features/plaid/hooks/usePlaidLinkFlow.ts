@@ -116,7 +116,9 @@ export function usePlaidLinkFlow(options: UsePlaidLinkFlowOptions = {}): UsePlai
     if (!enabled) return;
     clearError();
     try {
-      const userId = `user_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
+      const randomValue = window.crypto.getRandomValues(new Uint32Array(1))[0];
+      const randomSuffix = randomValue.toString(36).padStart(9, '0').slice(0, 9);
+      const userId = `user_${Date.now()}_${randomSuffix}`;
       const data = await ApiClient.post<{ link_token: string }>('/plaid/link-token', {
         user_id: userId,
       });
