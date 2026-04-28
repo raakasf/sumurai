@@ -1,5 +1,16 @@
 name: sumurai
 
+# Network topology:
+#   app_net   — internal: true (no internet route); all services communicate here.
+#   egress_net — has internet access; only squid sits on this network.
+#
+# The backend has no internet route of its own. Any outbound HTTPS must go
+# through squid (HTTPS_PROXY), which whitelists only *.teller.io.
+networks:
+  app_net:
+    internal: true
+  egress_net: {}
+
 services:
   frontend:
     build:
@@ -17,6 +28,8 @@ services:
         NEXT_PUBLIC_OTEL_BLOCK_SENSITIVE_ENDPOINTS: ${NEXT_PUBLIC_OTEL_BLOCK_SENSITIVE_ENDPOINTS:-true}
     environment:
       DEFAULT_PROVIDER: ${DEFAULT_PROVIDER:-teller}
+    networks:
+      - app_net
     depends_on:
       - backend
       - seq
@@ -53,9 +66,17 @@ services:
       RUST_LOG: ${BACKEND_RUST_LOG:-info}
       OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
       OTEL_STARTUP_TEST_SPAN: ${OTEL_STARTUP_TEST_SPAN:-0}
+
+      # Route all outbound HTTPS through the squid egress proxy.
+      # squid only allows CONNECT tunnels to *.teller.io.
+      HTTPS_PROXY: http://squid:3128
+      # Bypass the proxy for internal Docker service names.
+      NO_PROXY: postgres,redis,seq,nginx,frontend,squid,localhost,127.0.0.1,::1
     volumes:
       - ${TELLER_CERT_PATH}:/etc/teller/teller_certificate.pem:ro
       - ${TELLER_KEY_PATH}:/etc/teller/teller_private_key.pem:ro
+    networks:
+      - app_net
     command: >
       sh -c "
         echo 'Running database migrations...' &&
@@ -70,15 +91,28 @@ services:
         condition: service_started
       seq:
         condition: service_started
+      squid:
+        condition: service_started
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:3000/health" ]
       interval: 10s
       timeout: 5s
       retries: 5
 
+  squid:
+    image: ubuntu/squid:latest
+    restart: unless-stopped
+    volumes:
+      - ./squid/squid.conf:/etc/squid/squid.conf:ro
+    networks:
+      - app_net
+      - egress_net
+
   redis:
     image: redis:7-alpine
     command: redis-server --appendonly yes
+    networks:
+      - app_net
     volumes:
       - redis_data:/data
 
@@ -88,6 +122,8 @@ services:
       POSTGRES_DB: accounting
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    networks:
+      - app_net
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -103,6 +139,8 @@ services:
       ACCEPT_EULA: "Y"
       SEQ_INGESTION__OTLP__ENABLED: "true"
       SEQ_PASSWORD: ${SEQ_PASSWORD}
+    networks:
+      - app_net
     volumes:
       - seq_data:/data
 
@@ -122,6 +160,8 @@ services:
     ports:
       - "8080:80"
       - "8443:443"
+    networks:
+      - app_net
     volumes:
       - ./nginx/nginx.conf.template:/etc/nginx/nginx.conf.template:ro
       - ./nginx/entrypoint.sh:/etc/nginx/entrypoint.sh:ro
@@ -136,6 +176,9 @@ services:
   certbot:
     image: certbot/certbot:latest
     profiles: [ "certbot" ]
+    # certbot needs internet access to reach Let's Encrypt ACME servers.
+    networks:
+      - egress_net
     volumes:
       - certbot-etc:/etc/letsencrypt
       - certbot-var:/var/www/certbot
