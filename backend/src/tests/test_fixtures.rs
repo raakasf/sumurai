@@ -382,10 +382,11 @@ impl TestFixtures {
         let auth_service =
             AuthService::new("test_jwt_secret_key_for_integration_testing".to_string()).unwrap();
         let user_id = Uuid::new_v4();
+        let test_password = format!("test-pass-{}", Uuid::new_v4());
         let user = User {
             id: user_id,
             email: format!("test-{}@example.com", user_id),
-            password_hash: auth_service.hash_password("SecurePass123!").unwrap(),
+            password_hash: auth_service.hash_password(&test_password).unwrap(),
             provider: "teller".to_string(),
             created_at: Utc::now(),
             updated_at: Utc::now(),
