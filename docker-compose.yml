@@ -1,8 +1,11 @@
 name: sumurai
 
 # Network topology:
-#   app_net   — internal: true (no internet route); all services communicate here.
+#   app_net    — internal: true (no internet route); all services communicate here.
 #   egress_net — has internet access; only squid sits on this network.
+#   public_net — has internet access; only nginx sits on this network so that
+#                Docker Desktop will bind its host ports (8080/8443). Nginx
+#                makes no outbound internet requests itself.
 #
 # The backend has no internet route of its own. Any outbound HTTPS must go
 # through squid (HTTPS_PROXY), which whitelists only *.teller.io.
@@ -10,6 +13,7 @@ networks:
   app_net:
     internal: true
   egress_net: {}
+  public_net: {}
 
 services:
   frontend:
@@ -42,7 +46,7 @@ services:
   backend:
     build:
       context: .
-      dockerfile: backend/Dockerfile.prebuilt
+      dockerfile: backend/Dockerfile
     platform: linux/amd64
     environment:
       REDIS_URL: redis://redis:6379
@@ -145,7 +149,9 @@ services:
       - seq_data:/data
 
   nginx:
-    image: nginx:1.27-alpine
+    build:
+      context: ./nginx
+      dockerfile: Dockerfile
     depends_on:
       frontend:
         condition: service_healthy
@@ -162,6 +168,7 @@ services:
       - "8443:443"
     networks:
       - app_net
+      - public_net
     volumes:
       - ./nginx/nginx.conf.template:/etc/nginx/nginx.conf.template:ro
       - ./nginx/entrypoint.sh:/etc/nginx/entrypoint.sh:ro

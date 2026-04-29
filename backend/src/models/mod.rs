@@ -5,6 +5,7 @@ pub mod app_state;
 pub mod auth;
 pub mod budget;
 pub mod cache;
+pub mod category;
 pub mod plaid;
 pub mod query;
 pub mod transaction;

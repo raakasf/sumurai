@@ -206,6 +206,8 @@ async fn given_authenticated_user_when_get_transactions_with_account_ids_then_re
                 account_name: "Test Account 1".to_string(),
                 account_type: "checking".to_string(),
                 account_mask: Some("0001".to_string()),
+                custom_category: None,
+                rule_category: None,
             }];
             Box::pin(async { Ok(filtered_transactions) })
         });

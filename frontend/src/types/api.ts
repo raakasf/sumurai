@@ -25,6 +25,24 @@ export interface Transaction {
   account_mask?: string;
   running_balance?: number;
   location?: TransactionLocation;
+  custom_category?: string;
+  rule_category?: string;
+}
+
+export interface UserCategory {
+  id: string;
+  user_id: string;
+  name: string;
+  created_at: string;
+}
+
+export interface CategoryRule {
+  id: string;
+  user_id: string;
+  pattern: string;
+  category_name: string;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface Budget {

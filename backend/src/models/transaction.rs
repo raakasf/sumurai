@@ -61,7 +61,8 @@ pub struct Transaction {
     "created_at": "2024-01-15T13:45:00Z",
     "account_name": "Demo Checking",
     "account_type": "depository",
-    "account_mask": "1234"
+    "account_mask": "1234",
+    "custom_category": null
 }))]
 pub struct TransactionWithAccount {
     pub id: Uuid,
@@ -82,6 +83,8 @@ pub struct TransactionWithAccount {
     pub account_name: String,
     pub account_type: String,
     pub account_mask: Option<String>,
+    pub custom_category: Option<String>,
+    pub rule_category: Option<String>,
 }
 
 pub struct TransactionsQuery {
