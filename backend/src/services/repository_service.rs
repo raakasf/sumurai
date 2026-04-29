@@ -2,6 +2,7 @@ use crate::models::{
     account::Account,
     auth::User,
     budget::Budget,
+    category::{CategoryRule, UserCategory},
     plaid::{LatestAccountBalance, PlaidCredentials, ProviderConnection},
     transaction::{Transaction, TransactionWithAccount},
 };
@@ -91,6 +92,37 @@ pub trait DatabaseRepository: Send + Sync {
     async fn update_user_password(&self, user_id: &Uuid, new_password_hash: &str) -> Result<()>;
 
     async fn delete_user(&self, user_id: &Uuid) -> Result<()>;
+
+    async fn get_user_categories(&self, user_id: Uuid) -> Result<Vec<UserCategory>>;
+    async fn create_user_category(&self, user_id: Uuid, name: String) -> Result<UserCategory>;
+    async fn delete_user_category(&self, category_id: Uuid, user_id: Uuid) -> Result<()>;
+    async fn set_transaction_category_override(
+        &self,
+        transaction_id: Uuid,
+        user_id: Uuid,
+        category_name: String,
+    ) -> Result<()>;
+    async fn remove_transaction_category_override(
+        &self,
+        transaction_id: Uuid,
+        user_id: Uuid,
+    ) -> Result<()>;
+
+    async fn get_category_rules(&self, user_id: Uuid) -> Result<Vec<CategoryRule>>;
+    async fn create_category_rule(
+        &self,
+        user_id: Uuid,
+        pattern: String,
+        category_name: String,
+    ) -> Result<CategoryRule>;
+    async fn update_category_rule(
+        &self,
+        rule_id: Uuid,
+        user_id: Uuid,
+        pattern: Option<String>,
+        category_name: Option<String>,
+    ) -> Result<CategoryRule>;
+    async fn delete_category_rule(&self, rule_id: Uuid, user_id: Uuid) -> Result<()>;
 }
 
 pub struct PostgresRepository {
@@ -801,40 +833,46 @@ impl DatabaseRepository for PostgresRepository {
         &self,
         user_id: &Uuid,
     ) -> Result<Vec<TransactionWithAccount>> {
+        // SQLx only implements FromRow for tuples up to 16 elements, so we use a
+        // named struct to handle the 17-column result set.
+        #[derive(sqlx::FromRow)]
+        struct Row {
+            id: Uuid,
+            account_id: Uuid,
+            user_id: Option<Uuid>,
+            provider_transaction_id: Option<String>,
+            amount: rust_decimal::Decimal,
+            date: chrono::NaiveDate,
+            merchant_name: Option<String>,
+            category_primary: String,
+            category_detailed: String,
+            category_confidence: String,
+            payment_channel: Option<String>,
+            pending: bool,
+            created_at: Option<chrono::DateTime<chrono::Utc>>,
+            account_name: String,
+            account_type: String,
+            account_mask: Option<String>,
+            custom_category: Option<String>,
+        }
+
         let mut tx = self.pool.begin().await?;
         sqlx::query("SELECT set_config('app.current_user_id', $1, true)")
             .bind(user_id.to_string())
             .execute(&mut *tx)
             .await?;
 
-        let rows = sqlx::query_as::<
-            _,
-            (
-                Uuid,
-                Uuid,
-                Option<Uuid>,
-                Option<String>,
-                rust_decimal::Decimal,
-                chrono::NaiveDate,
-                Option<String>,
-                String,
-                String,
-                String,
-                Option<String>,
-                bool,
-                Option<chrono::DateTime<chrono::Utc>>,
-                String,
-                String,
-                Option<String>,
-            ),
-        >(
+        let rows = sqlx::query_as::<_, Row>(
             r#"
             SELECT t.id, t.account_id, t.user_id, t.provider_transaction_id, t.amount, t.date,
                    t.merchant_name, t.category_primary, t.category_detailed,
                    t.category_confidence, t.payment_channel, t.pending, t.created_at,
-                   a.name as account_name, a.account_type, a.mask as account_mask
+                   a.name as account_name, a.account_type, a.mask as account_mask,
+                   tco.category_name as custom_category
             FROM transactions t
             INNER JOIN accounts a ON t.account_id = a.id
+            LEFT JOIN transaction_category_overrides tco
+                ON t.id = tco.transaction_id AND tco.user_id = $1
             WHERE t.user_id = $1
             ORDER BY t.date DESC, t.created_at DESC
             LIMIT 1000
@@ -847,44 +885,27 @@ impl DatabaseRepository for PostgresRepository {
 
         Ok(rows
             .into_iter()
-            .map(
-                |(
-                    id,
-                    account_id,
-                    user_id,
-                    provider_transaction_id,
-                    amount,
-                    date,
-                    merchant_name,
-                    category_primary,
-                    category_detailed,
-                    category_confidence,
-                    payment_channel,
-                    pending,
-                    created_at,
-                    account_name,
-                    account_type,
-                    account_mask,
-                )| TransactionWithAccount {
-                    id,
-                    account_id,
-                    user_id,
-                    provider_account_id: None,
-                    provider_transaction_id,
-                    amount,
-                    date,
-                    merchant_name,
-                    category_primary,
-                    category_detailed,
-                    category_confidence,
-                    payment_channel,
-                    pending,
-                    created_at,
-                    account_name,
-                    account_type,
-                    account_mask,
-                },
-            )
+            .map(|r| TransactionWithAccount {
+                id: r.id,
+                account_id: r.account_id,
+                user_id: r.user_id,
+                provider_account_id: None,
+                provider_transaction_id: r.provider_transaction_id,
+                amount: r.amount,
+                date: r.date,
+                merchant_name: r.merchant_name,
+                category_primary: r.category_primary,
+                category_detailed: r.category_detailed,
+                category_confidence: r.category_confidence,
+                payment_channel: r.payment_channel,
+                pending: r.pending,
+                created_at: r.created_at,
+                account_name: r.account_name,
+                account_type: r.account_type,
+                account_mask: r.account_mask,
+                custom_category: r.custom_category,
+                rule_category: None, // populated by the handler after applying category rules
+            })
             .collect())
     }
 
@@ -1242,6 +1263,298 @@ impl DatabaseRepository for PostgresRepository {
             .await?;
 
         sqlx::query("DELETE FROM users WHERE id = $1")
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await?;
+
+        tx.commit().await?;
+        Ok(())
+    }
+
+    async fn get_user_categories(&self, user_id: Uuid) -> Result<Vec<UserCategory>> {
+        let mut tx = self.pool.begin().await?;
+
+        sqlx::query("SELECT set_config('app.current_user_id', $1, true)")
+            .bind(user_id.to_string())
+            .execute(&mut *tx)
+            .await?;
+
+        let categories = sqlx::query_as::<_, UserCategory>(
+            "SELECT id, user_id, name, created_at
+             FROM user_categories
+             WHERE user_id = $1
+             ORDER BY name ASC",
+        )
+        .bind(user_id)
+        .fetch_all(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+        Ok(categories)
+    }
+
+    async fn create_user_category(&self, user_id: Uuid, name: String) -> Result<UserCategory> {
+        let mut tx = self.pool.begin().await?;
+
+        sqlx::query("SELECT set_config('app.current_user_id', $1, true)")
+            .bind(user_id.to_string())
+            .execute(&mut *tx)
+            .await?;
+
+        let id = Uuid::new_v4();
+        let created_at = chrono::Utc::now();
+
+        let res = sqlx::query(
+            "INSERT INTO user_categories (id, user_id, name, created_at)
+             VALUES ($1, $2, $3, $4)",
+        )
+        .bind(id)
+        .bind(user_id)
+        .bind(&name)
+        .bind(created_at)
+        .execute(&mut *tx)
+        .await;
+
+        if let Err(e) = res {
+            if let sqlx::Error::Database(db_err) = &e {
+                if db_err.is_unique_violation() {
+                    let _ = tx.rollback().await;
+                    return Err(anyhow::anyhow!("Category name already exists"));
+                }
+            }
+            let _ = tx.rollback().await;
+            return Err(anyhow::anyhow!(e));
+        }
+
+        tx.commit().await?;
+        Ok(UserCategory {
+            id,
+            user_id,
+            name,
+            created_at,
+        })
+    }
+
+    async fn delete_user_category(&self, category_id: Uuid, user_id: Uuid) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+
+        sqlx::query("SELECT set_config('app.current_user_id', $1, true)")
+            .bind(user_id.to_string())
+            .execute(&mut *tx)
+            .await?;
+
+        // Fetch the category name so we can clear any overrides that reference it.
+        let name: Option<String> = sqlx::query_scalar(
+            "SELECT name FROM user_categories WHERE id = $1 AND user_id = $2",
+        )
+        .bind(category_id)
+        .bind(user_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+
+        sqlx::query("DELETE FROM user_categories WHERE id = $1 AND user_id = $2")
+            .bind(category_id)
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await?;
+
+        // Remove transaction overrides that used this category name so those
+        // transactions revert to their provider category.
+        if let Some(cat_name) = name {
+            sqlx::query(
+                "DELETE FROM transaction_category_overrides WHERE user_id = $1 AND category_name = $2",
+            )
+            .bind(user_id)
+            .bind(cat_name)
+            .execute(&mut *tx)
+            .await?;
+        }
+
+        tx.commit().await?;
+        Ok(())
+    }
+
+    async fn set_transaction_category_override(
+        &self,
+        transaction_id: Uuid,
+        user_id: Uuid,
+        category_name: String,
+    ) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+
+        sqlx::query("SELECT set_config('app.current_user_id', $1, true)")
+            .bind(user_id.to_string())
+            .execute(&mut *tx)
+            .await?;
+
+        sqlx::query(
+            "INSERT INTO transaction_category_overrides (transaction_id, user_id, category_name, created_at)
+             VALUES ($1, $2, $3, NOW())
+             ON CONFLICT (transaction_id, user_id) DO UPDATE SET category_name = EXCLUDED.category_name",
+        )
+        .bind(transaction_id)
+        .bind(user_id)
+        .bind(&category_name)
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+        Ok(())
+    }
+
+    async fn remove_transaction_category_override(
+        &self,
+        transaction_id: Uuid,
+        user_id: Uuid,
+    ) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+
+        sqlx::query("SELECT set_config('app.current_user_id', $1, true)")
+            .bind(user_id.to_string())
+            .execute(&mut *tx)
+            .await?;
+
+        sqlx::query(
+            "DELETE FROM transaction_category_overrides WHERE transaction_id = $1 AND user_id = $2",
+        )
+        .bind(transaction_id)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+        Ok(())
+    }
+
+    async fn get_category_rules(&self, user_id: Uuid) -> Result<Vec<CategoryRule>> {
+        let mut tx = self.pool.begin().await?;
+
+        sqlx::query("SELECT set_config('app.current_user_id', $1, true)")
+            .bind(user_id.to_string())
+            .execute(&mut *tx)
+            .await?;
+
+        let rules = sqlx::query_as::<_, CategoryRule>(
+            "SELECT id, user_id, pattern, category_name, created_at, updated_at
+             FROM category_rules
+             WHERE user_id = $1
+             ORDER BY created_at ASC",
+        )
+        .bind(user_id)
+        .fetch_all(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+        tracing::info!(user_id = %user_id, rule_count = rules.len(), "get_category_rules returned");
+        Ok(rules)
+    }
+
+    async fn create_category_rule(
+        &self,
+        user_id: Uuid,
+        pattern: String,
+        category_name: String,
+    ) -> Result<CategoryRule> {
+        let mut tx = self.pool.begin().await?;
+
+        sqlx::query("SELECT set_config('app.current_user_id', $1, true)")
+            .bind(user_id.to_string())
+            .execute(&mut *tx)
+            .await?;
+
+        let id = Uuid::new_v4();
+        let now = chrono::Utc::now();
+
+        let res = sqlx::query(
+            "INSERT INTO category_rules (id, user_id, pattern, category_name, created_at, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $5)",
+        )
+        .bind(id)
+        .bind(user_id)
+        .bind(&pattern)
+        .bind(&category_name)
+        .bind(now)
+        .execute(&mut *tx)
+        .await;
+
+        if let Err(e) = res {
+            if let sqlx::Error::Database(db_err) = &e {
+                if db_err.is_unique_violation() {
+                    let _ = tx.rollback().await;
+                    return Err(anyhow::anyhow!("Rule pattern already exists"));
+                }
+            }
+            let _ = tx.rollback().await;
+            return Err(anyhow::anyhow!(e));
+        }
+
+        tx.commit().await?;
+        Ok(CategoryRule {
+            id,
+            user_id,
+            pattern,
+            category_name,
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    async fn update_category_rule(
+        &self,
+        rule_id: Uuid,
+        user_id: Uuid,
+        pattern: Option<String>,
+        category_name: Option<String>,
+    ) -> Result<CategoryRule> {
+        let mut tx = self.pool.begin().await?;
+
+        sqlx::query("SELECT set_config('app.current_user_id', $1, true)")
+            .bind(user_id.to_string())
+            .execute(&mut *tx)
+            .await?;
+
+        let now = chrono::Utc::now();
+
+        sqlx::query(
+            "UPDATE category_rules
+             SET pattern = COALESCE($1, pattern),
+                 category_name = COALESCE($2, category_name),
+                 updated_at = $3
+             WHERE id = $4 AND user_id = $5",
+        )
+        .bind(pattern)
+        .bind(category_name)
+        .bind(now)
+        .bind(rule_id)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+
+        let updated = sqlx::query_as::<_, CategoryRule>(
+            "SELECT id, user_id, pattern, category_name, created_at, updated_at
+             FROM category_rules
+             WHERE id = $1 AND user_id = $2",
+        )
+        .bind(rule_id)
+        .bind(user_id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|_| anyhow::anyhow!("Rule not found"))?;
+
+        tx.commit().await?;
+        Ok(updated)
+    }
+
+    async fn delete_category_rule(&self, rule_id: Uuid, user_id: Uuid) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+
+        sqlx::query("SELECT set_config('app.current_user_id', $1, true)")
+            .bind(user_id.to_string())
+            .execute(&mut *tx)
+            .await?;
+
+        sqlx::query("DELETE FROM category_rules WHERE id = $1 AND user_id = $2")
+            .bind(rule_id)
             .bind(user_id)
             .execute(&mut *tx)
             .await?;

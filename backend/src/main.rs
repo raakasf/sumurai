@@ -47,6 +47,11 @@ use crate::models::{
     analytics::{DateRangeQuery, MonthlyTotalsQuery},
     auth as auth_models,
     budget::{Budget, CreateBudgetRequest, DeleteBudgetResponse, UpdateBudgetRequest},
+    category::{
+        CategoryRule, CreateCategoryRequest, CreateCategoryRuleRequest, DeleteCategoryResponse,
+        DeleteCategoryRuleResponse, UpdateCategoryRuleRequest, UpdateTransactionCategoryRequest,
+        UserCategory,
+    },
     plaid::{
         ClearSyncedDataResponse, DisconnectRequest, DisconnectResult, ExchangeTokenRequest,
         ExchangeTokenResponse, LinkTokenRequest, LinkTokenResponse, ProviderConnectRequest,
@@ -264,6 +269,30 @@ pub fn create_app(state: AppState) -> Router {
         .route("/api/budgets", post(create_authenticated_budget))
         .route("/api/budgets/{id}", put(update_authenticated_budget))
         .route("/api/budgets/{id}", delete(delete_authenticated_budget))
+        .route("/api/categories", get(get_authenticated_user_categories))
+        .route("/api/categories", post(create_authenticated_user_category))
+        .route(
+            "/api/categories/{id}",
+            delete(delete_authenticated_user_category),
+        )
+        .route(
+            "/api/transactions/{id}/category",
+            put(set_authenticated_transaction_category),
+        )
+        .route(
+            "/api/transactions/{id}/category",
+            delete(remove_authenticated_transaction_category),
+        )
+        .route("/api/category-rules", get(get_authenticated_category_rules))
+        .route("/api/category-rules", post(create_authenticated_category_rule))
+        .route(
+            "/api/category-rules/{id}",
+            put(update_authenticated_category_rule),
+        )
+        .route(
+            "/api/category-rules/{id}",
+            delete(delete_authenticated_category_rule),
+        )
         .route("/api/auth/change-password", put(change_user_password))
         .route("/api/auth/account", delete(delete_user_account))
         .layer(axum::middleware::from_fn_with_state(
@@ -866,6 +895,12 @@ async fn get_authenticated_transactions(
         .await?;
     }
 
+    let rules = state
+        .db_repository
+        .get_category_rules(user_id)
+        .await
+        .unwrap_or_default();
+
     match state
         .db_repository
         .get_transactions_with_account_for_user(&user_id)
@@ -881,6 +916,28 @@ async fn get_authenticated_transactions(
                 let account_id_set: std::collections::HashSet<Uuid> =
                     account_ids.into_iter().collect();
                 transactions.retain(|t| account_id_set.contains(&t.account_id));
+            }
+
+            // Apply glob rules to transactions that have no explicit override.
+            // Earlier rules take precedence (first match wins).
+            tracing::info!(rule_count = rules.len(), "applying category rules");
+            for txn in transactions.iter_mut() {
+                if txn.custom_category.is_none() {
+                    let merchant = txn.merchant_name.as_deref().unwrap_or("<null>");
+                    for rule in &rules {
+                        let matched = utils::glob::glob_match(&rule.pattern, merchant);
+                        tracing::info!(
+                            pattern = %rule.pattern,
+                            merchant = %merchant,
+                            matched = %matched,
+                            "category rule check"
+                        );
+                        if matched {
+                            txn.rule_category = Some(rule.category_name.clone());
+                            break;
+                        }
+                    }
+                }
             }
 
             if let Some(search) = search.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty()) {
@@ -2870,4 +2927,328 @@ async fn delete_user_account(
             budgets: deleted_budgets,
         },
     }))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/categories",
+    description = "Returns all user-defined custom categories.",
+    responses(
+        (status = 200, description = "List of user categories", body = Vec<UserCategory>),
+        (status = 401, description = "Unauthorized"),
+        (status = 500, description = "Internal server error", body = ApiErrorResponse),
+    ),
+    security(("bearer_auth" = [])),
+    tag = "Categories"
+)]
+async fn get_authenticated_user_categories(
+    State(state): State<AppState>,
+    auth_context: AuthContext,
+) -> Result<Json<Vec<UserCategory>>, (StatusCode, Json<ApiErrorResponse>)> {
+    let user_id = auth_context.user_id;
+    match state.db_repository.get_user_categories(user_id).await {
+        Ok(categories) => Ok(Json(categories)),
+        Err(e) => {
+            tracing::error!("Failed to get categories for user {}: {}", user_id, e);
+            Err(ApiErrorResponse::internal_server_error("Failed to fetch categories"))
+        }
+    }
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/categories",
+    description = "Creates a new user-defined custom category.",
+    request_body = CreateCategoryRequest,
+    responses(
+        (status = 200, description = "Category created", body = UserCategory),
+        (status = 400, description = "Invalid request", body = ApiErrorResponse),
+        (status = 409, description = "Category name already exists", body = ApiErrorResponse),
+        (status = 401, description = "Unauthorized"),
+        (status = 500, description = "Internal server error", body = ApiErrorResponse),
+    ),
+    security(("bearer_auth" = [])),
+    tag = "Categories"
+)]
+async fn create_authenticated_user_category(
+    State(state): State<AppState>,
+    auth_context: AuthContext,
+    Json(req): Json<CreateCategoryRequest>,
+) -> Result<Json<UserCategory>, (StatusCode, Json<ApiErrorResponse>)> {
+    let user_id = auth_context.user_id;
+    let name = req.name.trim().to_string();
+    if name.is_empty() {
+        return Err(
+            ApiErrorResponse::new("BAD_REQUEST", "Category name must not be empty")
+                .into_response(StatusCode::BAD_REQUEST),
+        );
+    }
+    match state
+        .db_repository
+        .create_user_category(user_id, name)
+        .await
+    {
+        Ok(category) => Ok(Json(category)),
+        Err(e) => {
+            tracing::error!("Failed to create category for user {}: {}", user_id, e);
+            if e.to_string().contains("already exists") {
+                Err(
+                    ApiErrorResponse::new("CONFLICT", "Category name already exists")
+                        .into_response(StatusCode::CONFLICT),
+                )
+            } else {
+                Err(ApiErrorResponse::internal_server_error("Failed to create category"))
+            }
+        }
+    }
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/categories/{id}",
+    description = "Deletes a user-defined custom category.",
+    params(("id" = String, Path, description = "Category ID")),
+    responses(
+        (status = 200, description = "Category deleted", body = DeleteCategoryResponse),
+        (status = 400, description = "Invalid ID", body = ApiErrorResponse),
+        (status = 401, description = "Unauthorized"),
+        (status = 500, description = "Internal server error", body = ApiErrorResponse),
+    ),
+    security(("bearer_auth" = [])),
+    tag = "Categories"
+)]
+async fn delete_authenticated_user_category(
+    State(state): State<AppState>,
+    auth_context: AuthContext,
+    Path(category_id): Path<String>,
+) -> Result<Json<DeleteCategoryResponse>, (StatusCode, Json<ApiErrorResponse>)> {
+    let user_id = auth_context.user_id;
+    let category_uuid = Uuid::parse_str(&category_id).map_err(|_| {
+        ApiErrorResponse::new("BAD_REQUEST", "Invalid category id")
+            .into_response(StatusCode::BAD_REQUEST)
+    })?;
+    match state
+        .db_repository
+        .delete_user_category(category_uuid, user_id)
+        .await
+    {
+        Ok(_) => Ok(Json(DeleteCategoryResponse {
+            deleted: true,
+            id: category_id,
+        })),
+        Err(e) => {
+            tracing::error!(
+                "Failed to delete category {} for user {}: {}",
+                category_id,
+                user_id,
+                e
+            );
+            Err(ApiErrorResponse::internal_server_error("Failed to delete category"))
+        }
+    }
+}
+
+#[utoipa::path(
+    put,
+    path = "/api/transactions/{id}/category",
+    description = "Sets or updates the custom category override for a transaction.",
+    params(("id" = String, Path, description = "Transaction ID")),
+    request_body = UpdateTransactionCategoryRequest,
+    responses(
+        (status = 200, description = "Category override set"),
+        (status = 400, description = "Invalid request", body = ApiErrorResponse),
+        (status = 401, description = "Unauthorized"),
+        (status = 500, description = "Internal server error", body = ApiErrorResponse),
+    ),
+    security(("bearer_auth" = [])),
+    tag = "Categories"
+)]
+async fn set_authenticated_transaction_category(
+    State(state): State<AppState>,
+    auth_context: AuthContext,
+    Path(transaction_id): Path<String>,
+    Json(req): Json<UpdateTransactionCategoryRequest>,
+) -> Result<StatusCode, (StatusCode, Json<ApiErrorResponse>)> {
+    let user_id = auth_context.user_id;
+    let txn_uuid = Uuid::parse_str(&transaction_id).map_err(|_| {
+        ApiErrorResponse::new("BAD_REQUEST", "Invalid transaction id")
+            .into_response(StatusCode::BAD_REQUEST)
+    })?;
+    let name = req.category_name.trim().to_string();
+    if name.is_empty() {
+        return Err(
+            ApiErrorResponse::new("BAD_REQUEST", "Category name must not be empty")
+                .into_response(StatusCode::BAD_REQUEST),
+        );
+    }
+    match state
+        .db_repository
+        .set_transaction_category_override(txn_uuid, user_id, name)
+        .await
+    {
+        Ok(_) => Ok(StatusCode::NO_CONTENT),
+        Err(e) => {
+            tracing::error!(
+                "Failed to set category override for transaction {} user {}: {}",
+                transaction_id,
+                user_id,
+                e
+            );
+            Err(ApiErrorResponse::internal_server_error(
+                "Failed to set category override",
+            ))
+        }
+    }
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/transactions/{id}/category",
+    description = "Removes the custom category override for a transaction, restoring the provider category.",
+    params(("id" = String, Path, description = "Transaction ID")),
+    responses(
+        (status = 200, description = "Category override removed"),
+        (status = 400, description = "Invalid ID", body = ApiErrorResponse),
+        (status = 401, description = "Unauthorized"),
+        (status = 500, description = "Internal server error", body = ApiErrorResponse),
+    ),
+    security(("bearer_auth" = [])),
+    tag = "Categories"
+)]
+async fn remove_authenticated_transaction_category(
+    State(state): State<AppState>,
+    auth_context: AuthContext,
+    Path(transaction_id): Path<String>,
+) -> Result<StatusCode, (StatusCode, Json<ApiErrorResponse>)> {
+    let user_id = auth_context.user_id;
+    let txn_uuid = Uuid::parse_str(&transaction_id).map_err(|_| {
+        ApiErrorResponse::new("BAD_REQUEST", "Invalid transaction id")
+            .into_response(StatusCode::BAD_REQUEST)
+    })?;
+    match state
+        .db_repository
+        .remove_transaction_category_override(txn_uuid, user_id)
+        .await
+    {
+        Ok(_) => Ok(StatusCode::NO_CONTENT),
+        Err(e) => {
+            tracing::error!(
+                "Failed to remove category override for transaction {} user {}: {}",
+                transaction_id,
+                user_id,
+                e
+            );
+            Err(ApiErrorResponse::internal_server_error(
+                "Failed to remove category override",
+            ))
+        }
+    }
+}
+
+async fn get_authenticated_category_rules(
+    State(state): State<AppState>,
+    auth_context: AuthContext,
+) -> Result<Json<Vec<CategoryRule>>, (StatusCode, Json<ApiErrorResponse>)> {
+    match state.db_repository.get_category_rules(auth_context.user_id).await {
+        Ok(rules) => Ok(Json(rules)),
+        Err(e) => {
+            tracing::error!("Failed to get category rules: {}", e);
+            Err(ApiErrorResponse::internal_server_error("Failed to fetch category rules"))
+        }
+    }
+}
+
+async fn create_authenticated_category_rule(
+    State(state): State<AppState>,
+    auth_context: AuthContext,
+    Json(req): Json<CreateCategoryRuleRequest>,
+) -> Result<Json<CategoryRule>, (StatusCode, Json<ApiErrorResponse>)> {
+    let user_id = auth_context.user_id;
+    let pattern = req.pattern.trim().to_string();
+    let category_name = req.category_name.trim().to_string();
+    tracing::info!(user_id = %user_id, pattern = %pattern, category_name = %category_name, "create_category_rule called");
+    if pattern.is_empty() || category_name.is_empty() {
+        return Err(
+            ApiErrorResponse::new("BAD_REQUEST", "Pattern and category name must not be empty")
+                .into_response(StatusCode::BAD_REQUEST),
+        );
+    }
+    match state
+        .db_repository
+        .create_category_rule(user_id, pattern, category_name)
+        .await
+    {
+        Ok(rule) => Ok(Json(rule)),
+        Err(e) => {
+            tracing::error!("Failed to create category rule for user {}: {}", user_id, e);
+            if e.to_string().contains("already exists") {
+                Err(
+                    ApiErrorResponse::new("CONFLICT", "Rule pattern already exists")
+                        .into_response(StatusCode::CONFLICT),
+                )
+            } else {
+                Err(ApiErrorResponse::internal_server_error("Failed to create category rule"))
+            }
+        }
+    }
+}
+
+async fn update_authenticated_category_rule(
+    State(state): State<AppState>,
+    auth_context: AuthContext,
+    Path(rule_id): Path<String>,
+    Json(req): Json<UpdateCategoryRuleRequest>,
+) -> Result<Json<CategoryRule>, (StatusCode, Json<ApiErrorResponse>)> {
+    let user_id = auth_context.user_id;
+    let rule_uuid = Uuid::parse_str(&rule_id).map_err(|_| {
+        ApiErrorResponse::new("BAD_REQUEST", "Invalid rule id")
+            .into_response(StatusCode::BAD_REQUEST)
+    })?;
+    match state
+        .db_repository
+        .update_category_rule(
+            rule_uuid,
+            user_id,
+            req.pattern.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
+            req.category_name.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
+        )
+        .await
+    {
+        Ok(rule) => Ok(Json(rule)),
+        Err(e) => {
+            tracing::error!("Failed to update rule {} for user {}: {}", rule_id, user_id, e);
+            if e.to_string().contains("not found") {
+                Err(ApiErrorResponse::new("NOT_FOUND", "Rule not found")
+                    .into_response(StatusCode::NOT_FOUND))
+            } else {
+                Err(ApiErrorResponse::internal_server_error("Failed to update category rule"))
+            }
+        }
+    }
+}
+
+async fn delete_authenticated_category_rule(
+    State(state): State<AppState>,
+    auth_context: AuthContext,
+    Path(rule_id): Path<String>,
+) -> Result<Json<DeleteCategoryRuleResponse>, (StatusCode, Json<ApiErrorResponse>)> {
+    let user_id = auth_context.user_id;
+    let rule_uuid = Uuid::parse_str(&rule_id).map_err(|_| {
+        ApiErrorResponse::new("BAD_REQUEST", "Invalid rule id")
+            .into_response(StatusCode::BAD_REQUEST)
+    })?;
+    match state
+        .db_repository
+        .delete_category_rule(rule_uuid, user_id)
+        .await
+    {
+        Ok(_) => Ok(Json(DeleteCategoryRuleResponse {
+            deleted: true,
+            id: rule_id,
+        })),
+        Err(e) => {
+            tracing::error!("Failed to delete rule {} for user {}: {}", rule_id, user_id, e);
+            Err(ApiErrorResponse::internal_server_error("Failed to delete category rule"))
+        }
+    }
 }

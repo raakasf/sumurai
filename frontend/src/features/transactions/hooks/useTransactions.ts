@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { type FilterCriteria, TransactionFilter } from '../../../domain/TransactionFilter';
 import { useAccountFilter } from '../../../hooks/useAccountFilter';
+import { CategoryService } from '../../../services/CategoryService';
 import { type TransactionFilters, TransactionService } from '../../../services/TransactionService';
-import type { Transaction } from '../../../types/api';
+import type { Transaction, UserCategory } from '../../../types/api';
 import { formatCategoryName } from '../../../utils/categories';
 
 export type DateRangeKey = string | undefined;
@@ -31,6 +32,13 @@ export interface UseTransactionsResult {
   pageItems: Transaction[];
   totalItems: number;
   totalPages: number;
+  // category management
+  userCategories: UserCategory[];
+  updateTransactionCategory: (transactionId: string, categoryName: string) => Promise<void>;
+  resetTransactionCategory: (transactionId: string) => Promise<void>;
+  createCategoryAndAssign: (transactionId: string, name: string) => Promise<void>;
+  createCategoryRule: (transactionId: string, pattern: string, categoryName: string) => Promise<void>;
+  deleteUserCategory: (categoryId: string) => Promise<void>;
 }
 
 export function useTransactions(options: UseTransactionsOptions = {}): UseTransactionsResult {
@@ -43,6 +51,7 @@ export function useTransactions(options: UseTransactionsOptions = {}): UseTransa
   const [selectedCategory, setSelectedCategory] = useState<string | null>(initialCategory);
   const [dateRange, setDateRange] = useState<DateRangeKey>(initialDateRange);
   const [currentPage, setCurrentPage] = useState(1);
+  const [userCategories, setUserCategories] = useState<UserCategory[]>([]);
 
   const {
     selectedAccountIds,
@@ -87,8 +96,69 @@ export function useTransactions(options: UseTransactionsOptions = {}): UseTransa
   }, [load]);
 
   useEffect(() => {
+    CategoryService.getCategories()
+      .then(setUserCategories)
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
     setCurrentPage(1);
   }, []);
+
+  const updateTransactionCategory = useCallback(
+    async (transactionId: string, categoryName: string) => {
+      await CategoryService.setTransactionCategory(transactionId, categoryName);
+      setAll((prev) =>
+        prev.map((t) =>
+          t.id === transactionId
+            ? { ...t, custom_category: categoryName, category: { ...t.category, primary: categoryName } }
+            : t
+        )
+      );
+    },
+    []
+  );
+
+  const resetTransactionCategory = useCallback(async (transactionId: string) => {
+    await CategoryService.removeTransactionCategory(transactionId);
+    // Reload to get original provider category
+    await load();
+  }, [load]);
+
+  const createCategoryAndAssign = useCallback(
+    async (transactionId: string, name: string) => {
+      const created = await CategoryService.createCategory(name);
+      setUserCategories((prev) => [...prev, created].sort((a, b) => a.name.localeCompare(b.name)));
+      await CategoryService.setTransactionCategory(transactionId, name);
+      setAll((prev) =>
+        prev.map((t) =>
+          t.id === transactionId
+            ? { ...t, custom_category: name, category: { ...t.category, primary: name } }
+            : t
+        )
+      );
+    },
+    []
+  );
+
+  const createCategoryRule = useCallback(
+    async (transactionId: string, pattern: string, categoryName: string) => {
+      await CategoryService.createRule(pattern, categoryName);
+      // Reload so glob matching is re-applied server-side for all transactions
+      await load();
+    },
+    [load]
+  );
+
+  const deleteUserCategory = useCallback(
+    async (categoryId: string) => {
+      await CategoryService.deleteCategory(categoryId);
+      setUserCategories((prev) => prev.filter((c) => c.id !== categoryId));
+      // Reload transactions — backend clears overrides that used this category
+      await load();
+    },
+    [load]
+  );
 
   const debouncedSearch = useDebounce(search, 300);
 
@@ -154,6 +224,12 @@ export function useTransactions(options: UseTransactionsOptions = {}): UseTransa
     pageItems,
     totalItems,
     totalPages,
+    userCategories,
+    updateTransactionCategory,
+    resetTransactionCategory,
+    createCategoryAndAssign,
+    createCategoryRule,
+    deleteUserCategory,
   };
 }
 

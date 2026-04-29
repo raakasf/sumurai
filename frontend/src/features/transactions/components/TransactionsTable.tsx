@@ -3,9 +3,9 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { Receipt } from 'lucide-react';
 import type React from 'react';
 import { cn, EmptyState } from '@/ui/primitives';
-import type { Transaction } from '../../../types/api';
-import { formatCategoryName, getTagThemeForCategory } from '../../../utils/categories';
+import type { Transaction, UserCategory } from '../../../types/api';
 import { fmtUSD } from '../../../utils/format';
+import { CategoryDropdown } from './CategoryDropdown';
 
 interface Props {
   items: Transaction[];
@@ -14,13 +14,18 @@ interface Props {
   totalPages: number;
   onPrev: () => void;
   onNext: () => void;
+  userCategories: UserCategory[];
+  onCategorySelect: (transactionId: string, categoryName: string) => Promise<void>;
+  onCategoryReset: (transactionId: string) => Promise<void>;
+  onCategoryCreate: (transactionId: string, name: string) => Promise<void>;
+  onCategoryRule: (transactionId: string, pattern: string, categoryName: string) => Promise<void>;
+  onCategoryDelete: (categoryId: string) => Promise<void>;
 }
 
-const resolveCategoryName = (transaction: Transaction): string => {
-  if (!transaction.category) {
-    return 'Uncategorized';
-  }
-  return formatCategoryName(transaction.category.primary);
+const getDisplayAmount = (transaction: Transaction) => {
+  const accountType = transaction.account_type?.toLowerCase() ?? '';
+  const isCreditAccount = accountType === 'credit' || accountType === 'credit card';
+  return isCreditAccount ? transaction.amount : -transaction.amount;
 };
 
 export const TransactionsTable: React.FC<Props> = ({
@@ -30,6 +35,12 @@ export const TransactionsTable: React.FC<Props> = ({
   totalPages,
   onPrev,
   onNext,
+  userCategories,
+  onCategorySelect,
+  onCategoryReset,
+  onCategoryCreate,
+  onCategoryRule,
+  onCategoryDelete,
 }) => {
   const pageSize = items.length > 0 ? Math.ceil(total / totalPages) : 8;
   const from = total === 0 ? 0 : (currentPage - 1) * pageSize + 1;
@@ -142,8 +153,8 @@ export const TransactionsTable: React.FC<Props> = ({
                   transition={{ duration: 0.24, ease: [0.22, 0.61, 0.36, 1] }}
                 >
                   {items.map((r, i) => {
-                    const catName = resolveCategoryName(r);
-                    const theme = getTagThemeForCategory(catName);
+                    const overrideType = r.custom_category ? 'explicit' : r.rule_category ? 'rule' : 'none';
+                    const displayAmount = getDisplayAmount(r);
                     return (
                       <tr
                         key={r.id}
@@ -188,14 +199,14 @@ export const TransactionsTable: React.FC<Props> = ({
                         </td>
                         <td
                           className={`whitespace-nowrap px-4 py-3 text-right align-middle tabular-nums font-semibold transition-colors duration-500 ${
-                            r.amount > 0
-                              ? 'text-red-600 dark:text-red-400'
-                              : r.amount < 0
-                                ? 'text-green-600 dark:text-green-400'
+                            displayAmount > 0
+                              ? 'text-green-600 dark:text-green-400'
+                              : displayAmount < 0
+                                ? 'text-red-600 dark:text-red-400'
                                 : 'text-slate-600 dark:text-slate-400'
                           }`}
                         >
-                          {fmtUSD(r.amount)}
+                          {fmtUSD(displayAmount)}
                         </td>
                         <td className={cn('whitespace-nowrap', 'px-4', 'py-3', 'align-middle')}>
                           <span
@@ -224,15 +235,17 @@ export const TransactionsTable: React.FC<Props> = ({
                           </span>
                         </td>
                         <td className={cn('whitespace-nowrap', 'px-4', 'py-3', 'align-middle')}>
-                          <span
-                            className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 transition-all duration-200 backdrop-blur-sm ring-1 ring-white/60 dark:ring-white/10 ${theme.tag}`}
-                          >
-                            <span
-                              className={`h-2 w-2 rounded-full shadow-[0_0_0_1px_rgba(255,255,255,0.85)] dark:shadow-[0_0_0_1px_rgba(15,23,42,0.7)] ${theme.dot}`}
-                              aria-hidden="true"
-                            />
-                            {catName}
-                          </span>
+                          <CategoryDropdown
+                            currentCategory={r.category?.primary ?? 'OTHER'}
+                            overrideType={overrideType}
+                            merchantName={r.merchant || r.name}
+                            userCategories={userCategories}
+                            onSelect={(name) => onCategorySelect(r.id, name)}
+                            onReset={() => onCategoryReset(r.id)}
+                            onCreateAndSelect={(name) => onCategoryCreate(r.id, name)}
+                            onCreateRule={(pattern, categoryName) => onCategoryRule(r.id, pattern, categoryName)}
+                            onDeleteCategory={onCategoryDelete}
+                          />
                         </td>
                       </tr>
                     );

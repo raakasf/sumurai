@@ -1,6 +1,6 @@
-![Sumurai](https://github.com/user-attachments/assets/3b1a9fe4-4dbd-4f9a-9183-1f52dcfd70ca)
-
 # Sumurai
+
+![Sumurai](https://github.com/user-attachments/assets/3b1a9fe4-4dbd-4f9a-9183-1f52dcfd70ca)
 
 Personal finance dashboard. Self-hosted. Connects to your bank via Teller API, syncs transactions, shows where your money goes.
 
@@ -8,9 +8,10 @@ Personal finance dashboard. Self-hosted. Connects to your bank via Teller API, s
 ![Dashboard extras](docs/images/dashboard-extras.png)
 
 ## Privacy Disclosure for 3rd Party Financial Aggregators
+
 While this app was built to securely handle your information once its received, we are not able to control how 3rd Party Aggregators use your data. This app requires the use of 3rd Party Financial Aggregators API (eg. Teller) to securely connect your accounts and transaction data while keeping them in sync. To do so requires consenting to the 3rd Party Aggregator's terms of service and data usage policy. Please be aware this is a privacy trade-off to allow the tool to be more useful.
 
-You can read Teller's policy here: https://teller.io/legal
+You can read Teller's policy here: <https://teller.io/legal>
 
 Be sure you are ok with the privacy trade-offs before connecting your accounts!
 
@@ -40,7 +41,7 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-Open http://localhost:8080. Demo: `me@test.com` / `Test1234!`
+Open <http://localhost:8080>. Demo: `me@test.com` / `Test1234!`
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for prerequisites and full setup.
 

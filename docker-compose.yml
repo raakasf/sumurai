@@ -1,8 +1,11 @@
 name: sumurai
 
 # Network topology:
-#   app_net   — internal: true (no internet route); all services communicate here.
+#   app_net    — internal: true (no internet route); all services communicate here.
 #   egress_net — has internet access; only squid sits on this network.
+#   public_net — exposes nginx host ports (8080/8443). Nginx applies an
+#                in-container OUTPUT firewall before start so it can serve
+#                inbound traffic without initiating internet egress.
 #
 # The backend has no internet route of its own. Any outbound HTTPS must go
 # through squid (HTTPS_PROXY), which whitelists only *.teller.io.
@@ -10,6 +13,7 @@ networks:
   app_net:
     internal: true
   egress_net: {}
+  public_net: {}
 
 services:
   frontend:
@@ -42,7 +46,7 @@ services:
   backend:
     build:
       context: .
-      dockerfile: backend/Dockerfile.prebuilt
+      dockerfile: backend/Dockerfile
     platform: linux/amd64
     environment:
       REDIS_URL: redis://redis:6379
@@ -145,7 +149,9 @@ services:
       - seq_data:/data
 
   nginx:
-    image: nginx:1.27-alpine
+    build:
+      context: ./nginx
+      dockerfile: Dockerfile
     depends_on:
       frontend:
         condition: service_healthy
@@ -156,12 +162,16 @@ services:
     environment:
       DOMAIN: ${DOMAIN:-localhost}
       SSL_PORT: ${SSL_PORT:-8443}
+      NGINX_EGRESS_LOCKDOWN: ${NGINX_EGRESS_LOCKDOWN:-true}
     command: [ "/bin/sh", "/etc/nginx/entrypoint.sh" ]
+    cap_add:
+      - NET_ADMIN
     ports:
       - "8080:80"
       - "8443:443"
     networks:
       - app_net
+      - public_net
     volumes:
       - ./nginx/nginx.conf.template:/etc/nginx/nginx.conf.template:ro
       - ./nginx/entrypoint.sh:/etc/nginx/entrypoint.sh:ro

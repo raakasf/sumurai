@@ -15,7 +15,7 @@ use crate::services::{
 };
 use anyhow::{Error, Result};
 use chrono::Utc;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -465,15 +465,6 @@ impl ConnectionService {
             .await
             .map_err(ProviderSyncError::SyncFailure)?;
 
-        let existing_transactions = self
-            .db_repository
-            .get_transactions_for_user(params.user_id)
-            .await
-            .map_err(ProviderSyncError::TransactionLookup)?;
-
-        transactions =
-            sync_service.filter_duplicate_transactions(&existing_transactions, &transactions);
-
         for txn in &mut transactions {
             txn.user_id = Some(*params.user_id);
         }
@@ -656,23 +647,6 @@ impl ConnectionService {
             .await
             .map_err(TellerSyncError::ProviderRequest)?;
 
-        let existing_transactions = self
-            .db_repository
-            .get_transactions_for_user(user_id)
-            .await
-            .map_err(TellerSyncError::TransactionLookup)?;
-
-        let mut existing_ids: HashSet<String> = existing_transactions
-            .iter()
-            .filter_map(|t| t.provider_transaction_id.clone())
-            .collect();
-
-        teller_transactions.retain(|txn| {
-            txn.provider_transaction_id
-                .as_ref()
-                .map(|id| !existing_ids.contains(id))
-                .unwrap_or(true)
-        });
 
         let mut synced_transactions: Vec<Transaction> = Vec::new();
 
@@ -715,10 +689,6 @@ impl ConnectionService {
                     transaction.provider_transaction_id,
                     e
                 );
-            }
-
-            if let Some(provider_transaction_id) = transaction.provider_transaction_id.clone() {
-                existing_ids.insert(provider_transaction_id);
             }
 
             synced_transactions.push(transaction);

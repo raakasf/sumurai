@@ -25,6 +25,12 @@ const TransactionsPage: React.FC = () => {
     pageItems,
     totalItems,
     totalPages,
+    userCategories,
+    updateTransactionCategory,
+    resetTransactionCategory,
+    createCategoryAndAssign,
+    createCategoryRule,
+    deleteUserCategory,
   } = useTransactions({ pageSize: 8 });
 
   // Pills overflow handled within HeroStatCard
@@ -257,6 +263,12 @@ const TransactionsPage: React.FC = () => {
                 totalPages={totalPages}
                 onPrev={() => setCurrentPage(Math.max(1, currentPage - 1))}
                 onNext={() => setCurrentPage(Math.min(totalPages, currentPage + 1))}
+                userCategories={userCategories}
+                onCategorySelect={updateTransactionCategory}
+                onCategoryReset={resetTransactionCategory}
+                onCategoryCreate={createCategoryAndAssign}
+                onCategoryRule={createCategoryRule}
+                onCategoryDelete={deleteUserCategory}
               />
             )}
           </div>

@@ -28,4 +28,32 @@ fi
 export DOMAIN SSL_PORT
 envsubst '${DOMAIN} ${SSL_PORT}' < /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf
 
+if [ "${NGINX_EGRESS_LOCKDOWN:-true}" = "true" ]; then
+  echo "Applying nginx egress lockdown"
+
+  iptables -F OUTPUT
+  iptables -P OUTPUT DROP
+
+  iptables -A OUTPUT -o lo -j ACCEPT
+  iptables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+  iptables -A OUTPUT -p tcp -m multiport --sports 80,443 -j ACCEPT
+
+  # Private network ranges cover Docker Desktop's host-port forwarding path
+  # and internal service traffic without opening public internet egress.
+  iptables -A OUTPUT -d 10.0.0.0/8 -j ACCEPT
+  iptables -A OUTPUT -d 172.16.0.0/12 -j ACCEPT
+  iptables -A OUTPUT -d 192.168.0.0/16 -j ACCEPT
+
+  # Docker embedded DNS resolver for upstream service name lookups.
+  iptables -A OUTPUT -d 127.0.0.11/32 -p udp --dport 53 -j ACCEPT
+  iptables -A OUTPUT -d 127.0.0.11/32 -p tcp --dport 53 -j ACCEPT
+
+  # Permit the directly attached Docker network subnets explicitly too. This
+  # keeps the rules readable if Docker allocates outside the common private
+  # ranges in a future environment.
+  ip -o -f inet addr show scope global | awk '{print $4}' | while read -r cidr; do
+    iptables -A OUTPUT -d "${cidr}" -j ACCEPT
+  done
+fi
+
 exec nginx -g "daemon off;"

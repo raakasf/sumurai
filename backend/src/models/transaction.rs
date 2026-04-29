@@ -61,7 +61,8 @@ pub struct Transaction {
     "created_at": "2024-01-15T13:45:00Z",
     "account_name": "Demo Checking",
     "account_type": "depository",
-    "account_mask": "1234"
+    "account_mask": "1234",
+    "custom_category": null
 }))]
 pub struct TransactionWithAccount {
     pub id: Uuid,
@@ -82,6 +83,8 @@ pub struct TransactionWithAccount {
     pub account_name: String,
     pub account_type: String,
     pub account_mask: Option<String>,
+    pub custom_category: Option<String>,
+    pub rule_category: Option<String>,
 }
 
 pub struct TransactionsQuery {
@@ -212,7 +215,9 @@ impl Transaction {
         provider_account_id: Option<&str>,
     ) -> Self {
         let amount_str = teller_txn["amount"].as_str().unwrap_or("0");
-        let amount = Decimal::from_str(amount_str).unwrap_or(Decimal::ZERO).abs();
+        // Teller uses signed amounts: negative = debit (expense), positive = credit (income).
+        // Normalize to the app's spending convention: expenses positive, income negative.
+        let amount = -Decimal::from_str(amount_str).unwrap_or(Decimal::ZERO);
 
         let date = teller_txn["date"]
             .as_str()
@@ -250,8 +255,7 @@ impl Transaction {
         let amount = plaid_txn["amount"]
             .as_f64()
             .and_then(Decimal::from_f64_retain)
-            .unwrap_or(Decimal::ZERO)
-            .abs();
+            .unwrap_or(Decimal::ZERO);
 
         let date = plaid_txn["date"]
             .as_str()

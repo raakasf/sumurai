@@ -13,12 +13,15 @@ export interface BackendTransaction {
   account_mask?: string;
   running_balance?: number;
   location?: TransactionLocation;
+  custom_category?: string;
+  rule_category?: string;
 }
 
 export class TransactionTransformer {
   static backendToFrontend(bt: BackendTransaction): Transaction {
     const category: TransactionCategory = {
-      primary: bt.category_primary ?? 'OTHER',
+      // Priority: explicit override > rule match > provider category
+      primary: bt.custom_category ?? bt.rule_category ?? bt.category_primary ?? 'OTHER',
     };
 
     if (bt.category_detailed) {
@@ -40,6 +43,8 @@ export class TransactionTransformer {
       account_mask: bt.account_mask,
       running_balance: bt.running_balance,
       location: bt.location,
+      custom_category: bt.custom_category,
+      rule_category: bt.rule_category,
     };
   }
 }
