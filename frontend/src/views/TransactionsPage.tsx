@@ -30,6 +30,7 @@ const TransactionsPage: React.FC = () => {
     resetTransactionCategory,
     createCategoryAndAssign,
     createCategoryRule,
+    deleteUserCategory,
   } = useTransactions({ pageSize: 8 });
 
   // Pills overflow handled within HeroStatCard
@@ -267,6 +268,7 @@ const TransactionsPage: React.FC = () => {
                 onCategoryReset={resetTransactionCategory}
                 onCategoryCreate={createCategoryAndAssign}
                 onCategoryRule={createCategoryRule}
+                onCategoryDelete={deleteUserCategory}
               />
             )}
           </div>

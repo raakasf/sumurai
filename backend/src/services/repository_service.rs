@@ -1343,11 +1343,32 @@ impl DatabaseRepository for PostgresRepository {
             .execute(&mut *tx)
             .await?;
 
+        // Fetch the category name so we can clear any overrides that reference it.
+        let name: Option<String> = sqlx::query_scalar(
+            "SELECT name FROM user_categories WHERE id = $1 AND user_id = $2",
+        )
+        .bind(category_id)
+        .bind(user_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+
         sqlx::query("DELETE FROM user_categories WHERE id = $1 AND user_id = $2")
             .bind(category_id)
             .bind(user_id)
             .execute(&mut *tx)
             .await?;
+
+        // Remove transaction overrides that used this category name so those
+        // transactions revert to their provider category.
+        if let Some(cat_name) = name {
+            sqlx::query(
+                "DELETE FROM transaction_category_overrides WHERE user_id = $1 AND category_name = $2",
+            )
+            .bind(user_id)
+            .bind(cat_name)
+            .execute(&mut *tx)
+            .await?;
+        }
 
         tx.commit().await?;
         Ok(())

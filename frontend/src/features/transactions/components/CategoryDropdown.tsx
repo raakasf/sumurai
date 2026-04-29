@@ -19,6 +19,7 @@ interface CategoryDropdownProps {
   onReset: () => Promise<void>;
   onCreateAndSelect: (name: string) => Promise<void>;
   onCreateRule: (pattern: string, categoryName: string) => Promise<void>;
+  onDeleteCategory: (categoryId: string) => Promise<void>;
 }
 
 const BUILT_IN_CATEGORIES = [
@@ -58,6 +59,7 @@ export const CategoryDropdown: React.FC<CategoryDropdownProps> = ({
   onReset,
   onCreateAndSelect,
   onCreateRule,
+  onDeleteCategory,
 }) => {
   const [open, setOpen] = useState(false);
   const [newName, setNewName] = useState('');
@@ -244,21 +246,40 @@ export const CategoryDropdown: React.FC<CategoryDropdownProps> = ({
                 </div>
                 {customOptions.map((opt) => {
                   const t = getTagThemeForCategory(opt.label);
+                  const uc = userCategories.find((c) => c.name === opt.value);
                   return (
-                    <button
-                      key={opt.value}
-                      type="button"
-                      disabled={saving}
-                      onClick={() => handleSelect(opt.value)}
-                      className={cn(
-                        'flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs',
-                        'text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-700/50',
-                        currentCategory === opt.value && 'font-semibold'
+                    <div key={opt.value} className="group/cat-row flex items-center">
+                      <button
+                        type="button"
+                        disabled={saving}
+                        onClick={() => handleSelect(opt.value)}
+                        className={cn(
+                          'flex flex-1 items-center gap-2 px-3 py-1.5 text-left text-xs',
+                          'text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-700/50',
+                          currentCategory === opt.value && 'font-semibold'
+                        )}
+                      >
+                        <span className={`h-2 w-2 shrink-0 rounded-full ${t.dot}`} aria-hidden="true" />
+                        {opt.label}
+                      </button>
+                      {uc && (
+                        <button
+                          type="button"
+                          disabled={saving}
+                          title="Delete category"
+                          onClick={async (e) => {
+                            e.stopPropagation();
+                            await onDeleteCategory(uc.id);
+                          }}
+                          className={cn(
+                            'mr-1 hidden rounded p-1 text-slate-400 group-hover/cat-row:flex',
+                            'hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-900/30 dark:hover:text-red-400'
+                          )}
+                        >
+                          <XMarkIcon className="h-3 w-3" />
+                        </button>
                       )}
-                    >
-                      <span className={`h-2 w-2 shrink-0 rounded-full ${t.dot}`} aria-hidden="true" />
-                      {opt.label}
-                    </button>
+                    </div>
                   );
                 })}
               </>

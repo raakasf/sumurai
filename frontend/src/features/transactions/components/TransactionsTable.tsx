@@ -19,8 +19,14 @@ interface Props {
   onCategoryReset: (transactionId: string) => Promise<void>;
   onCategoryCreate: (transactionId: string, name: string) => Promise<void>;
   onCategoryRule: (transactionId: string, pattern: string, categoryName: string) => Promise<void>;
+  onCategoryDelete: (categoryId: string) => Promise<void>;
 }
 
+const getDisplayAmount = (transaction: Transaction) => {
+  const accountType = transaction.account_type?.toLowerCase() ?? '';
+  const isCreditAccount = accountType === 'credit' || accountType === 'credit card';
+  return isCreditAccount ? transaction.amount : -transaction.amount;
+};
 
 export const TransactionsTable: React.FC<Props> = ({
   items,
@@ -34,6 +40,7 @@ export const TransactionsTable: React.FC<Props> = ({
   onCategoryReset,
   onCategoryCreate,
   onCategoryRule,
+  onCategoryDelete,
 }) => {
   const pageSize = items.length > 0 ? Math.ceil(total / totalPages) : 8;
   const from = total === 0 ? 0 : (currentPage - 1) * pageSize + 1;
@@ -147,6 +154,7 @@ export const TransactionsTable: React.FC<Props> = ({
                 >
                   {items.map((r, i) => {
                     const overrideType = r.custom_category ? 'explicit' : r.rule_category ? 'rule' : 'none';
+                    const displayAmount = getDisplayAmount(r);
                     return (
                       <tr
                         key={r.id}
@@ -191,14 +199,14 @@ export const TransactionsTable: React.FC<Props> = ({
                         </td>
                         <td
                           className={`whitespace-nowrap px-4 py-3 text-right align-middle tabular-nums font-semibold transition-colors duration-500 ${
-                            r.amount > 0
-                              ? 'text-red-600 dark:text-red-400'
-                              : r.amount < 0
-                                ? 'text-green-600 dark:text-green-400'
+                            displayAmount > 0
+                              ? 'text-green-600 dark:text-green-400'
+                              : displayAmount < 0
+                                ? 'text-red-600 dark:text-red-400'
                                 : 'text-slate-600 dark:text-slate-400'
                           }`}
                         >
-                          {fmtUSD(r.amount)}
+                          {fmtUSD(displayAmount)}
                         </td>
                         <td className={cn('whitespace-nowrap', 'px-4', 'py-3', 'align-middle')}>
                           <span
@@ -236,6 +244,7 @@ export const TransactionsTable: React.FC<Props> = ({
                             onReset={() => onCategoryReset(r.id)}
                             onCreateAndSelect={(name) => onCategoryCreate(r.id, name)}
                             onCreateRule={(pattern, categoryName) => onCategoryRule(r.id, pattern, categoryName)}
+                            onDeleteCategory={onCategoryDelete}
                           />
                         </td>
                       </tr>

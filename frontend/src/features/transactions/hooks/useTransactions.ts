@@ -38,6 +38,7 @@ export interface UseTransactionsResult {
   resetTransactionCategory: (transactionId: string) => Promise<void>;
   createCategoryAndAssign: (transactionId: string, name: string) => Promise<void>;
   createCategoryRule: (transactionId: string, pattern: string, categoryName: string) => Promise<void>;
+  deleteUserCategory: (categoryId: string) => Promise<void>;
 }
 
 export function useTransactions(options: UseTransactionsOptions = {}): UseTransactionsResult {
@@ -149,6 +150,16 @@ export function useTransactions(options: UseTransactionsOptions = {}): UseTransa
     [load]
   );
 
+  const deleteUserCategory = useCallback(
+    async (categoryId: string) => {
+      await CategoryService.deleteCategory(categoryId);
+      setUserCategories((prev) => prev.filter((c) => c.id !== categoryId));
+      // Reload transactions — backend clears overrides that used this category
+      await load();
+    },
+    [load]
+  );
+
   const debouncedSearch = useDebounce(search, 300);
 
   const resolveCategoryLabel = useCallback((t: Transaction) => {
@@ -218,6 +229,7 @@ export function useTransactions(options: UseTransactionsOptions = {}): UseTransa
     resetTransactionCategory,
     createCategoryAndAssign,
     createCategoryRule,
+    deleteUserCategory,
   };
 }
 

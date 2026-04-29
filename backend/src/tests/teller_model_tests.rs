@@ -61,13 +61,13 @@ fn given_teller_transaction_json_when_from_teller_then_maps_fields_correctly() {
 }
 
 #[test]
-fn given_teller_transaction_with_positive_amount_when_from_teller_then_converts_to_absolute() {
+fn given_teller_transaction_with_positive_amount_when_from_teller_then_stores_income_as_negative() {
     let account_id = Uuid::new_v4();
     let teller_json = serde_json::from_str(TestFixtures::teller_transaction_deposit()).unwrap();
 
     let transaction = Transaction::from_teller(&teller_json, &account_id, Some("acc_test_123"));
 
-    assert_eq!(transaction.amount, Decimal::from_str("1500.00").unwrap());
+    assert_eq!(transaction.amount, Decimal::from_str("-1500.00").unwrap());
 }
 
 #[test]
