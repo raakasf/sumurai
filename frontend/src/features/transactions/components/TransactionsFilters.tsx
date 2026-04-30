@@ -1,7 +1,9 @@
 import type React from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { ChevronDown } from 'lucide-react';
 import { cn } from '@/ui/primitives';
 import { getTagThemeForCategory } from '../../../utils/categories';
+import type { DateRangeKey } from '../../../utils/dateRanges';
 
 interface Props {
   search: string;
@@ -9,9 +11,21 @@ interface Props {
   categories: string[];
   selectedCategory: string | null;
   onSelectCategory: (c: string | null) => void;
+  dateRange?: DateRangeKey;
+  onSelectDateRange?: (range: DateRangeKey) => void;
   showSearch?: boolean;
   showCategories?: boolean;
+  showDateRange?: boolean;
 }
+
+const dateRangeOptions: Array<{ key: DateRangeKey; label: string }> = [
+  { key: 'all-time', label: 'All time' },
+  { key: 'current-month', label: 'This month' },
+  { key: 'past-2-months', label: 'Last 2 months' },
+  { key: 'past-3-months', label: 'Last 3 months' },
+  { key: 'past-6-months', label: 'Last 6 months' },
+  { key: 'past-year', label: 'Past year' },
+];
 
 export const TransactionsFilters: React.FC<Props> = ({
   search,
@@ -19,8 +33,11 @@ export const TransactionsFilters: React.FC<Props> = ({
   categories,
   selectedCategory,
   onSelectCategory,
+  dateRange = 'all-time',
+  onSelectDateRange,
   showSearch = true,
   showCategories = true,
+  showDateRange = false,
 }) => {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [showLeftFade, setShowLeftFade] = useState(false);
@@ -42,6 +59,62 @@ export const TransactionsFilters: React.FC<Props> = ({
 
   return (
     <>
+      {showDateRange && (
+        <div className={cn('relative', 'w-full', 'sm:w-44')}>
+          <select
+            value={dateRange}
+            onChange={(e) => onSelectDateRange?.(e.target.value as DateRangeKey)}
+            className={cn(
+              'w-full',
+              'appearance-none',
+              'rounded-xl',
+              'border',
+              'border-black/10',
+              'bg-white',
+              'px-4',
+              'pr-10',
+              'py-2.5',
+              'text-sm',
+              'font-medium',
+              'text-slate-900',
+              'shadow-[0_18px_45px_-30px_rgba(15,23,42,0.45)]',
+              'transition-all',
+              'duration-200',
+              'focus:outline-none',
+              'focus:ring-2',
+              'focus:ring-sky-400',
+              'focus:ring-offset-2',
+              'focus:ring-offset-white',
+              'dark:border-white/12',
+              'dark:bg-[#111a2f]',
+              'dark:text-white',
+              'dark:focus:ring-sky-400/80',
+              'dark:focus:ring-offset-[#0f172a]'
+            )}
+            aria-label="Filter transactions by date range"
+          >
+            {dateRangeOptions.map((option) => (
+              <option key={option.key} value={option.key}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+          <ChevronDown
+            className={cn(
+              'pointer-events-none',
+              'absolute',
+              'right-3',
+              'top-1/2',
+              'h-4',
+              'w-4',
+              '-translate-y-1/2',
+              'text-slate-500',
+              'dark:text-slate-400'
+            )}
+            aria-hidden="true"
+          />
+        </div>
+      )}
       {showSearch && (
         <div className={cn('relative', 'w-full', 'sm:w-64')}>
           <input

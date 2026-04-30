@@ -5,8 +5,12 @@ import { CategoryService } from '../../../services/CategoryService';
 import { type TransactionFilters, TransactionService } from '../../../services/TransactionService';
 import type { Transaction, UserCategory } from '../../../types/api';
 import { formatCategoryName } from '../../../utils/categories';
+import {
+  computeDateRange,
+  type DateRangeKey as DateRangeSelection,
+} from '../../../utils/dateRanges';
 
-export type DateRangeKey = string | undefined;
+export type DateRangeKey = DateRangeSelection;
 
 export interface UseTransactionsOptions {
   initialSearch?: string;
@@ -42,7 +46,12 @@ export interface UseTransactionsResult {
 }
 
 export function useTransactions(options: UseTransactionsOptions = {}): UseTransactionsResult {
-  const { initialSearch = '', initialCategory = null, initialDateRange, pageSize = 10 } = options;
+  const {
+    initialSearch = '',
+    initialCategory = null,
+    initialDateRange = 'current-month',
+    pageSize = 10,
+  } = options;
 
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -72,7 +81,6 @@ export function useTransactions(options: UseTransactionsOptions = {}): UseTransa
         setAll([]);
         return;
       }
-      if (dateRange) filters.dateRange = String(dateRange);
       if (!isAllAccountsSelected && selectedAccountIds.length > 0) {
         filters.accountIds = selectedAccountIds;
       }
@@ -89,7 +97,7 @@ export function useTransactions(options: UseTransactionsOptions = {}): UseTransa
     } finally {
       setIsLoading(false);
     }
-  }, [accountsLoading, dateRange, isAllAccountsSelected, selectedAccountIds, allAccountIds]);
+  }, [accountsLoading, isAllAccountsSelected, selectedAccountIds, allAccountIds]);
 
   useEffect(() => {
     load();
@@ -170,12 +178,17 @@ export function useTransactions(options: UseTransactionsOptions = {}): UseTransa
   }, []);
 
   const filtered = useMemo(() => {
+    const computedRange = dateRange === 'all-time' ? {} : computeDateRange(dateRange);
     const criteria: FilterCriteria = {
       search: debouncedSearch.trim(),
       category: selectedCategory || undefined,
+      dateRange:
+        computedRange.start && computedRange.end
+          ? { start: computedRange.start, end: computedRange.end }
+          : undefined,
     };
     return TransactionFilter.filter(all, criteria);
-  }, [all, debouncedSearch, selectedCategory]);
+  }, [all, debouncedSearch, selectedCategory, dateRange]);
 
   const categories = useMemo(() => {
     const names = new Set<string>();

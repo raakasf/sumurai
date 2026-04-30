@@ -20,6 +20,8 @@ const TransactionsPage: React.FC = () => {
     setSearch,
     selectedCategory,
     setSelectedCategory,
+    dateRange,
+    setDateRange,
     currentPage,
     setCurrentPage,
     pageItems,
@@ -219,19 +221,24 @@ const TransactionsPage: React.FC = () => {
                     categories={categories}
                     selectedCategory={selectedCategory}
                     onSelectCategory={setSelectedCategory}
+                    dateRange={dateRange}
+                    onSelectDateRange={setDateRange}
                     showSearch={false}
                     showCategories
                   />
                 </div>
-                <div className="flex-shrink-0">
+                <div className={cn('flex', 'flex-shrink-0', 'items-center', 'gap-3')}>
                   <TransactionsFilters
                     search={search}
                     onSearch={setSearch}
                     categories={categories}
                     selectedCategory={selectedCategory}
                     onSelectCategory={setSelectedCategory}
+                    dateRange={dateRange}
+                    onSelectDateRange={setDateRange}
                     showSearch
                     showCategories={false}
+                    showDateRange
                   />
                 </div>
               </div>
