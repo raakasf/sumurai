@@ -34,8 +34,7 @@ const netTooltipFormatter: TooltipProps<number, string>['formatter'] = (value) =
 const DashboardPage: React.FC = () => {
   const { colors } = useTheme();
   const [hoveredCategory, setHoveredCategory] = useState<string | null>(null);
-  // Default to past-year for richer data out of the box
-  const [dateRange, setDateRange] = useState<DateRange>('past-year');
+  const [dateRange, setDateRange] = useState<DateRange>('current-month');
   const spendingOverviewRef = useRef<HTMLDivElement | null>(null);
   const balancesOverviewRef = useRef<HTMLDivElement | null>(null);
   const [showTimeBar, setShowTimeBar] = useState(false);

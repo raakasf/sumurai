@@ -4,6 +4,8 @@ describe('categories utils', () => {
   it('formats category names from snake_case', () => {
     expect(formatCategoryName('fast_food')).toBe('Fast Food');
     expect(formatCategoryName('TRANSPORT')).toBe('Transport');
+    expect(formatCategoryName('Credit Card Bills')).toBe('Credit Card Bills');
+    expect(formatCategoryName('Credit card bills')).toBe('Credit Card Bills');
     expect(formatCategoryName(undefined)).toBe('Other');
     expect(formatCategoryName(null as any)).toBe('Other');
   });
