@@ -1,7 +1,9 @@
 export function formatCategoryName(categoryPrimary: string | undefined | null): string {
   if (!categoryPrimary) return 'Other';
   return categoryPrimary
-    .split('_')
+    .trim()
+    .split(/[_\s]+/)
+    .filter(Boolean)
     .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
     .join(' ');
 }

@@ -1,7 +1,7 @@
 use crate::models::analytics::{
     BalanceCategory, CategorySpending, DailySpending, MonthlySpending, TopMerchant,
 };
-use crate::models::transaction::Transaction;
+use crate::models::transaction::{Transaction, TransactionWithAccount};
 use chrono::Datelike;
 use rust_decimal::Decimal;
 
@@ -200,6 +200,47 @@ impl AnalyticsService {
     ) -> Vec<CategorySpending> {
         let filtered_transactions = self.filter_by_date_range(transactions, start_date, end_date);
         Self::group_transactions_by_category(filtered_transactions)
+    }
+
+    pub fn group_transactions_with_account_by_effective_category(
+        transactions: &[TransactionWithAccount],
+        start_date: Option<chrono::NaiveDate>,
+        end_date: Option<chrono::NaiveDate>,
+    ) -> Vec<CategorySpending> {
+        let mut category_map = std::collections::HashMap::new();
+
+        for transaction in transactions {
+            if transaction.amount <= Decimal::ZERO {
+                continue;
+            }
+
+            if let (Some(start), Some(end)) = (start_date, end_date) {
+                if transaction.date < start || transaction.date > end {
+                    continue;
+                }
+            }
+
+            let category_name = transaction
+                .custom_category
+                .as_ref()
+                .or(transaction.rule_category.as_ref())
+                .filter(|category| !category.is_empty())
+                .cloned()
+                .unwrap_or_else(|| {
+                    if transaction.category_primary.is_empty() {
+                        "Uncategorized".to_string()
+                    } else {
+                        transaction.category_primary.clone()
+                    }
+                });
+
+            *category_map.entry(category_name).or_insert(Decimal::ZERO) += transaction.amount;
+        }
+
+        category_map
+            .into_iter()
+            .map(|(name, value)| CategorySpending { name, value })
+            .collect()
     }
 
     pub fn calculate_monthly_totals(

@@ -1609,9 +1609,15 @@ async fn get_authenticated_category_spending(
         .as_ref()
         .and_then(|s| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok());
 
+    let rules = state
+        .db_repository
+        .get_category_rules(user_id)
+        .await
+        .unwrap_or_default();
+
     match state
         .db_repository
-        .get_transactions_for_user(&user_id)
+        .get_transactions_with_account_for_user(&user_id)
         .await
     {
         Ok(mut transactions) => {
@@ -1626,11 +1632,24 @@ async fn get_authenticated_category_spending(
                 transactions.retain(|t| account_id_set.contains(&t.account_id));
             }
 
-            let categories = state.analytics_service.group_by_category_with_date_range(
-                &transactions,
-                start_date,
-                end_date,
-            );
+            for txn in transactions.iter_mut() {
+                if txn.custom_category.is_none() {
+                    let merchant = txn.merchant_name.as_deref().unwrap_or("<null>");
+                    for rule in &rules {
+                        if utils::glob::glob_match(&rule.pattern, merchant) {
+                            txn.rule_category = Some(rule.category_name.clone());
+                            break;
+                        }
+                    }
+                }
+            }
+
+            let categories =
+                AnalyticsService::group_transactions_with_account_by_effective_category(
+                    &transactions,
+                    start_date,
+                    end_date,
+                );
             Ok(Json(categories))
         }
         Err(e) => {

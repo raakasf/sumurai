@@ -11,14 +11,21 @@ type CategoryDatum = {
 };
 
 export function categoriesToDonut(categories: CategoryDatum[] = []): DonutDatum[] {
-  const mapped = categories.map((c) => {
+  const categoryTotals = new Map<string, number>();
+
+  for (const c of categories) {
     const rawName: string = (c.category ?? c.name ?? 'Unknown') || 'Unknown';
     const rawAmount: number | string | null | undefined = c.amount ?? c.value ?? 0;
     const value = typeof rawAmount === 'string' ? Number(rawAmount) : Number(rawAmount || 0);
-    return { name: formatCategoryName(rawName), value: Number.isFinite(value) ? value : 0 };
-  });
+    if (!Number.isFinite(value) || value <= 0) {
+      continue;
+    }
 
-  const positive = mapped.filter((d) => d.value > 0);
+    const name = formatCategoryName(rawName);
+    categoryTotals.set(name, (categoryTotals.get(name) || 0) + value);
+  }
+
+  const positive = Array.from(categoryTotals, ([name, value]) => ({ name, value }));
   positive.sort((a, b) => b.value - a.value);
   return positive;
 }
