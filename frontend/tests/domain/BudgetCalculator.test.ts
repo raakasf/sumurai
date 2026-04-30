@@ -1,4 +1,5 @@
 import { BudgetCalculator } from '../../src/domain/BudgetCalculator';
+import type { Transaction } from '../../src/types/api';
 
 interface ComputedBudget {
   id: string;
@@ -170,5 +171,33 @@ describe('BudgetCalculator.computeStats', () => {
 
       expect(stats.remaining).toBe(0);
     });
+  });
+});
+
+describe('BudgetCalculator.calculateSpent', () => {
+  const baseTransaction: Transaction = {
+    id: 'txn-1',
+    date: '2025-10-10',
+    name: 'Store',
+    amount: 50,
+    category: { primary: 'Food' },
+    account_name: 'Checking',
+    account_type: 'depository',
+  };
+
+  it('excludes credit card bill payments from budget spending', () => {
+    const transactions: Transaction[] = [
+      baseTransaction,
+      {
+        ...baseTransaction,
+        id: 'txn-2',
+        amount: 500,
+        category: { primary: 'Credit Card Bills' },
+      },
+    ];
+
+    expect(
+      BudgetCalculator.calculateSpent(transactions, 'Credit Card Bills', '2025-10-01', '2025-10-31')
+    ).toBe(0);
   });
 });

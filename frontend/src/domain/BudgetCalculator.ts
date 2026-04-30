@@ -1,5 +1,5 @@
 import type { Transaction } from '../types/api';
-import { formatCategoryName } from '../utils/categories';
+import { formatCategoryName, isSpendingExcludedCategory } from '../utils/categories';
 
 interface ComputedBudget {
   id: string;
@@ -31,6 +31,7 @@ export class BudgetCalculator {
     return transactions
       .filter((t) => {
         const primary = t.category?.primary || '';
+        if (isSpendingExcludedCategory(primary)) return false;
         const primaryMatches = primary.toLowerCase() === categoryId.toLowerCase();
         const primaryFriendlyMatches =
           formatCategoryName(primary).toLowerCase() ===

@@ -59,7 +59,7 @@ use crate::models::{
         ProviderSelectRequest, ProviderSelectResponse, ProviderStatusResponse,
         SyncTransactionsRequest,
     },
-    transaction::{SyncTransactionsResponse, TransactionsQuery},
+    transaction::{SyncTransactionsResponse, TransactionWithAccount, TransactionsQuery},
 };
 use crate::models::{
     api_error::ApiErrorResponse,
@@ -67,7 +67,6 @@ use crate::models::{
         ChangePasswordRequest, ChangePasswordResponse, DeleteAccountResponse, LogoutResponse,
         OnboardingCompleteResponse, User,
     },
-    transaction::TransactionWithAccount,
 };
 use auth_middleware::auth_middleware;
 use config::Config;
@@ -1354,15 +1353,23 @@ async fn get_authenticated_current_month_spending(
 ) -> Result<Json<rust_decimal::Decimal>, StatusCode> {
     let user_id = auth_context.user_id;
 
+    let rules = state
+        .db_repository
+        .get_category_rules(user_id)
+        .await
+        .unwrap_or_default();
+
     match state
         .db_repository
-        .get_transactions_for_user(&user_id)
+        .get_transactions_with_account_for_user(&user_id)
         .await
     {
-        Ok(transactions) => {
+        Ok(mut transactions) => {
+            apply_category_rules(&mut transactions, &rules);
+
             let total = state
                 .analytics_service
-                .calculate_current_month_spending(&transactions);
+                .calculate_current_month_spending_with_account(&transactions);
             Ok(Json(total))
         }
         Err(e) => {
@@ -1412,16 +1419,24 @@ async fn get_authenticated_daily_spending(
         (now.year(), now.month())
     };
 
+    let rules = state
+        .db_repository
+        .get_category_rules(user_id)
+        .await
+        .unwrap_or_default();
+
     match state
         .db_repository
-        .get_transactions_for_user(&user_id)
+        .get_transactions_with_account_for_user(&user_id)
         .await
     {
-        Ok(transactions) => {
+        Ok(mut transactions) => {
+            apply_category_rules(&mut transactions, &rules);
+
             let daily_spending =
                 state
                     .analytics_service
-                    .calculate_daily_spending(&transactions, year, month);
+                    .calculate_daily_spending_with_account(&transactions, year, month);
             Ok(Json(daily_spending))
         }
         Err(e) => {
@@ -1518,9 +1533,15 @@ async fn get_authenticated_spending_by_date_range(
         .as_deref()
         .and_then(|s| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok());
 
+    let rules = state
+        .db_repository
+        .get_category_rules(user_id)
+        .await
+        .unwrap_or_default();
+
     match state
         .db_repository
-        .get_transactions_for_user(&user_id)
+        .get_transactions_with_account_for_user(&user_id)
         .await
     {
         Ok(mut transactions) => {
@@ -1535,14 +1556,10 @@ async fn get_authenticated_spending_by_date_range(
                 transactions.retain(|t| account_id_set.contains(&t.account_id));
             }
 
-            let filtered = state
-                .analytics_service
-                .filter_by_date_range(&transactions, start, end);
-            let total: rust_decimal::Decimal = filtered
-                .into_iter()
-                .filter(|t| t.amount > rust_decimal::Decimal::ZERO)
-                .map(|t| t.amount)
-                .sum();
+            apply_category_rules(&mut transactions, &rules);
+
+            let total =
+                AnalyticsService::sum_spending_transactions_with_account(&transactions, start, end);
             Ok(Json(total))
         }
         Err(e) => {
@@ -1632,17 +1649,7 @@ async fn get_authenticated_category_spending(
                 transactions.retain(|t| account_id_set.contains(&t.account_id));
             }
 
-            for txn in transactions.iter_mut() {
-                if txn.custom_category.is_none() {
-                    let merchant = txn.merchant_name.as_deref().unwrap_or("<null>");
-                    for rule in &rules {
-                        if utils::glob::glob_match(&rule.pattern, merchant) {
-                            txn.rule_category = Some(rule.category_name.clone());
-                            break;
-                        }
-                    }
-                }
-            }
+            apply_category_rules(&mut transactions, &rules);
 
             let categories =
                 AnalyticsService::group_transactions_with_account_by_effective_category(
@@ -1700,21 +1707,24 @@ async fn get_authenticated_monthly_totals(
 
     match state
         .db_repository
-        .get_transactions_for_user(&user_id)
+        .get_transactions_with_account_for_user(&user_id)
         .await
     {
-        Ok(transactions) => {
-            let transactions = if let Some(ref allowed_ids) = filtered_account_ids {
+        Ok(mut transactions) => {
+            if let Some(ref allowed_ids) = filtered_account_ids {
                 transactions
-                    .into_iter()
-                    .filter(|t| allowed_ids.contains(&t.account_id))
-                    .collect()
-            } else {
-                transactions
-            };
+                    .retain(|t| allowed_ids.contains(&t.account_id));
+            }
+            let rules = state
+                .db_repository
+                .get_category_rules(user_id)
+                .await
+                .unwrap_or_default();
+            apply_category_rules(&mut transactions, &rules);
+
             let monthly_totals = state
                 .analytics_service
-                .calculate_monthly_totals(&transactions, months);
+                .calculate_monthly_totals_with_account(&transactions, months);
             Ok(Json(monthly_totals))
         }
         Err(e) => {
@@ -1775,11 +1785,11 @@ async fn get_authenticated_top_merchants(
 
     match state
         .db_repository
-        .get_transactions_for_user(&user_id)
+        .get_transactions_with_account_for_user(&user_id)
         .await
     {
         Ok(transactions) => {
-            let transactions = if let Some(ref allowed_ids) = filtered_account_ids {
+            let mut transactions = if let Some(ref allowed_ids) = filtered_account_ids {
                 transactions
                     .into_iter()
                     .filter(|t| allowed_ids.contains(&t.account_id))
@@ -1787,17 +1797,40 @@ async fn get_authenticated_top_merchants(
             } else {
                 transactions
             };
-            let top_merchants = state.analytics_service.get_top_merchants_with_date_range(
-                &transactions,
-                start_date,
-                end_date,
-                limit,
-            );
+            let rules = state
+                .db_repository
+                .get_category_rules(user_id)
+                .await
+                .unwrap_or_default();
+            apply_category_rules(&mut transactions, &rules);
+
+            let top_merchants = state
+                .analytics_service
+                .get_top_merchants_with_account_date_range(
+                    &transactions,
+                    start_date,
+                    end_date,
+                    limit,
+                );
             Ok(Json(top_merchants))
         }
         Err(e) => {
             tracing::error!("Failed to get transactions for user {}: {}", user_id, e);
             Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+fn apply_category_rules(transactions: &mut [TransactionWithAccount], rules: &[CategoryRule]) {
+    for txn in transactions.iter_mut() {
+        if txn.custom_category.is_none() {
+            let merchant = txn.merchant_name.as_deref().unwrap_or("<null>");
+            for rule in rules {
+                if utils::glob::glob_match(&rule.pattern, merchant) {
+                    txn.rule_category = Some(rule.category_name.clone());
+                    break;
+                }
+            }
         }
     }
 }
