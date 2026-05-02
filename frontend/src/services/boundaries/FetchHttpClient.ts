@@ -20,6 +20,8 @@ const buildUrl = (baseUrl: string, endpoint: string): string => {
   return `${baseUrl}${normalizedEndpoint}`;
 };
 
+const apiFetchCredentials: RequestCredentials = 'include';
+
 export class FetchHttpClient implements IHttpClient {
   private readonly baseUrl: string;
 
@@ -76,7 +78,7 @@ export class FetchHttpClient implements IHttpClient {
       'Content-Type': 'application/json',
       ...options?.headers,
     };
-    const response = await fetch(url, { method: 'GET', headers });
+    const response = await fetch(url, { method: 'GET', headers, credentials: apiFetchCredentials });
     return this.handleResponse<T>(response);
   }
 
@@ -90,6 +92,7 @@ export class FetchHttpClient implements IHttpClient {
       method: 'POST',
       headers,
       body: data ? JSON.stringify(data) : undefined,
+      credentials: apiFetchCredentials,
     });
     return this.handleResponse<T>(response);
   }
@@ -104,6 +107,7 @@ export class FetchHttpClient implements IHttpClient {
       method: 'PUT',
       headers,
       body: data ? JSON.stringify(data) : undefined,
+      credentials: apiFetchCredentials,
     });
     return this.handleResponse<T>(response);
   }
@@ -114,7 +118,7 @@ export class FetchHttpClient implements IHttpClient {
       'Content-Type': 'application/json',
       ...options?.headers,
     };
-    const response = await fetch(url, { method: 'DELETE', headers });
+    const response = await fetch(url, { method: 'DELETE', headers, credentials: apiFetchCredentials });
     return this.handleResponse<T>(response);
   }
 
@@ -122,6 +126,7 @@ export class FetchHttpClient implements IHttpClient {
     const response = await fetch(buildUrl(this.baseUrl, '/health'), {
       method: 'GET',
       headers: { 'Content-Type': 'application/json' },
+      credentials: apiFetchCredentials,
     });
     if (!response.ok) throw new Error(`Health check failed`);
     return response.text();

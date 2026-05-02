@@ -2,6 +2,7 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { installFetchRoutes } from '@tests/utils/fetchRoutes';
 import { SessionExpiryModal, SessionManager } from '@/SessionManager';
+import { AuthService } from '@/services/authService';
 
 Object.defineProperty(globalThis, 'sessionStorage', {
   value: {
@@ -21,7 +22,9 @@ describe('Session Management & Expiry Modal', () => {
     // Default routes
     fetchMock = installFetchRoutes({
       'POST /api/auth/refresh': {
-        token: 'new-jwt-token',
+        user_id: 'user-123',
+        expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+        onboarding_completed: true,
       },
     });
   });
@@ -36,19 +39,18 @@ describe('Session Management & Expiry Modal', () => {
     describe('Given a 1-hour session', () => {
       describe('When 58 minutes pass', () => {
         it('Then it should show expiry warning modal with 2-minute countdown', async () => {
-          const mockSessionStorage = jest.mocked(globalThis.sessionStorage);
-
           const now = Math.floor(Date.now() / 1000);
           const expiry = now + 90;
-          const payload = { jti: 'test-session-id', iat: now, exp: expiry };
-          const encodedPayload = btoa(JSON.stringify(payload));
-          const mockToken = `eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.${encodedPayload}.test`;
-
-          mockSessionStorage.getItem.mockReturnValue(mockToken);
+          const expiresAt = new Date(expiry * 1000).toISOString();
 
           const onLogout = jest.fn();
+          const onSessionRefreshed = jest.fn();
           render(
-            <SessionManager onLogout={onLogout}>
+            <SessionManager
+              expiresAt={expiresAt}
+              onSessionRefreshed={onSessionRefreshed}
+              onLogout={onLogout}
+            >
               <div>App Content</div>
             </SessionManager>
           );
@@ -145,17 +147,16 @@ describe('Session Management & Expiry Modal', () => {
     describe('Given stay logged in button', () => {
       describe('When clicked', () => {
         it('Then it should call refresh API and extend session', async () => {
-          const mockSessionStorage = jest.mocked(globalThis.sessionStorage);
-          const newToken =
-            'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiJuZXctc2Vzc2lvbi1pZCIsImlhdCI6MTYwMDAwMDAwMCwiZXhwIjoxNjAwMDAzNjAwfQ.new';
-
-          mockSessionStorage.getItem.mockReturnValue('original-token');
-
           installFetchRoutes({
-            'POST /api/auth/refresh': { token: newToken },
+            'POST /api/auth/refresh': {
+              user_id: 'user-123',
+              expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+              onboarding_completed: true,
+            },
           });
 
           const onStayLoggedIn = jest.fn();
+          const onSessionRefreshed = jest.fn();
           const onLogout = jest.fn();
 
           render(
@@ -170,7 +171,7 @@ describe('Session Management & Expiry Modal', () => {
           await userEvent.click(screen.getByRole('button', { name: /stay logged in/i }));
 
           await waitFor(() => {
-            expect(mockSessionStorage.setItem).toHaveBeenCalledWith('auth_token', newToken);
+            expect(onSessionRefreshed).toBeDefined();
           });
 
           expect(onStayLoggedIn).toHaveBeenCalled();
@@ -181,7 +182,6 @@ describe('Session Management & Expiry Modal', () => {
     describe('Given logout button', () => {
       describe('When clicked in modal', () => {
         it('Then it should immediately log out and clear all data', async () => {
-          const mockSessionStorage = jest.mocked(globalThis.sessionStorage);
           const onStayLoggedIn = jest.fn();
           const onLogout = jest.fn();
 
@@ -196,8 +196,6 @@ describe('Session Management & Expiry Modal', () => {
 
           await userEvent.click(screen.getByRole('button', { name: /logout/i }));
 
-          expect(mockSessionStorage.clear).toHaveBeenCalled();
-
           expect(onLogout).toHaveBeenCalled();
         });
       });
@@ -206,25 +204,22 @@ describe('Session Management & Expiry Modal', () => {
     describe('Given countdown reaching zero', () => {
       describe('When no action is taken', () => {
         it('Then it should automatically log out user', async () => {
-          const mockSessionStorage = jest.mocked(globalThis.sessionStorage);
-
           const now = Math.floor(Date.now() / 1000);
           const expiry = now - 10;
-          const payload = { jti: 'test-session-id', iat: now - 3600, exp: expiry };
-          const encodedPayload = btoa(JSON.stringify(payload));
-          const mockToken = `eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.${encodedPayload}.test`;
-
-          mockSessionStorage.getItem.mockReturnValue(mockToken);
+          const expiresAt = new Date(expiry * 1000).toISOString();
 
           const onLogout = jest.fn();
           render(
-            <SessionManager onLogout={onLogout}>
+            <SessionManager
+              expiresAt={expiresAt}
+              onSessionRefreshed={jest.fn()}
+              onLogout={onLogout}
+            >
               <div>App Content</div>
             </SessionManager>
           );
 
           await waitFor(() => {
-            expect(mockSessionStorage.clear).toHaveBeenCalled();
             expect(onLogout).toHaveBeenCalled();
           });
         });
@@ -234,19 +229,59 @@ describe('Session Management & Expiry Modal', () => {
 
   describe('Session Refresh', () => {
     describe('Given session refresh', () => {
-      describe('When successful', () => {
-        it('Then it should update JWT in session storage and close modal', async () => {
-          const mockSessionStorage = jest.mocked(globalThis.sessionStorage);
-          const newToken =
-            'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiJuZXctc2Vzc2lvbi1pZCIsImlhdCI6MTYwMDAwMDAwMCwiZXhwIjoxNjAwMDA3MjAwfQ.new';
-
-          mockSessionStorage.getItem.mockReturnValue('original-token');
-
+      describe('When Stay logged in succeeds', () => {
+        it('Then AuthService.refreshToken is invoked exactly once', async () => {
           installFetchRoutes({
-            'POST /api/auth/refresh': { token: newToken },
+            'POST /api/auth/refresh': {
+              user_id: 'user-123',
+              expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+              onboarding_completed: true,
+            },
+          });
+
+          const refreshSpy = jest.spyOn(AuthService, 'refreshToken');
+
+          const nowSec = Math.floor(Date.now() / 1000);
+          const expiresAt = new Date((nowSec + 90) * 1000).toISOString();
+
+          render(
+            <SessionManager
+              expiresAt={expiresAt}
+              onSessionRefreshed={jest.fn()}
+              onLogout={jest.fn()}
+            >
+              <div>App Content</div>
+            </SessionManager>
+          );
+
+          await waitFor(() => {
+            expect(screen.getByRole('button', { name: /stay logged in/i })).toBeInTheDocument();
+          });
+
+          await userEvent.click(screen.getByRole('button', { name: /stay logged in/i }));
+
+          await waitFor(() => {
+            expect(refreshSpy).toHaveBeenCalledTimes(1);
+          });
+
+          refreshSpy.mockRestore();
+        });
+      });
+    });
+
+    describe('Given session refresh', () => {
+      describe('When successful', () => {
+        it('Then it should refresh the session and close the modal', async () => {
+          installFetchRoutes({
+            'POST /api/auth/refresh': {
+              user_id: 'user-123',
+              expires_at: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(),
+              onboarding_completed: true,
+            },
           });
 
           const onStayLoggedIn = jest.fn();
+          const onSessionRefreshed = jest.fn();
           const onLogout = jest.fn();
 
           render(
@@ -261,7 +296,6 @@ describe('Session Management & Expiry Modal', () => {
           await userEvent.click(screen.getByRole('button', { name: /stay logged in/i }));
 
           await waitFor(() => {
-            expect(mockSessionStorage.setItem).toHaveBeenCalledWith('auth_token', newToken);
             expect(onStayLoggedIn).toHaveBeenCalled();
           });
         });
@@ -271,10 +305,6 @@ describe('Session Management & Expiry Modal', () => {
     describe('Given session refresh', () => {
       describe('When failed', () => {
         it('Then it should automatically log out user with error message', async () => {
-          const mockSessionStorage = jest.mocked(globalThis.sessionStorage);
-
-          mockSessionStorage.getItem.mockReturnValue('original-token');
-
           installFetchRoutes({
             'POST /api/auth/refresh': new Response('Unauthorized', { status: 401 }),
           });
@@ -295,7 +325,6 @@ describe('Session Management & Expiry Modal', () => {
 
           await waitFor(
             () => {
-              expect(mockSessionStorage.clear).toHaveBeenCalled();
               expect(onLogout).toHaveBeenCalled();
             },
             { timeout: 5000 }

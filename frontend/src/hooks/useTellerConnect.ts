@@ -47,6 +47,11 @@ const TELLER_SCRIPT_SRC = 'https://cdn.teller.io/connect/connect.js';
 let tellerScriptLoaded = false;
 let tellerScriptPromise: Promise<void> | null = null;
 
+export const resetTellerScriptStateForTests = (): void => {
+  tellerScriptLoaded = false;
+  tellerScriptPromise = null;
+};
+
 const ensureTellerScript = (): Promise<void> => {
   if (typeof window === 'undefined' || typeof document === 'undefined') {
     return Promise.reject(

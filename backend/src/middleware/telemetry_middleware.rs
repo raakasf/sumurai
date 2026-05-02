@@ -1,7 +1,5 @@
 use anyhow::Result;
-use axum::{
-    body::Body, extract::Request, http::header::AUTHORIZATION, middleware::Next, response::Response,
-};
+use axum::{body::Body, extract::Request, middleware::Next, response::Response};
 use axum_tracing_opentelemetry::tracing_opentelemetry_instrumentation_sdk as otel_sdk;
 use chrono::Utc;
 use opentelemetry::{
@@ -12,7 +10,7 @@ use opentelemetry_otlp::{WithExportConfig, WithHttpConfig};
 use opentelemetry_sdk::{propagation::TraceContextPropagator, trace::SdkTracerProvider, Resource};
 use sha2::{Digest, Sha256};
 use std::{collections::HashMap, fmt::Write, time::Instant};
-use tracing::{info_span, Span};
+use tracing::{info_span, Instrument, Span};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use tracing_subscriber::Layer;
 use tracing_subscriber::{
@@ -174,38 +172,24 @@ pub async fn request_tracing_middleware(request: Request<Body>, next: Next) -> R
     );
 
     let span_name = format!("{method} {path}");
-    span.context().span().update_name(span_name.clone());
 
-    let _entered = span.enter();
+    async move {
+        Span::current()
+            .context()
+            .span()
+            .update_name(span_name.clone());
 
-    let response = next.run(request).await;
-    let status = response.status();
-    let duration_ms = start_time.elapsed().as_secs_f64() * 1000.0;
+        let response = next.run(request).await;
+        let status = response.status();
+        let duration_ms = start_time.elapsed().as_secs_f64() * 1000.0;
 
-    span.record("http.status_code", status.as_u16() as i64);
-    span.record("duration_ms", duration_ms);
+        Span::current().record("http.status_code", status.as_u16() as i64);
+        Span::current().record("duration_ms", duration_ms);
 
-    response
-}
-
-pub async fn with_bearer_token_attribute(request: Request<Body>, next: Next) -> Response {
-    if let Some(header_value) = request.headers().get(AUTHORIZATION) {
-        if let Ok(raw) = header_value.to_str() {
-            let trimmed = raw.trim();
-            let token = trimmed
-                .strip_prefix("Bearer ")
-                .or_else(|| trimmed.strip_prefix("bearer "))
-                .unwrap_or(trimmed)
-                .trim();
-
-            if !token.is_empty() {
-                let encrypted = hash_token(token);
-                attach_encrypted_token_to_current_span(&encrypted);
-            }
-        }
+        response
     }
-
-    next.run(request).await
+    .instrument(span)
+    .await
 }
 
 struct SeqJsonFormatter;

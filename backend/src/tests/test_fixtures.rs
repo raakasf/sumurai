@@ -25,7 +25,7 @@ use crate::{create_app, AppState, Config, Router};
 use axum::{
     body::Body,
     http::{
-        header::{AUTHORIZATION, CONTENT_TYPE},
+        header::{CONTENT_TYPE, COOKIE},
         Method, Request,
     },
 };
@@ -37,6 +37,7 @@ impl TestFixtures {
         let mut test_env = MockEnvironment::new();
         test_env.set("TELLER_ENV", "test");
         test_env.set("DEFAULT_PROVIDER", "plaid");
+        test_env.set("AUTH_COOKIE_SAME_SITE", "Lax");
         Config::from_env_provider(&test_env).expect("Failed to create test config")
     }
 
@@ -427,7 +428,7 @@ impl TestFixtures {
         Request::builder()
             .method(method)
             .uri(uri)
-            .header(AUTHORIZATION, format!("Bearer {}", token))
+            .header(COOKIE, format!("auth_token={}", token))
             .header(CONTENT_TYPE, "application/json")
             .body(Body::empty())
             .unwrap()
@@ -458,7 +459,7 @@ impl TestFixtures {
         Request::builder()
             .method(Method::POST)
             .uri(uri)
-            .header(AUTHORIZATION, format!("Bearer {}", token))
+            .header(COOKIE, format!("auth_token={}", token))
             .header(CONTENT_TYPE, "application/json")
             .body(Body::from(body_json))
             .unwrap()

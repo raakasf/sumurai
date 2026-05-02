@@ -17,7 +17,6 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-opentelemetry = "0.32"
 anyhow = "1.0"
-dotenv = "0.15"
 sqlx = { version = "0.8.6", features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono", "rust_decimal"] }
 # Package-specific dependencies not in workspace
 rust_decimal_macros = "1.37"
@@ -26,6 +25,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 async-trait = "0.1"
 aes-gcm = "0.10"
 base64 = "0.22"
+cookie = "0.18"
 hex = "0.4"
 rand = "0.9"
 redis = { version = "0.32.5", features = ["tokio-comp", "connection-manager"] }
