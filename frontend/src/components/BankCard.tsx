@@ -11,7 +11,7 @@ interface Account {
   id: string;
   name: string;
   mask: string;
-  type: 'checking' | 'savings' | 'credit' | 'loan' | 'other';
+  type: 'checking' | 'savings' | 'credit' | 'loan' | 'investment' | 'other';
   balance?: number;
   transactions?: number;
 }
@@ -189,7 +189,7 @@ export const BankCard: React.FC<BankCardProps> = ({ bank, onSync, onDisconnect }
           >
             {(() => {
               const sortedAccounts = bank.accounts.slice().sort((a, b) => {
-                const typeOrder = { checking: 1, savings: 1, credit: 2, loan: 3, other: 4 };
+                const typeOrder = { checking: 1, savings: 1, credit: 2, loan: 3, investment: 4, other: 5 };
                 const aOrder = typeOrder[a.type] || 4;
                 const bOrder = typeOrder[b.type] || 4;
 
@@ -208,7 +208,9 @@ export const BankCard: React.FC<BankCardProps> = ({ bank, onSync, onDisconnect }
               const debtAccounts = sortedAccounts.filter(
                 (a) => a.type === 'credit' || a.type === 'loan'
               );
-              const investmentAccounts = sortedAccounts.filter((a) => a.type === 'other');
+              const investmentAccounts = sortedAccounts.filter(
+                (a) => a.type === 'investment' || a.type === 'other'
+              );
 
               return (
                 <>

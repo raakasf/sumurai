@@ -7,7 +7,7 @@ export interface BankAccount {
   id: string;
   name: string;
   mask: string;
-  type: 'checking' | 'savings' | 'credit' | 'loan' | 'other';
+  type: 'checking' | 'savings' | 'credit' | 'loan' | 'investment' | 'other';
   balance?: number;
   transactions?: number;
 }

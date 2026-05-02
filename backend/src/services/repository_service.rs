@@ -42,6 +42,9 @@ pub trait DatabaseRepository: Send + Sync {
         user_id: &Uuid,
     ) -> Result<std::collections::HashMap<Uuid, i64>>;
 
+    async fn create_manual_account(&self, account: &Account) -> Result<Account>;
+    async fn update_manual_account(&self, account: &Account) -> Result<Account>;
+    async fn delete_manual_account(&self, account_id: Uuid, user_id: Uuid) -> Result<()>;
     async fn upsert_account(&self, account: &Account) -> Result<()>;
     async fn upsert_transaction(&self, transaction: &Transaction) -> Result<()>;
 
@@ -321,15 +324,16 @@ impl DatabaseRepository for PostgresRepository {
         }
         sqlx::query(
             r#"
-            INSERT INTO accounts (id, user_id, provider_account_id, provider_connection_id, name, account_type, balance_current, mask)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            INSERT INTO accounts (id, user_id, provider_account_id, provider_connection_id, name, account_type, balance_current, mask, institution_name)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             ON CONFLICT (provider_account_id) 
             DO UPDATE SET 
                 provider_connection_id = EXCLUDED.provider_connection_id,
                 name = EXCLUDED.name,
                 account_type = EXCLUDED.account_type,
                 balance_current = EXCLUDED.balance_current,
-                mask = EXCLUDED.mask
+                mask = EXCLUDED.mask,
+                institution_name = EXCLUDED.institution_name
             "#
         )
         .bind(account.id)
@@ -340,10 +344,115 @@ impl DatabaseRepository for PostgresRepository {
         .bind(&account.account_type)
         .bind(account.balance_current)
         .bind(&account.mask)
+        .bind(&account.institution_name)
         .execute(&mut *tx)
             .await?;
         tx.commit().await?;
 
+        Ok(())
+    }
+
+    async fn create_manual_account(&self, account: &Account) -> Result<Account> {
+        let mut tx = self.pool.begin().await?;
+        if let Some(user_id) = account.user_id {
+            sqlx::query("SELECT set_config('app.current_user_id', $1, true)")
+                .bind(user_id.to_string())
+                .execute(&mut *tx)
+                .await?;
+        }
+
+        sqlx::query(
+            r#"
+            INSERT INTO accounts (
+                id, user_id, provider_account_id, provider_connection_id,
+                name, account_type, balance_current, mask, institution_name
+            )
+            VALUES ($1, $2, NULL, NULL, $3, $4, $5, $6, $7)
+            "#,
+        )
+        .bind(account.id)
+        .bind(account.user_id)
+        .bind(&account.name)
+        .bind(&account.account_type)
+        .bind(account.balance_current)
+        .bind(&account.mask)
+        .bind(&account.institution_name)
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+        Ok(account.clone())
+    }
+
+    async fn update_manual_account(&self, account: &Account) -> Result<Account> {
+        let user_id = account
+            .user_id
+            .ok_or_else(|| anyhow::anyhow!("Manual account update requires a user id"))?;
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("SELECT set_config('app.current_user_id', $1, true)")
+            .bind(user_id.to_string())
+            .execute(&mut *tx)
+            .await?;
+
+        let result = sqlx::query(
+            r#"
+            UPDATE accounts
+            SET name = $1,
+                balance_current = $2,
+                mask = $3,
+                institution_name = $4,
+                updated_at = NOW()
+            WHERE id = $5
+              AND user_id = $6
+              AND provider_connection_id IS NULL
+              AND account_type = 'investment'
+            "#,
+        )
+        .bind(&account.name)
+        .bind(account.balance_current)
+        .bind(&account.mask)
+        .bind(&account.institution_name)
+        .bind(account.id)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+
+        if result.rows_affected() == 0 {
+            let _ = tx.rollback().await;
+            return Err(anyhow::anyhow!("Manual investment account not found"));
+        }
+
+        tx.commit().await?;
+        Ok(account.clone())
+    }
+
+    async fn delete_manual_account(&self, account_id: Uuid, user_id: Uuid) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("SELECT set_config('app.current_user_id', $1, true)")
+            .bind(user_id.to_string())
+            .execute(&mut *tx)
+            .await?;
+
+        let result = sqlx::query(
+            r#"
+            DELETE FROM accounts
+            WHERE id = $1
+              AND user_id = $2
+              AND provider_connection_id IS NULL
+              AND account_type = 'investment'
+            "#,
+        )
+        .bind(account_id)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+
+        if result.rows_affected() == 0 {
+            let _ = tx.rollback().await;
+            return Err(anyhow::anyhow!("Manual investment account not found"));
+        }
+
+        tx.commit().await?;
         Ok(())
     }
 
@@ -1018,7 +1127,7 @@ impl DatabaseRepository for PostgresRepository {
             ),
         >(
             r#"
-            SELECT a.id, a.user_id, a.provider_account_id, a.provider_connection_id, a.name, a.account_type, a.balance_current, a.mask, pc.institution_name
+            SELECT a.id, a.user_id, a.provider_account_id, a.provider_connection_id, a.name, a.account_type, a.balance_current, a.mask, COALESCE(a.institution_name, pc.institution_name) AS institution_name
             FROM accounts a
             LEFT JOIN provider_connections pc ON pc.id = a.provider_connection_id
             WHERE a.user_id = $1
@@ -1216,13 +1325,13 @@ impl DatabaseRepository for PostgresRepository {
             r#"
             SELECT
                 a.id AS account_id,
-                COALESCE(pc.institution_name, 'unknown_institution') AS institution_id,
+                COALESCE(a.institution_name, pc.institution_name, 'unknown_institution') AS institution_id,
                 a.account_type,
                 NULL::text AS account_subtype,
                 'USD'::text AS currency,
                 COALESCE(a.balance_current, 0) AS current_balance,
                 a.provider_connection_id,
-                pc.institution_name
+                COALESCE(a.institution_name, pc.institution_name) AS institution_name
             FROM accounts a
             LEFT JOIN provider_connections pc ON pc.id = a.provider_connection_id
             WHERE a.user_id = $1

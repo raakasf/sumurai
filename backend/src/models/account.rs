@@ -58,6 +58,36 @@ pub struct AccountResponse {
     pub institution_name: Option<String>,
 }
 
+#[derive(Debug, Deserialize, ToSchema)]
+#[schema(example = json!({
+    "institution_name": "Robinhood",
+    "name": "Brokerage",
+    "balance_current": "12345.67",
+    "mask": "RH"
+}))]
+pub struct CreateManualInvestmentAccountRequest {
+    pub institution_name: String,
+    pub name: String,
+    #[schema(value_type = String)]
+    pub balance_current: Decimal,
+    pub mask: Option<String>,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[schema(example = json!({
+    "institution_name": "Fidelity",
+    "name": "Rollover IRA",
+    "balance_current": "42000.00",
+    "mask": "IRA"
+}))]
+pub struct UpdateManualInvestmentAccountRequest {
+    pub institution_name: String,
+    pub name: String,
+    #[schema(value_type = String)]
+    pub balance_current: Decimal,
+    pub mask: Option<String>,
+}
+
 impl Account {
     pub fn from_teller(teller_acc: &serde_json::Value) -> Self {
         Self {

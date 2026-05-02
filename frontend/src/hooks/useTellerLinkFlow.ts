@@ -114,6 +114,14 @@ export function useTellerLinkFlow(options: UseTellerLinkFlowOptions): UseTellerL
         if (normalized.includes('savings')) return 'savings';
         if (normalized.includes('credit')) return 'credit';
         if (normalized.includes('loan')) return 'loan';
+        if (
+          normalized.includes('investment') ||
+          normalized.includes('brokerage') ||
+          normalized.includes('401k') ||
+          normalized.includes('ira')
+        ) {
+          return 'investment';
+        }
         if (normalized.includes('depository') || normalized.includes('checking')) return 'checking';
         return 'other';
       };

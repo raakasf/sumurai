@@ -1,7 +1,7 @@
 import { AnimatePresence } from 'framer-motion';
-import { Building2, Clock, CreditCard, RefreshCw } from 'lucide-react';
+import { Building2, Clock, CreditCard, Pencil, Plus, RefreshCw, Trash2, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { cn } from '@/ui/primitives';
+import { Button, cn, GlassCard, Input } from '@/ui/primitives';
 import { getProviderCardConfig } from '@/utils/providerCards';
 import { Toast } from '../components/Toast';
 import HeroStatCard from '../components/widgets/HeroStatCard';
@@ -11,7 +11,10 @@ import { usePlaidLinkFlow } from '../features/plaid/hooks/usePlaidLinkFlow';
 import { useTellerLinkFlow } from '../hooks/useTellerLinkFlow';
 import { useTellerProviderInfo } from '../hooks/useTellerProviderInfo';
 import { PageLayout } from '../layouts/PageLayout';
-import type { FinancialProvider } from '../types/api';
+import { ManualInvestmentService } from '../services/ManualInvestmentService';
+import { ProviderCatalog } from '../services/ProviderCatalog';
+import type { Account, FinancialProvider, ManualInvestmentRequest } from '../types/api';
+import { dispatchAccountsChanged } from '../utils/events';
 
 const formatRelativeTime = (iso: string): string => {
   const timestamp = Date.parse(iso);
@@ -50,6 +53,30 @@ const formatAbsoluteTime = (iso: string): string => {
   });
 };
 
+const parseAccountBalance = (value: Account['balance_current']): number => {
+  const parsed = typeof value === 'number' ? value : Number(value ?? 0);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const isManualInvestmentAccount = (account: Account) =>
+  account.account_type === 'investment' &&
+  !account.provider_connection_id &&
+  !account.provider_account_id;
+
+type ManualInvestmentFormState = {
+  institution_name: string;
+  name: string;
+  balance_current: string;
+  mask: string;
+};
+
+const emptyManualInvestmentForm: ManualInvestmentFormState = {
+  institution_name: 'Robinhood',
+  name: 'Brokerage',
+  balance_current: '',
+  mask: '',
+};
+
 interface AccountsPageProps {
   onError?: (message: string | null) => void;
 }
@@ -60,6 +87,26 @@ const AccountsPage = ({ onError }: AccountsPageProps) => {
   const providerLoading = providerInfo.loading;
   const providerError = providerInfo.error;
   const [selectingProvider, setSelectingProvider] = useState<string | null>(null);
+  const [manualInvestments, setManualInvestments] = useState<Account[]>([]);
+  const [manualForm, setManualForm] =
+    useState<ManualInvestmentFormState>(emptyManualInvestmentForm);
+  const [editingManualId, setEditingManualId] = useState<string | null>(null);
+  const [manualSaving, setManualSaving] = useState(false);
+  const [manualError, setManualError] = useState<string | null>(null);
+
+  const loadManualInvestments = useCallback(async () => {
+    try {
+      const accounts = await ProviderCatalog.getAccounts();
+      setManualInvestments(accounts.filter(isManualInvestmentAccount));
+    } catch (err) {
+      console.warn('Failed to load manual investments', err);
+      setManualInvestments([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadManualInvestments();
+  }, [loadManualInvestments]);
 
   useEffect(() => {
     if (providerError) {
@@ -107,6 +154,88 @@ const AccountsPage = ({ onError }: AccountsPageProps) => {
     [onError, providerInfo]
   );
 
+  const resetManualForm = useCallback(() => {
+    setEditingManualId(null);
+    setManualForm(emptyManualInvestmentForm);
+    setManualError(null);
+  }, []);
+
+  const manualInvestmentPayload = useCallback((): ManualInvestmentRequest | null => {
+    const institution = manualForm.institution_name.trim();
+    const name = manualForm.name.trim();
+    const balance = Number(manualForm.balance_current);
+
+    if (!institution || !name || !Number.isFinite(balance) || balance < 0) {
+      setManualError('Enter an institution, account name, and non-negative balance.');
+      return null;
+    }
+
+    return {
+      institution_name: institution,
+      name,
+      balance_current: balance,
+      mask: manualForm.mask.trim() || null,
+    };
+  }, [manualForm]);
+
+  const saveManualInvestment = useCallback(async () => {
+    const payload = manualInvestmentPayload();
+    if (!payload) return;
+
+    setManualSaving(true);
+    setManualError(null);
+    try {
+      if (editingManualId) {
+        await ManualInvestmentService.update(editingManualId, payload);
+        setToast('Investment balance updated');
+      } else {
+        await ManualInvestmentService.create(payload);
+        setToast('Investment account added');
+      }
+      resetManualForm();
+      await loadManualInvestments();
+      dispatchAccountsChanged();
+    } catch (err) {
+      console.warn('Failed to save manual investment', err);
+      setManualError('Could not save this investment account.');
+    } finally {
+      setManualSaving(false);
+    }
+  }, [editingManualId, loadManualInvestments, manualInvestmentPayload, resetManualForm, setToast]);
+
+  const editManualInvestment = useCallback((account: Account) => {
+    setEditingManualId(account.id);
+    setManualError(null);
+    setManualForm({
+      institution_name: account.institution_name || 'Investment',
+      name: account.name,
+      balance_current: String(parseAccountBalance(account.balance_current)),
+      mask: account.mask || '',
+    });
+  }, []);
+
+  const deleteManualInvestment = useCallback(
+    async (account: Account) => {
+      setManualSaving(true);
+      setManualError(null);
+      try {
+        await ManualInvestmentService.delete(account.id);
+        setToast('Investment account removed');
+        if (editingManualId === account.id) {
+          resetManualForm();
+        }
+        await loadManualInvestments();
+        dispatchAccountsChanged();
+      } catch (err) {
+        console.warn('Failed to delete manual investment', err);
+        setManualError('Could not remove this investment account.');
+      } finally {
+        setManualSaving(false);
+      }
+    },
+    [editingManualId, loadManualInvestments, resetManualForm, setToast]
+  );
+
   const banks = useMemo(
     () =>
       (connections || []).map((conn) => ({
@@ -147,10 +276,10 @@ const AccountsPage = ({ onError }: AccountsPageProps) => {
     return {
       institutions: banks.length,
       connectedInstitutions,
-      accounts: totalAccounts,
+      accounts: totalAccounts + manualInvestments.length,
       latestSync: latestSyncIso,
     };
-  }, [banks]);
+  }, [banks, manualInvestments.length]);
 
   if (providerLoading) {
     return (
@@ -494,6 +623,136 @@ const AccountsPage = ({ onError }: AccountsPageProps) => {
     </div>
   );
 
+  const manualInvestmentsTotal = manualInvestments.reduce(
+    (sum, account) => sum + parseAccountBalance(account.balance_current),
+    0
+  );
+
+  const manualInvestmentsSection = (
+    <section className={cn('space-y-4')}>
+      <div className={cn('flex', 'items-center', 'justify-between', 'gap-3')}>
+        <div>
+          <h2 className={cn('text-lg', 'font-semibold', 'text-slate-900', 'dark:text-white')}>
+            Manual investments
+          </h2>
+          <div className={cn('text-sm', 'text-slate-600', 'dark:text-slate-300')}>
+            {manualInvestments.length
+              ? `${manualInvestments.length} account${manualInvestments.length === 1 ? '' : 's'} tracked`
+              : 'Track brokerage, IRA, and 401k balances manually'}
+          </div>
+        </div>
+        <div className={cn('text-right', 'text-sm', 'font-semibold', 'text-cyan-600', 'dark:text-cyan-300')}>
+          {manualInvestmentsTotal.toLocaleString(undefined, {
+            style: 'currency',
+            currency: 'USD',
+          })}
+        </div>
+      </div>
+
+      <GlassCard variant="accent" rounded="xl" padding="lg" withInnerEffects={false}>
+        <div className={cn('grid', 'gap-3', 'md:grid-cols-[1.2fr_1.2fr_1fr_0.8fr_auto]')}>
+          <Input
+            value={manualForm.institution_name}
+            onChange={(event) =>
+              setManualForm((prev) => ({ ...prev, institution_name: event.target.value }))
+            }
+            placeholder="Institution"
+            variant="glass"
+          />
+          <Input
+            value={manualForm.name}
+            onChange={(event) => setManualForm((prev) => ({ ...prev, name: event.target.value }))}
+            placeholder="Account name"
+            variant="glass"
+          />
+          <Input
+            value={manualForm.balance_current}
+            onChange={(event) =>
+              setManualForm((prev) => ({ ...prev, balance_current: event.target.value }))
+            }
+            placeholder="Balance"
+            inputMode="decimal"
+            variant="glass"
+          />
+          <Input
+            value={manualForm.mask}
+            onChange={(event) => setManualForm((prev) => ({ ...prev, mask: event.target.value }))}
+            placeholder="Label"
+            variant="glass"
+          />
+          <div className={cn('flex', 'gap-2')}>
+            <Button onClick={saveManualInvestment} loading={manualSaving} variant="secondary">
+              <Plus className={cn('h-4', 'w-4')} />
+              {editingManualId ? 'Update' : 'Add'}
+            </Button>
+            {editingManualId && (
+              <Button onClick={resetManualForm} variant="icon" size="icon" aria-label="Cancel edit">
+                <X className={cn('h-4', 'w-4')} />
+              </Button>
+            )}
+          </div>
+        </div>
+        {manualError && (
+          <div className={cn('mt-3', 'text-sm', 'font-medium', 'text-red-600', 'dark:text-red-300')}>
+            {manualError}
+          </div>
+        )}
+      </GlassCard>
+
+      {manualInvestments.length > 0 && (
+        <div className={cn('grid', 'gap-3', 'md:grid-cols-2')}>
+          {manualInvestments.map((account) => (
+            <GlassCard
+              key={account.id}
+              variant="accent"
+              rounded="xl"
+              padding="lg"
+              withInnerEffects={false}
+            >
+              <div className={cn('flex', 'items-start', 'justify-between', 'gap-3')}>
+                <div>
+                  <div className={cn('text-sm', 'font-semibold', 'text-slate-900', 'dark:text-white')}>
+                    {account.name}
+                  </div>
+                  <div className={cn('mt-1', 'text-xs', 'text-slate-600', 'dark:text-slate-300')}>
+                    {account.institution_name || 'Manual investment'}
+                    {account.mask ? ` • ${account.mask}` : ''}
+                  </div>
+                </div>
+                <div className={cn('text-right')}>
+                  <div className={cn('text-sm', 'font-semibold', 'text-cyan-600', 'dark:text-cyan-300')}>
+                    {parseAccountBalance(account.balance_current).toLocaleString(undefined, {
+                      style: 'currency',
+                      currency: 'USD',
+                    })}
+                  </div>
+                  <div className={cn('mt-3', 'flex', 'justify-end', 'gap-2')}>
+                    <Button
+                      onClick={() => editManualInvestment(account)}
+                      variant="icon"
+                      size="icon"
+                      aria-label={`Edit ${account.name}`}
+                    >
+                      <Pencil className={cn('h-4', 'w-4')} />
+                    </Button>
+                    <Button
+                      onClick={() => deleteManualInvestment(account)}
+                      variant="icon"
+                      size="icon"
+                      aria-label={`Delete ${account.name}`}
+                    >
+                      <Trash2 className={cn('h-4', 'w-4')} />
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            </GlassCard>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+
   return (
     <div data-testid="accounts-page">
       <PageLayout
@@ -503,6 +762,8 @@ const AccountsPage = ({ onError }: AccountsPageProps) => {
         actions={actions}
         stats={statsGrid}
       >
+        {manualInvestmentsSection}
+
         <ConnectionsList
           banks={banks}
           onConnect={connect}

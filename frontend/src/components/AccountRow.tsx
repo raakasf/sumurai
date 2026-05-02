@@ -5,7 +5,7 @@ interface Account {
   id: string;
   name: string;
   mask: string;
-  type: 'checking' | 'savings' | 'credit' | 'loan' | 'other';
+  type: 'checking' | 'savings' | 'credit' | 'loan' | 'investment' | 'other';
   balance?: number;
   transactions?: number;
 }
@@ -98,6 +98,7 @@ const AccountTypeDot: React.FC<{ type: Account['type'] }> = ({ type }) => {
     savings: '#22c55e',
     credit: '#f59e0b',
     loan: '#a78bfa',
+    investment: '#06b6d4',
     other: '#94a3b8',
   };
 
@@ -111,7 +112,7 @@ const AccountTypeDot: React.FC<{ type: Account['type'] }> = ({ type }) => {
 
 export const AccountRow: React.FC<AccountRowProps> = ({ account }) => {
   const isDebtAccount = account.type === 'credit' || account.type === 'loan';
-  const isOtherAccount = account.type === 'other';
+  const isOtherAccount = account.type === 'other' || account.type === 'investment';
 
   const rawBalance = account.balance;
   const balanceText = formatMoney(rawBalance);
