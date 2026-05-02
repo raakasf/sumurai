@@ -1,5 +1,5 @@
 use crate::models::analytics::CategorySpending;
-use crate::models::transaction::Transaction;
+use crate::models::transaction::{Transaction, TransactionWithAccount};
 use crate::services::analytics_service::AnalyticsService;
 use chrono::{Datelike, NaiveDate};
 use rust_decimal::Decimal;
@@ -29,6 +29,38 @@ fn create_test_transaction(
         payment_channel: Some("online".to_string()),
         pending: false,
         created_at: Some(Utc::now()),
+    }
+}
+
+fn create_test_transaction_with_account(
+    amount: Decimal,
+    date: NaiveDate,
+    category_primary: &str,
+    custom_category: Option<&str>,
+) -> TransactionWithAccount {
+    use chrono::Utc;
+    use uuid::Uuid;
+
+    TransactionWithAccount {
+        id: Uuid::new_v4(),
+        account_id: Uuid::new_v4(),
+        user_id: None,
+        provider_account_id: None,
+        provider_transaction_id: None,
+        amount,
+        date,
+        merchant_name: Some("Test Merchant".to_string()),
+        category_primary: category_primary.to_string(),
+        category_detailed: format!("{} - Details", category_primary),
+        category_confidence: "VERY_HIGH".to_string(),
+        payment_channel: Some("online".to_string()),
+        pending: false,
+        created_at: Some(Utc::now()),
+        account_name: "Test Account".to_string(),
+        account_type: "depository".to_string(),
+        account_mask: Some("1234".to_string()),
+        custom_category: custom_category.map(str::to_string),
+        rule_category: None,
     }
 }
 
@@ -302,9 +334,65 @@ fn given_transactions_across_months_when_calculating_monthly_totals_then_groups_
 }
 
 #[test]
+fn given_credit_card_bills_when_calculating_monthly_totals_then_excludes_them() {
+    let analytics = AnalyticsService::new();
+    let txns = vec![
+        create_test_transaction(
+            dec!(100.00),
+            NaiveDate::from_ymd_opt(2024, 3, 10).unwrap(),
+            "Food",
+        ),
+        create_test_transaction(
+            dec!(400.00),
+            NaiveDate::from_ymd_opt(2024, 3, 12).unwrap(),
+            "Credit Card Bills",
+        ),
+        create_test_transaction(
+            dec!(25.00),
+            NaiveDate::from_ymd_opt(2024, 3, 13).unwrap(),
+            "TRANSFER_OUT",
+        ),
+    ];
+
+    let result = analytics.calculate_monthly_totals(&txns, 1);
+
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].month, "2024-03");
+    assert_eq!(result[0].total, dec!(100.00));
+}
+
+#[test]
+fn given_credit_card_payment_variants_when_calculating_monthly_totals_then_excludes_them() {
+    let analytics = AnalyticsService::new();
+    let txns = vec![
+        create_test_transaction(
+            dec!(100.00),
+            NaiveDate::from_ymd_opt(2024, 3, 10).unwrap(),
+            "Food",
+        ),
+        create_test_transaction(
+            dec!(400.00),
+            NaiveDate::from_ymd_opt(2024, 3, 12).unwrap(),
+            "Credit Card Bill",
+        ),
+        create_test_transaction(
+            dec!(500.00),
+            NaiveDate::from_ymd_opt(2024, 3, 13).unwrap(),
+            "Credit Card Payments",
+        ),
+    ];
+
+    let result = analytics.calculate_monthly_totals(&txns, 1);
+
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].total, dec!(100.00));
+}
+
+#[test]
 fn given_transactions_when_grouping_by_category_with_frontend_logic_then_handles_uncategorized() {
     let _analytics = AnalyticsService::new();
-    let txns = [create_test_transaction(
+    let txns = [
+        create_test_transaction(
             dec!(50.00),
             NaiveDate::from_ymd_opt(2024, 3, 10).unwrap(),
             "Food",
@@ -318,7 +406,8 @@ fn given_transactions_when_grouping_by_category_with_frontend_logic_then_handles
             dec!(30.00),
             NaiveDate::from_ymd_opt(2024, 3, 5).unwrap(),
             "",
-        )];
+        ),
+    ];
     let result = group_transactions_by_category(txns.iter().collect());
     assert_eq!(result.len(), 2);
     let food = result.iter().find(|c| c.name == "Food").unwrap();
@@ -432,6 +521,81 @@ fn given_transactions_when_grouping_by_category_with_date_range_then_filters_and
 
     assert_eq!(food.value, dec!(75.50));
     assert_eq!(transport.value, dec!(30.00));
+}
+
+#[test]
+fn given_effective_credit_card_bill_category_when_grouping_then_excludes_from_categories() {
+    let txns = vec![
+        create_test_transaction_with_account(
+            dec!(60.00),
+            NaiveDate::from_ymd_opt(2024, 3, 5).unwrap(),
+            "Food",
+            None,
+        ),
+        create_test_transaction_with_account(
+            dec!(500.00),
+            NaiveDate::from_ymd_opt(2024, 3, 6).unwrap(),
+            "OTHER",
+            Some("Credit Card Bills"),
+        ),
+    ];
+
+    let result =
+        AnalyticsService::group_transactions_with_account_by_effective_category(&txns, None, None);
+
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].name, "Food");
+    assert_eq!(result[0].value, dec!(60.00));
+}
+
+#[test]
+fn given_effective_credit_card_bill_category_when_summing_spending_then_excludes_from_total() {
+    let txns = vec![
+        create_test_transaction_with_account(
+            dec!(60.00),
+            NaiveDate::from_ymd_opt(2024, 3, 5).unwrap(),
+            "Food",
+            None,
+        ),
+        create_test_transaction_with_account(
+            dec!(500.00),
+            NaiveDate::from_ymd_opt(2024, 3, 6).unwrap(),
+            "OTHER",
+            Some("Credit Card Bills"),
+        ),
+    ];
+
+    let total = AnalyticsService::sum_spending_transactions_with_account(
+        &txns,
+        Some(NaiveDate::from_ymd_opt(2024, 3, 1).unwrap()),
+        Some(NaiveDate::from_ymd_opt(2024, 3, 31).unwrap()),
+    );
+
+    assert_eq!(total, dec!(60.00));
+}
+
+#[test]
+fn given_effective_credit_card_bill_category_when_calculating_daily_spending_then_excludes_it() {
+    let analytics = AnalyticsService::new();
+    let txns = vec![
+        create_test_transaction_with_account(
+            dec!(60.00),
+            NaiveDate::from_ymd_opt(2024, 3, 5).unwrap(),
+            "Food",
+            None,
+        ),
+        create_test_transaction_with_account(
+            dec!(500.00),
+            NaiveDate::from_ymd_opt(2024, 3, 5).unwrap(),
+            "OTHER",
+            Some("Credit Card Bills"),
+        ),
+    ];
+
+    let daily = analytics.calculate_daily_spending_with_account(&txns, 2024, 3);
+
+    assert_eq!(daily[4].spend, dec!(60.00));
+    assert_eq!(daily[4].cumulative, dec!(60.00));
 }
 
 #[test]

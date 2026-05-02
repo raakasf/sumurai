@@ -1,4 +1,8 @@
-import { formatCategoryName, getTagThemeForCategory } from '@/utils/categories';
+import {
+  formatCategoryName,
+  getTagThemeForCategory,
+  isSpendingExcludedCategory,
+} from '@/utils/categories';
 
 describe('categories utils', () => {
   it('formats category names from snake_case', () => {
@@ -20,5 +24,14 @@ describe('categories utils', () => {
     expect(a.key).toEqual(b.key);
     expect(a.tag).toEqual(b.tag);
     expect(a.ringHex).toEqual(b.ringHex);
+  });
+
+  it('identifies transfer-like categories that should not count as spending', () => {
+    expect(isSpendingExcludedCategory('Credit Card Bills')).toBe(true);
+    expect(isSpendingExcludedCategory('Credit Card Bill')).toBe(true);
+    expect(isSpendingExcludedCategory('CREDIT_CARD_PAYMENT')).toBe(true);
+    expect(isSpendingExcludedCategory('Credit Card Payments')).toBe(true);
+    expect(isSpendingExcludedCategory('TRANSFER_OUT')).toBe(true);
+    expect(isSpendingExcludedCategory('Groceries')).toBe(false);
   });
 });

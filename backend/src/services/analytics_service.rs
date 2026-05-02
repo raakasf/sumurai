@@ -173,13 +173,78 @@ impl AnalyticsService {
         }
     }
 
+    fn normalize_category_key(category: &str) -> String {
+        category
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric())
+            .flat_map(char::to_lowercase)
+            .collect()
+    }
+
+    pub fn is_spending_excluded_category(category: &str) -> bool {
+        matches!(
+            Self::normalize_category_key(category).as_str(),
+            "creditcardbill"
+                | "creditcardbills"
+                | "creditcardpayment"
+                | "creditcardpayments"
+                | "transferin"
+                | "transferout"
+        )
+    }
+
+    fn is_spending_transaction(transaction: &Transaction) -> bool {
+        transaction.amount > Decimal::ZERO
+            && !Self::is_spending_excluded_category(&Self::get_category_name(transaction))
+    }
+
+    fn get_effective_category_name(transaction: &TransactionWithAccount) -> String {
+        transaction
+            .custom_category
+            .as_ref()
+            .or(transaction.rule_category.as_ref())
+            .filter(|category| !category.is_empty())
+            .cloned()
+            .unwrap_or_else(|| {
+                if transaction.category_primary.is_empty() {
+                    "Uncategorized".to_string()
+                } else {
+                    transaction.category_primary.clone()
+                }
+            })
+    }
+
+    fn is_spending_transaction_with_account(transaction: &TransactionWithAccount) -> bool {
+        transaction.amount > Decimal::ZERO
+            && !Self::is_spending_excluded_category(&Self::get_effective_category_name(transaction))
+    }
+
+    pub fn sum_spending_transactions_with_account(
+        transactions: &[TransactionWithAccount],
+        start_date: Option<chrono::NaiveDate>,
+        end_date: Option<chrono::NaiveDate>,
+    ) -> Decimal {
+        transactions
+            .iter()
+            .filter(|transaction| {
+                if let (Some(start), Some(end)) = (start_date, end_date) {
+                    if transaction.date < start || transaction.date > end {
+                        return false;
+                    }
+                }
+                Self::is_spending_transaction_with_account(transaction)
+            })
+            .map(|transaction| transaction.amount)
+            .sum()
+    }
+
     pub fn group_transactions_by_category(
         transactions: Vec<&Transaction>,
     ) -> Vec<CategorySpending> {
         let mut category_map = std::collections::HashMap::new();
 
         for transaction in transactions {
-            if transaction.amount <= Decimal::ZERO {
+            if !Self::is_spending_transaction(transaction) {
                 continue;
             }
             let category_name = Self::get_category_name(transaction);
@@ -210,7 +275,7 @@ impl AnalyticsService {
         let mut category_map = std::collections::HashMap::new();
 
         for transaction in transactions {
-            if transaction.amount <= Decimal::ZERO {
+            if !Self::is_spending_transaction_with_account(transaction) {
                 continue;
             }
 
@@ -220,19 +285,7 @@ impl AnalyticsService {
                 }
             }
 
-            let category_name = transaction
-                .custom_category
-                .as_ref()
-                .or(transaction.rule_category.as_ref())
-                .filter(|category| !category.is_empty())
-                .cloned()
-                .unwrap_or_else(|| {
-                    if transaction.category_primary.is_empty() {
-                        "Uncategorized".to_string()
-                    } else {
-                        transaction.category_primary.clone()
-                    }
-                });
+            let category_name = Self::get_effective_category_name(transaction);
 
             *category_map.entry(category_name).or_insert(Decimal::ZERO) += transaction.amount;
         }
@@ -253,6 +306,44 @@ impl AnalyticsService {
         let mut monthly_totals = std::collections::HashMap::new();
 
         for transaction in transactions {
+            if !Self::is_spending_transaction(transaction) {
+                continue;
+            }
+            let month_key = format!(
+                "{}-{:02}",
+                transaction.date.year(),
+                transaction.date.month()
+            );
+            *monthly_totals.entry(month_key).or_insert(Decimal::ZERO) += transaction.amount;
+        }
+
+        let mut result: Vec<MonthlySpending> = monthly_totals
+            .into_iter()
+            .map(|(month, total)| MonthlySpending { month, total })
+            .collect();
+
+        result.sort_by(|a, b| a.month.cmp(&b.month));
+
+        if result.len() > months as usize {
+            result.truncate(months as usize);
+        }
+
+        result
+    }
+
+    pub fn calculate_monthly_totals_with_account(
+        &self,
+        transactions: &[TransactionWithAccount],
+        months: u32,
+    ) -> Vec<MonthlySpending> {
+        use chrono::Datelike;
+
+        let mut monthly_totals = std::collections::HashMap::new();
+
+        for transaction in transactions {
+            if !Self::is_spending_transaction_with_account(transaction) {
+                continue;
+            }
             let month_key = format!(
                 "{}-{:02}",
                 transaction.date.year(),
@@ -285,7 +376,7 @@ impl AnalyticsService {
         let mut merchant_map: HashMap<String, (Decimal, u32)> = HashMap::new();
 
         for transaction in transactions {
-            if transaction.amount <= Decimal::ZERO {
+            if !Self::is_spending_transaction(transaction) {
                 continue;
             }
             let merchant_name = transaction
@@ -302,7 +393,7 @@ impl AnalyticsService {
 
         let total_spend: Decimal = transactions
             .iter()
-            .filter(|t| t.amount > Decimal::ZERO)
+            .filter(|t| Self::is_spending_transaction(t))
             .map(|t| t.amount)
             .sum();
 
@@ -344,12 +435,83 @@ impl AnalyticsService {
         self.get_top_merchants(&transactions_slice, limit)
     }
 
+    pub fn get_top_merchants_with_account_date_range(
+        &self,
+        transactions: &[TransactionWithAccount],
+        start_date: Option<chrono::NaiveDate>,
+        end_date: Option<chrono::NaiveDate>,
+        limit: usize,
+    ) -> Vec<TopMerchant> {
+        use std::collections::HashMap;
+
+        let mut merchant_map: HashMap<String, (Decimal, u32)> = HashMap::new();
+
+        for transaction in transactions {
+            if let (Some(start), Some(end)) = (start_date, end_date) {
+                if transaction.date < start || transaction.date > end {
+                    continue;
+                }
+            }
+
+            if !Self::is_spending_transaction_with_account(transaction) {
+                continue;
+            }
+
+            let merchant_name = transaction
+                .merchant_name
+                .clone()
+                .unwrap_or_else(|| "Unknown Merchant".to_string());
+
+            let entry = merchant_map
+                .entry(merchant_name)
+                .or_insert((Decimal::ZERO, 0));
+            entry.0 += transaction.amount;
+            entry.1 += 1;
+        }
+
+        let total_spend: Decimal = merchant_map.values().map(|(amount, _)| *amount).sum();
+
+        let mut merchants: Vec<TopMerchant> = merchant_map
+            .into_iter()
+            .map(|(name, (amount, count))| {
+                let percentage = if total_spend > Decimal::ZERO {
+                    Self::round_percentage((amount / total_spend) * Decimal::from(100))
+                } else {
+                    Decimal::ZERO
+                };
+
+                TopMerchant {
+                    name,
+                    amount: Self::round_amount(amount),
+                    count,
+                    percentage,
+                }
+            })
+            .collect();
+
+        merchants.sort_by(|a, b| b.amount.cmp(&a.amount));
+
+        merchants.truncate(limit);
+
+        merchants
+    }
+
+    pub fn calculate_current_month_spending_with_account(
+        &self,
+        transactions: &[TransactionWithAccount],
+    ) -> Decimal {
+        let now = chrono::Utc::now().naive_utc().date();
+        let (start, end) = self.get_month_range(now.year(), now.month());
+        Self::sum_spending_transactions_with_account(transactions, Some(start), Some(end))
+    }
+
     pub fn calculate_current_month_spending(&self, transactions: &[Transaction]) -> Decimal {
         let now = chrono::Utc::now().naive_utc().date();
         let (start, end) = self.get_month_range(now.year(), now.month());
         transactions
             .iter()
             .filter(|t| t.date >= start && t.date <= end)
+            .filter(|t| Self::is_spending_transaction(t))
             .map(|t| t.amount)
             .sum()
     }
@@ -367,7 +529,44 @@ impl AnalyticsService {
             .day();
         let mut totals = vec![Decimal::ZERO; days_in_month as usize];
         for t in transactions {
-            if t.date.year() == year && t.date.month() == month {
+            if t.date.year() == year && t.date.month() == month && Self::is_spending_transaction(t)
+            {
+                let idx = (t.date.day() - 1) as usize;
+                totals[idx] += t.amount;
+            }
+        }
+        let mut cumulative = Decimal::ZERO;
+        totals
+            .into_iter()
+            .enumerate()
+            .map(|(i, spend)| {
+                cumulative += spend;
+                DailySpending {
+                    day: (i + 1) as u32,
+                    spend,
+                    cumulative,
+                }
+            })
+            .collect()
+    }
+
+    pub fn calculate_daily_spending_with_account(
+        &self,
+        transactions: &[TransactionWithAccount],
+        year: i32,
+        month: u32,
+    ) -> Vec<DailySpending> {
+        let days_in_month = chrono::NaiveDate::from_ymd_opt(year, month + 1, 1)
+            .unwrap_or(chrono::NaiveDate::from_ymd_opt(year + 1, 1, 1).unwrap())
+            .pred_opt()
+            .unwrap()
+            .day();
+        let mut totals = vec![Decimal::ZERO; days_in_month as usize];
+        for t in transactions {
+            if t.date.year() == year
+                && t.date.month() == month
+                && Self::is_spending_transaction_with_account(t)
+            {
                 let idx = (t.date.day() - 1) as usize;
                 totals[idx] += t.amount;
             }

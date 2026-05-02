@@ -8,6 +8,22 @@ export function formatCategoryName(categoryPrimary: string | undefined | null): 
     .join(' ');
 }
 
+export function isSpendingExcludedCategory(category: string | undefined | null): boolean {
+  const key = (category || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '');
+
+  return [
+    'creditcardbill',
+    'creditcardbills',
+    'creditcardpayment',
+    'creditcardpayments',
+    'transferin',
+    'transferout',
+  ].includes(key);
+}
+
 const PILL_TYPOGRAPHY = 'text-[0.6rem] font-bold uppercase tracking-[0.18em]';
 
 const TAG_THEMES = [
