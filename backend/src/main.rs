@@ -43,7 +43,10 @@ use crate::models::analytics::{
 use crate::models::app_state::AppState;
 use crate::models::auth::{AuthContext, AuthMiddlewareState};
 use crate::models::{
-    account::AccountResponse,
+    account::{
+        Account, AccountResponse, CreateManualInvestmentAccountRequest,
+        UpdateManualInvestmentAccountRequest,
+    },
     analytics::{DateRangeQuery, MonthlyTotalsQuery},
     auth as auth_models,
     budget::{Budget, CreateBudgetRequest, DeleteBudgetResponse, UpdateBudgetRequest},
@@ -227,6 +230,18 @@ pub fn create_app(state: AppState) -> Router {
         .route(
             "/api/providers/disconnect",
             post(disconnect_authenticated_connection),
+        )
+        .route(
+            "/api/manual-investments",
+            post(create_authenticated_manual_investment_account),
+        )
+        .route(
+            "/api/manual-investments/{id}",
+            put(update_authenticated_manual_investment_account),
+        )
+        .route(
+            "/api/manual-investments/{id}",
+            delete(delete_authenticated_manual_investment_account),
         )
         .route(
             "/api/plaid/clear-synced-data",
@@ -1141,6 +1156,173 @@ async fn get_authenticated_plaid_accounts(
     );
 
     Ok(Json(account_responses))
+}
+
+fn clean_manual_account_mask(mask: Option<String>) -> Option<String> {
+    mask.map(|value| value.trim().chars().take(4).collect::<String>())
+        .filter(|value| !value.is_empty())
+}
+
+fn manual_investment_response(account: Account, user_id: Uuid) -> AccountResponse {
+    AccountResponse {
+        id: account.id,
+        user_id: Some(user_id),
+        provider_account_id: None,
+        provider_connection_id: None,
+        name: account.name,
+        account_type: account.account_type,
+        balance_current: account.balance_current,
+        mask: account.mask,
+        transaction_count: 0,
+        institution_name: account.institution_name,
+    }
+}
+
+async fn invalidate_account_overview_cache(state: &AppState, jwt_id: &str) {
+    let _ = state
+        .cache_service
+        .invalidate_pattern(&format!("{}*_balances_overview*", jwt_id))
+        .await;
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/manual-investments",
+    description = "Creates a manually tracked investment account balance.",
+    request_body = CreateManualInvestmentAccountRequest,
+    responses(
+        (status = 200, description = "Manual investment account created", body = AccountResponse),
+        (status = 400, description = "Invalid account data"),
+        (status = 401, description = "Unauthorized"),
+        (status = 500, description = "Internal server error"),
+    ),
+    security(("bearer_auth" = [])),
+    tag = "Accounts"
+)]
+async fn create_authenticated_manual_investment_account(
+    State(state): State<AppState>,
+    auth_context: AuthContext,
+    Json(req): Json<CreateManualInvestmentAccountRequest>,
+) -> Result<Json<AccountResponse>, StatusCode> {
+    let user_id = auth_context.user_id;
+    let institution_name = req.institution_name.trim().to_string();
+    let name = req.name.trim().to_string();
+
+    if institution_name.is_empty() || name.is_empty() || req.balance_current < rust_decimal::Decimal::ZERO {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let account = Account {
+        id: Uuid::new_v4(),
+        user_id: Some(user_id),
+        provider_account_id: None,
+        provider_connection_id: None,
+        name,
+        account_type: "investment".to_string(),
+        balance_current: Some(req.balance_current),
+        mask: clean_manual_account_mask(req.mask),
+        institution_name: Some(institution_name),
+    };
+
+    match state.db_repository.create_manual_account(&account).await {
+        Ok(created) => {
+            invalidate_account_overview_cache(&state, &auth_context.jwt_id).await;
+            Ok(Json(manual_investment_response(created, user_id)))
+        }
+        Err(e) => {
+            tracing::error!("Failed to create manual investment for user {}: {}", user_id, e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+#[utoipa::path(
+    put,
+    path = "/api/manual-investments/{id}",
+    description = "Updates a manually tracked investment account balance.",
+    request_body = UpdateManualInvestmentAccountRequest,
+    responses(
+        (status = 200, description = "Manual investment account updated", body = AccountResponse),
+        (status = 400, description = "Invalid account data"),
+        (status = 401, description = "Unauthorized"),
+        (status = 404, description = "Manual investment account not found"),
+        (status = 500, description = "Internal server error"),
+    ),
+    security(("bearer_auth" = [])),
+    tag = "Accounts"
+)]
+async fn update_authenticated_manual_investment_account(
+    State(state): State<AppState>,
+    auth_context: AuthContext,
+    Path(account_id): Path<Uuid>,
+    Json(req): Json<UpdateManualInvestmentAccountRequest>,
+) -> Result<Json<AccountResponse>, StatusCode> {
+    let user_id = auth_context.user_id;
+    let institution_name = req.institution_name.trim().to_string();
+    let name = req.name.trim().to_string();
+
+    if institution_name.is_empty() || name.is_empty() || req.balance_current < rust_decimal::Decimal::ZERO {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let account = Account {
+        id: account_id,
+        user_id: Some(user_id),
+        provider_account_id: None,
+        provider_connection_id: None,
+        name,
+        account_type: "investment".to_string(),
+        balance_current: Some(req.balance_current),
+        mask: clean_manual_account_mask(req.mask),
+        institution_name: Some(institution_name),
+    };
+
+    match state.db_repository.update_manual_account(&account).await {
+        Ok(updated) => {
+            invalidate_account_overview_cache(&state, &auth_context.jwt_id).await;
+            Ok(Json(manual_investment_response(updated, user_id)))
+        }
+        Err(e) if e.to_string().contains("not found") => Err(StatusCode::NOT_FOUND),
+        Err(e) => {
+            tracing::error!("Failed to update manual investment {}: {}", account_id, e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/manual-investments/{id}",
+    description = "Deletes a manually tracked investment account.",
+    responses(
+        (status = 200, description = "Manual investment account deleted"),
+        (status = 401, description = "Unauthorized"),
+        (status = 404, description = "Manual investment account not found"),
+        (status = 500, description = "Internal server error"),
+    ),
+    security(("bearer_auth" = [])),
+    tag = "Accounts"
+)]
+async fn delete_authenticated_manual_investment_account(
+    State(state): State<AppState>,
+    auth_context: AuthContext,
+    Path(account_id): Path<Uuid>,
+) -> Result<StatusCode, StatusCode> {
+    match state
+        .db_repository
+        .delete_manual_account(account_id, auth_context.user_id)
+        .await
+    {
+        Ok(()) => {
+            invalidate_account_overview_cache(&state, &auth_context.jwt_id).await;
+            Ok(StatusCode::OK)
+        }
+        Err(e) if e.to_string().contains("not found") => Err(StatusCode::NOT_FOUND),
+        Err(e) => {
+            tracing::error!("Failed to delete manual investment {}: {}", account_id, e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
 }
 
 #[utoipa::path(

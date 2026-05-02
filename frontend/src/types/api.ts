@@ -77,6 +77,13 @@ export interface Account {
   transaction_count?: number | null;
 }
 
+export interface ManualInvestmentRequest {
+  institution_name: string;
+  name: string;
+  balance_current: number;
+  mask?: string | null;
+}
+
 export interface PlaidLinkTokenResponse {
   link_token: string;
 }

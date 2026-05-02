@@ -2,6 +2,7 @@ import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
 import { installFetchRoutes } from '@tests/utils/fetchRoutes';
 import { createProviderConnection, createProviderStatus } from '@tests/utils/fixtures';
 import { AccountFilterProvider, useAccountFilter } from '@/hooks/useAccountFilter';
+import { ACCOUNTS_CHANGED_EVENT } from '@/utils/events';
 
 describe('AccountFilterProvider', () => {
   let fetchMock: ReturnType<typeof installFetchRoutes>;
@@ -173,6 +174,99 @@ describe('AccountFilterProvider', () => {
 
         expect(result.current.selectedAccountIds.sort()).toEqual(['acc_1', 'acc_2', 'acc_3']);
         expect(result.current.isAllAccountsSelected).toBe(true);
+      });
+
+      it('Then it should include newly added accounts in the active selection', async () => {
+        let includeInvestment = false;
+        const providerStatus = createProviderStatus({
+          connections: [
+            createProviderConnection({
+              is_connected: true,
+              connection_id: 'conn_1',
+              institution_name: 'First Platypus Bank',
+              account_count: 4,
+            }),
+          ],
+        });
+
+        fetchMock = installFetchRoutes({
+          'GET /api/plaid/accounts': () => {
+            const accounts = [
+              {
+                id: 'acc_1',
+                name: 'Everyday Checking',
+                account_type: 'depository',
+                balance_current: 1250.5,
+                mask: '0000',
+                plaid_connection_id: 'conn_1',
+                institution_name: 'First Platypus Bank',
+              },
+              {
+                id: 'acc_2',
+                name: 'High-Yield Savings',
+                account_type: 'depository',
+                balance_current: 5000.0,
+                mask: '1111',
+                plaid_connection_id: 'conn_1',
+                institution_name: 'First Platypus Bank',
+              },
+              {
+                id: 'acc_3',
+                name: 'Rewards Credit Card',
+                account_type: 'credit',
+                balance_current: -350.75,
+                mask: '2222',
+                plaid_connection_id: 'conn_2',
+                institution_name: 'Second Platypus Bank',
+              },
+            ];
+
+            if (includeInvestment) {
+              accounts.push({
+                id: 'inv_1',
+                name: 'Brokerage',
+                account_type: 'investment',
+                balance_current: 10000,
+                mask: null,
+                plaid_connection_id: null,
+                institution_name: 'Fidelity',
+              });
+            }
+
+            return accounts;
+          },
+          'GET /api/providers/status': providerStatus,
+        });
+
+        const wrapper = ({ children }: { children: React.ReactNode }) => (
+          <AccountFilterProvider>{children}</AccountFilterProvider>
+        );
+
+        const { result } = renderHook(() => useAccountFilter(), { wrapper });
+
+        await waitFor(() => {
+          expect(result.current.allAccountIds.sort()).toEqual(['acc_1', 'acc_2', 'acc_3']);
+        });
+
+        act(() => {
+          result.current.toggleAccount('acc_3');
+        });
+
+        expect(result.current.selectedAccountIds.sort()).toEqual(['acc_1', 'acc_2']);
+
+        includeInvestment = true;
+
+        act(() => {
+          window.dispatchEvent(new Event(ACCOUNTS_CHANGED_EVENT));
+        });
+
+        await waitFor(() => {
+          expect(result.current.allAccountIds.sort()).toEqual(['acc_1', 'acc_2', 'acc_3', 'inv_1']);
+        });
+
+        await waitFor(() => {
+          expect(result.current.selectedAccountIds.sort()).toEqual(['acc_1', 'acc_2', 'inv_1']);
+        });
       });
     });
   });

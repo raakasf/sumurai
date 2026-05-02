@@ -18,6 +18,7 @@ export function HeaderAccountFilter({ scrolled }: HeaderAccountFilterProps) {
     allAccountIds,
     accountsByBank,
     loading,
+    setSelectedAccountIds,
     toggleBank,
     toggleAccount,
   } = useAccountFilter();
@@ -157,10 +158,34 @@ export function HeaderAccountFilter({ scrolled }: HeaderAccountFilterProps) {
             )}
           >
             <div className={cn('p-4', 'border-b', 'border-slate-200', 'dark:border-slate-700')}>
-              <div
-                className={cn('text-sm', 'font-medium', 'text-slate-900', 'dark:text-slate-100')}
-              >
-                Filter by account
+              <div className={cn('flex', 'items-center', 'justify-between', 'gap-3')}>
+                <div
+                  className={cn('text-sm', 'font-medium', 'text-slate-900', 'dark:text-slate-100')}
+                >
+                  Filter by account
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSelectedAccountIds(allAccountIds)}
+                  disabled={loading || isAllAccountsSelected || totalAccounts === 0}
+                  className={cn(
+                    'rounded-md',
+                    'px-2',
+                    'py-1',
+                    'text-xs',
+                    'font-medium',
+                    'text-primary-700',
+                    'hover:bg-primary-50',
+                    'disabled:cursor-not-allowed',
+                    'disabled:text-slate-400',
+                    'disabled:hover:bg-transparent',
+                    'dark:text-primary-300',
+                    'dark:hover:bg-primary-950/40',
+                    'dark:disabled:text-slate-500'
+                  )}
+                >
+                  All accounts
+                </button>
               </div>
             </div>
 

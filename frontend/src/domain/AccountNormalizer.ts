@@ -2,7 +2,7 @@ type NormalizedAccount = {
   id: string;
   name: string;
   mask: string;
-  type: 'checking' | 'savings' | 'credit' | 'loan' | 'other';
+  type: 'checking' | 'savings' | 'credit' | 'loan' | 'investment' | 'other';
   balance?: number;
   transactions?: number;
   connectionKey: string | null;
@@ -10,7 +10,7 @@ type NormalizedAccount = {
 
 const mapAccountType = (
   backendType?: string
-): 'checking' | 'savings' | 'credit' | 'loan' | 'other' => {
+): 'checking' | 'savings' | 'credit' | 'loan' | 'investment' | 'other' => {
   const normalized = (backendType ?? '').toLowerCase();
   switch (normalized) {
     case 'depository':
@@ -23,6 +23,12 @@ const mapAccountType = (
       return 'credit';
     case 'loan':
       return 'loan';
+    case 'investment':
+    case 'investments':
+    case 'brokerage':
+    case '401k':
+    case 'ira':
+      return 'investment';
     default:
       return 'other';
   }

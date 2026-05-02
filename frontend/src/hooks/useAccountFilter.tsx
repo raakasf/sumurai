@@ -122,6 +122,7 @@ export function AccountFilterProvider({ children }: AccountFilterProviderProps) 
       setAccounts(mappedAccounts);
 
       const newAccountIds = mappedAccounts.map((account) => account.id);
+      const previousAllAccountIds = previousAllAccountIdsRef.current;
 
       setSelectedAccountIds((prev) => {
         if (prev.length === 0) {
@@ -131,21 +132,29 @@ export function AccountFilterProvider({ children }: AccountFilterProviderProps) 
         const newIdSet = new Set(newAccountIds);
         const filteredSelection = prev.filter((id) => newIdSet.has(id));
 
-        const prevAllIds = previousAllAccountIdsRef.current;
         const previouslyHadAllSelected =
-          prevAllIds.length > 0 &&
-          prev.length === prevAllIds.length &&
-          prevAllIds.every((id) => prev.includes(id));
+          previousAllAccountIds.length > 0 &&
+          prev.length === previousAllAccountIds.length &&
+          previousAllAccountIds.every((id) => prev.includes(id));
 
         if (previouslyHadAllSelected) {
           return newAccountIds;
         }
 
-        if (arraysEqual(prev, filteredSelection)) {
+        const previousIdSet = new Set(previousAllAccountIds);
+        const newlyAddedIds = newAccountIds.filter((id) => !previousIdSet.has(id));
+        const nextSelection = [...filteredSelection];
+        newlyAddedIds.forEach((id) => {
+          if (!nextSelection.includes(id)) {
+            nextSelection.push(id);
+          }
+        });
+
+        if (arraysEqual(prev, nextSelection)) {
           return prev;
         }
 
-        return filteredSelection;
+        return nextSelection;
       });
 
       previousAllAccountIdsRef.current = newAccountIds;
