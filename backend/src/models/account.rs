@@ -88,6 +88,40 @@ pub struct UpdateManualInvestmentAccountRequest {
     pub mask: Option<String>,
 }
 
+#[derive(Debug, Deserialize, ToSchema)]
+#[schema(example = json!({
+    "institution_name": "Home",
+    "name": "Primary Home",
+    "account_type": "property",
+    "balance_current": "850000.00",
+    "mask": "House"
+}))]
+pub struct CreateManualAssetAccountRequest {
+    pub institution_name: String,
+    pub name: String,
+    pub account_type: String,
+    #[schema(value_type = String)]
+    pub balance_current: Decimal,
+    pub mask: Option<String>,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[schema(example = json!({
+    "institution_name": "Mortgage",
+    "name": "Primary Mortgage",
+    "account_type": "loan",
+    "balance_current": "500000.00",
+    "mask": "Mortgage"
+}))]
+pub struct UpdateManualAssetAccountRequest {
+    pub institution_name: String,
+    pub name: String,
+    pub account_type: String,
+    #[schema(value_type = String)]
+    pub balance_current: Decimal,
+    pub mask: Option<String>,
+}
+
 impl Account {
     pub fn from_teller(teller_acc: &serde_json::Value) -> Self {
         Self {

@@ -23,6 +23,10 @@ fn maps_account_types_to_balance_categories() {
         AnalyticsService::map_account_to_balance_category("investment", None),
         BalanceCategory::Investments
     );
+    assert_eq!(
+        AnalyticsService::map_account_to_balance_category("property", None),
+        BalanceCategory::Property
+    );
 
     // Fallbacks via subtype hints
     assert_eq!(

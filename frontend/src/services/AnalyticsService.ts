@@ -82,7 +82,7 @@ export class AnalyticsService {
     return ApiClient.get<BalancesOverview>(endpoint);
   }
 
-  // Net Worth Over Time (Depository ledger-based)
+  // Net Worth Over Time
   static async getNetWorthOverTime(
     startDate: string,
     endDate: string,

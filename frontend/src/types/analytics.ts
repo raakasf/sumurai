@@ -3,6 +3,7 @@ export type Totals = {
   credit: number; // negative
   loan: number; // negative
   investments: number;
+  property: number;
   positivesTotal: number;
   negativesTotal: number; // negative
   net: number;

@@ -44,7 +44,8 @@ use crate::models::app_state::AppState;
 use crate::models::auth::{AuthContext, AuthMiddlewareState};
 use crate::models::{
     account::{
-        Account, AccountResponse, CreateManualInvestmentAccountRequest,
+        Account, AccountResponse, CreateManualAssetAccountRequest,
+        CreateManualInvestmentAccountRequest, UpdateManualAssetAccountRequest,
         UpdateManualInvestmentAccountRequest,
     },
     analytics::{DateRangeQuery, MonthlyTotalsQuery},
@@ -242,6 +243,18 @@ pub fn create_app(state: AppState) -> Router {
         .route(
             "/api/manual-investments/{id}",
             delete(delete_authenticated_manual_investment_account),
+        )
+        .route(
+            "/api/manual-assets",
+            post(create_authenticated_manual_asset_account),
+        )
+        .route(
+            "/api/manual-assets/{id}",
+            put(update_authenticated_manual_asset_account),
+        )
+        .route(
+            "/api/manual-assets/{id}",
+            delete(delete_authenticated_manual_asset_account),
         )
         .route(
             "/api/plaid/clear-synced-data",
@@ -1159,11 +1172,11 @@ async fn get_authenticated_plaid_accounts(
 }
 
 fn clean_manual_account_mask(mask: Option<String>) -> Option<String> {
-    mask.map(|value| value.trim().chars().take(4).collect::<String>())
+    mask.map(|value| value.trim().chars().take(24).collect::<String>())
         .filter(|value| !value.is_empty())
 }
 
-fn manual_investment_response(account: Account, user_id: Uuid) -> AccountResponse {
+fn manual_account_response(account: Account, user_id: Uuid) -> AccountResponse {
     AccountResponse {
         id: account.id,
         user_id: Some(user_id),
@@ -1178,11 +1191,44 @@ fn manual_investment_response(account: Account, user_id: Uuid) -> AccountRespons
     }
 }
 
+fn normalize_manual_account_type(account_type: &str) -> Option<String> {
+    let normalized = account_type.trim().to_lowercase().replace('-', "_");
+    match normalized.as_str() {
+        "investment" | "property" | "real_estate" | "loan" => Some(normalized),
+        _ => None,
+    }
+}
+
 async fn invalidate_account_overview_cache(state: &AppState, jwt_id: &str) {
     let _ = state
         .cache_service
         .invalidate_pattern(&format!("{}*_balances_overview*", jwt_id))
         .await;
+    let _ = state
+        .cache_service
+        .invalidate_pattern(&format!("{}_net_worth_over_time_*", jwt_id))
+        .await;
+}
+
+async fn record_manual_account_balance_snapshot(
+    state: &AppState,
+    account: &Account,
+    user_id: Uuid,
+) {
+    if let Some(balance) = account.balance_current {
+        let today = chrono::Utc::now().naive_utc().date();
+        if let Err(e) = state
+            .db_repository
+            .record_manual_account_balance(account.id, user_id, today, balance)
+            .await
+        {
+            tracing::warn!(
+                "Failed to record manual balance snapshot for account {}: {}",
+                account.id,
+                e
+            );
+        }
+    }
 }
 
 #[utoipa::path(
@@ -1226,8 +1272,9 @@ async fn create_authenticated_manual_investment_account(
 
     match state.db_repository.create_manual_account(&account).await {
         Ok(created) => {
+            record_manual_account_balance_snapshot(&state, &created, user_id).await;
             invalidate_account_overview_cache(&state, &auth_context.jwt_id).await;
-            Ok(Json(manual_investment_response(created, user_id)))
+            Ok(Json(manual_account_response(created, user_id)))
         }
         Err(e) => {
             tracing::error!("Failed to create manual investment for user {}: {}", user_id, e);
@@ -1279,12 +1326,167 @@ async fn update_authenticated_manual_investment_account(
 
     match state.db_repository.update_manual_account(&account).await {
         Ok(updated) => {
+            record_manual_account_balance_snapshot(&state, &updated, user_id).await;
             invalidate_account_overview_cache(&state, &auth_context.jwt_id).await;
-            Ok(Json(manual_investment_response(updated, user_id)))
+            Ok(Json(manual_account_response(updated, user_id)))
         }
         Err(e) if e.to_string().contains("not found") => Err(StatusCode::NOT_FOUND),
         Err(e) => {
             tracing::error!("Failed to update manual investment {}: {}", account_id, e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/manual-assets",
+    description = "Creates a manually tracked asset or liability account.",
+    request_body = CreateManualAssetAccountRequest,
+    responses(
+        (status = 200, description = "Manual asset account created", body = AccountResponse),
+        (status = 400, description = "Invalid account data"),
+        (status = 401, description = "Unauthorized"),
+        (status = 500, description = "Internal server error"),
+    ),
+    security(("bearer_auth" = [])),
+    tag = "Accounts"
+)]
+async fn create_authenticated_manual_asset_account(
+    State(state): State<AppState>,
+    auth_context: AuthContext,
+    Json(req): Json<CreateManualAssetAccountRequest>,
+) -> Result<Json<AccountResponse>, StatusCode> {
+    let user_id = auth_context.user_id;
+    let institution_name = req.institution_name.trim().to_string();
+    let name = req.name.trim().to_string();
+    let Some(account_type) = normalize_manual_account_type(&req.account_type) else {
+        return Err(StatusCode::BAD_REQUEST);
+    };
+
+    if institution_name.is_empty()
+        || name.is_empty()
+        || req.balance_current < rust_decimal::Decimal::ZERO
+    {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let account = Account {
+        id: Uuid::new_v4(),
+        user_id: Some(user_id),
+        provider_account_id: None,
+        provider_connection_id: None,
+        name,
+        account_type,
+        balance_current: Some(req.balance_current),
+        mask: clean_manual_account_mask(req.mask),
+        institution_name: Some(institution_name),
+    };
+
+    match state.db_repository.create_manual_account(&account).await {
+        Ok(created) => {
+            record_manual_account_balance_snapshot(&state, &created, user_id).await;
+            invalidate_account_overview_cache(&state, &auth_context.jwt_id).await;
+            Ok(Json(manual_account_response(created, user_id)))
+        }
+        Err(e) => {
+            tracing::error!("Failed to create manual asset for user {}: {}", user_id, e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+#[utoipa::path(
+    put,
+    path = "/api/manual-assets/{id}",
+    description = "Updates a manually tracked asset or liability account.",
+    request_body = UpdateManualAssetAccountRequest,
+    responses(
+        (status = 200, description = "Manual asset account updated", body = AccountResponse),
+        (status = 400, description = "Invalid account data"),
+        (status = 401, description = "Unauthorized"),
+        (status = 404, description = "Manual asset account not found"),
+        (status = 500, description = "Internal server error"),
+    ),
+    security(("bearer_auth" = [])),
+    tag = "Accounts"
+)]
+async fn update_authenticated_manual_asset_account(
+    State(state): State<AppState>,
+    auth_context: AuthContext,
+    Path(account_id): Path<Uuid>,
+    Json(req): Json<UpdateManualAssetAccountRequest>,
+) -> Result<Json<AccountResponse>, StatusCode> {
+    let user_id = auth_context.user_id;
+    let institution_name = req.institution_name.trim().to_string();
+    let name = req.name.trim().to_string();
+    let Some(account_type) = normalize_manual_account_type(&req.account_type) else {
+        return Err(StatusCode::BAD_REQUEST);
+    };
+
+    if institution_name.is_empty()
+        || name.is_empty()
+        || req.balance_current < rust_decimal::Decimal::ZERO
+    {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let account = Account {
+        id: account_id,
+        user_id: Some(user_id),
+        provider_account_id: None,
+        provider_connection_id: None,
+        name,
+        account_type,
+        balance_current: Some(req.balance_current),
+        mask: clean_manual_account_mask(req.mask),
+        institution_name: Some(institution_name),
+    };
+
+    match state.db_repository.update_manual_account(&account).await {
+        Ok(updated) => {
+            record_manual_account_balance_snapshot(&state, &updated, user_id).await;
+            invalidate_account_overview_cache(&state, &auth_context.jwt_id).await;
+            Ok(Json(manual_account_response(updated, user_id)))
+        }
+        Err(e) if e.to_string().contains("not found") => Err(StatusCode::NOT_FOUND),
+        Err(e) => {
+            tracing::error!("Failed to update manual asset {}: {}", account_id, e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/manual-assets/{id}",
+    description = "Deletes a manually tracked asset or liability account.",
+    responses(
+        (status = 200, description = "Manual asset account deleted"),
+        (status = 401, description = "Unauthorized"),
+        (status = 404, description = "Manual asset account not found"),
+        (status = 500, description = "Internal server error"),
+    ),
+    security(("bearer_auth" = [])),
+    tag = "Accounts"
+)]
+async fn delete_authenticated_manual_asset_account(
+    State(state): State<AppState>,
+    auth_context: AuthContext,
+    Path(account_id): Path<Uuid>,
+) -> Result<StatusCode, StatusCode> {
+    match state
+        .db_repository
+        .delete_manual_account(account_id, auth_context.user_id)
+        .await
+    {
+        Ok(()) => {
+            invalidate_account_overview_cache(&state, &auth_context.jwt_id).await;
+            Ok(StatusCode::OK)
+        }
+        Err(e) if e.to_string().contains("not found") => Err(StatusCode::NOT_FOUND),
+        Err(e) => {
+            tracing::error!("Failed to delete manual asset {}: {}", account_id, e);
             Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
     }
@@ -2665,6 +2867,7 @@ async fn get_authenticated_balances_overview(
     let mut overall_credit = Decimal::ZERO;
     let mut overall_loan = Decimal::ZERO;
     let mut overall_investments = Decimal::ZERO;
+    let mut overall_property = Decimal::ZERO;
     let mut banks: Vec<models::analytics::BankTotals> = Vec::new();
 
     for (bank_id, accounts) in latest_map.iter() {
@@ -2672,6 +2875,7 @@ async fn get_authenticated_balances_overview(
         let mut credit = Decimal::ZERO;
         let mut loan = Decimal::ZERO;
         let mut investments = Decimal::ZERO;
+        let mut property = Decimal::ZERO;
 
         for (account_type, account_subtype, _currency, balance) in accounts.iter() {
             let category = AnalyticsService::map_account_to_balance_category(
@@ -2685,6 +2889,9 @@ async fn get_authenticated_balances_overview(
                 BalanceCategory::Investments => {
                     investments += *balance;
                 }
+                BalanceCategory::Property => {
+                    property += *balance;
+                }
                 BalanceCategory::Credit => {
                     credit += -balance.abs();
                 }
@@ -2694,7 +2901,7 @@ async fn get_authenticated_balances_overview(
             }
         }
 
-        let totals = models::analytics::finalize_totals(cash, credit, loan, investments);
+        let totals = models::analytics::finalize_totals(cash, credit, loan, investments, property);
 
         let bank_name = name_map
             .get(bank_id)
@@ -2710,6 +2917,7 @@ async fn get_authenticated_balances_overview(
         overall_credit += credit;
         overall_loan += loan;
         overall_investments += investments;
+        overall_property += property;
     }
 
     let overall = models::analytics::finalize_totals(
@@ -2717,6 +2925,7 @@ async fn get_authenticated_balances_overview(
         overall_credit,
         overall_loan,
         overall_investments,
+        overall_property,
     );
     let response = models::analytics::BalancesOverviewResponse {
         as_of: "latest".to_string(),
@@ -2824,7 +3033,8 @@ async fn get_authenticated_net_worth_over_time(
         }
     }
 
-    // Load depository accounts (checking/savings fall under 'depository')
+    // Load accounts. Depository accounts are reconstructed day by day from transactions;
+    // assets and liabilities without transaction history are carried as current-value anchors.
     let accounts = state
         .db_repository
         .get_accounts_for_user(&user_id)
@@ -2836,26 +3046,71 @@ async fn get_authenticated_net_worth_over_time(
 
     let mut depository_ids: HashSet<uuid::Uuid> = HashSet::new();
     let mut balance_current_by_id: HashMap<uuid::Uuid, Decimal> = HashMap::new();
+    let mut static_current_by_id: HashMap<uuid::Uuid, Decimal> = HashMap::new();
+    let mut manual_static_account_ids: HashSet<uuid::Uuid> = HashSet::new();
+    let mut liability_static_account_ids: HashSet<uuid::Uuid> = HashSet::new();
     for acc in accounts.into_iter() {
         if let Some(ref allowed_ids) = filtered_account_ids {
             if !allowed_ids.contains(&acc.id) {
                 continue;
             }
         }
-        if acc.account_type.to_lowercase() == "depository" {
-            depository_ids.insert(acc.id);
-            balance_current_by_id
-                .entry(acc.id)
-                .or_insert(acc.balance_current.unwrap_or(Decimal::ZERO));
+        let balance = acc.balance_current.unwrap_or(Decimal::ZERO);
+        match AnalyticsService::map_account_to_balance_category(&acc.account_type, None) {
+            BalanceCategory::Cash => {
+                depository_ids.insert(acc.id);
+                balance_current_by_id.entry(acc.id).or_insert(balance);
+            }
+            BalanceCategory::Investments | BalanceCategory::Property => {
+                static_current_by_id.insert(acc.id, balance);
+                if acc.provider_connection_id.is_none() && acc.provider_account_id.is_none() {
+                    manual_static_account_ids.insert(acc.id);
+                }
+            }
+            BalanceCategory::Credit | BalanceCategory::Loan => {
+                static_current_by_id.insert(acc.id, -balance.abs());
+                liability_static_account_ids.insert(acc.id);
+                if acc.provider_connection_id.is_none() && acc.provider_account_id.is_none() {
+                    manual_static_account_ids.insert(acc.id);
+                }
+            }
         }
     }
 
-    if depository_ids.is_empty() {
+    if depository_ids.is_empty() && static_current_by_id.is_empty() {
         let response = models::analytics::NetWorthOverTimeResponse {
             series: Vec::new(),
             currency: "USD".to_string(),
         };
         return Ok(Json(response));
+    }
+
+    let mut static_history_by_account: HashMap<uuid::Uuid, BTreeMap<chrono::NaiveDate, Decimal>> =
+        HashMap::new();
+    if !manual_static_account_ids.is_empty() {
+        let history_points = state
+            .db_repository
+            .get_manual_account_balance_history_for_user(&user_id, end_date)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to fetch manual account balance history: {}", e);
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+
+        for point in history_points.into_iter() {
+            if !manual_static_account_ids.contains(&point.account_id) {
+                continue;
+            }
+            let signed_balance = if liability_static_account_ids.contains(&point.account_id) {
+                -point.balance_current.abs()
+            } else {
+                point.balance_current
+            };
+            static_history_by_account
+                .entry(point.account_id)
+                .or_default()
+                .insert(point.as_of_date, signed_balance);
+        }
     }
 
     // Determine the anchor dates
@@ -2923,6 +3178,15 @@ async fn get_authenticated_net_worth_over_time(
         }
         // Sum account balances for this day
         let mut total = Decimal::ZERO;
+        for (account_id, current_signed_balance) in static_current_by_id.iter() {
+            if let Some(history) = static_history_by_account.get(account_id) {
+                if let Some((_snapshot_date, snapshot_balance)) = history.range(..=day).next_back() {
+                    total += *snapshot_balance;
+                }
+            } else {
+                total += *current_signed_balance;
+            }
+        }
         for acc_id in depository_ids.iter() {
             let base = *base_start_by_account.get(acc_id).unwrap_or(&Decimal::ZERO);
             let delta = *per_account_cum.get(acc_id).unwrap_or(&Decimal::ZERO);

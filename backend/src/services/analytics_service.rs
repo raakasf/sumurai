@@ -19,6 +19,7 @@ impl AnalyticsService {
             "credit" => BalanceCategory::Credit,
             "loan" => BalanceCategory::Loan,
             "investment" => BalanceCategory::Investments,
+            "property" | "real_estate" | "real-estate" | "home" => BalanceCategory::Property,
             _ => {
                 // Fallback: try to infer based on subtype keywords, else Investments
                 if let Some(st) = account_subtype {
@@ -40,6 +41,9 @@ impl AnalyticsService {
                     }
                     if st.contains("checking") || st.contains("savings") {
                         return BalanceCategory::Cash;
+                    }
+                    if st.contains("property") || st.contains("real estate") || st.contains("home") {
+                        return BalanceCategory::Property;
                     }
                 }
                 BalanceCategory::Investments

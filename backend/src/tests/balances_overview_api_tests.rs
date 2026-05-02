@@ -205,6 +205,7 @@ async fn given_cache_hit_when_get_balances_overview_then_returns_cached() {
             credit: dec!(0),
             loan: dec!(0),
             investments: dec!(0),
+            property: dec!(0),
             positives_total: dec!(1),
             negatives_total: dec!(0),
             net: dec!(1),

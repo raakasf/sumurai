@@ -1,4 +1,4 @@
-use crate::models::analytics::CategorySpending;
+use crate::models::analytics::{BalanceCategory, CategorySpending};
 use crate::models::transaction::{Transaction, TransactionWithAccount};
 use crate::services::analytics_service::AnalyticsService;
 use chrono::{Datelike, NaiveDate};
@@ -78,6 +78,18 @@ fn get_month_range(year: i32, month: u32) -> (NaiveDate, NaiveDate) {
             .unwrap()
     };
     (start_date, end_date)
+}
+
+#[test]
+fn given_property_account_type_when_mapping_balance_category_then_returns_property() {
+    assert_eq!(
+        AnalyticsService::map_account_to_balance_category("property", None),
+        BalanceCategory::Property
+    );
+    assert_eq!(
+        AnalyticsService::map_account_to_balance_category("real_estate", None),
+        BalanceCategory::Property
+    );
 }
 
 fn months_back(year: i32, month: u32, back: u32) -> (i32, u32) {
