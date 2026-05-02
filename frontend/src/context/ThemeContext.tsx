@@ -15,6 +15,7 @@ export interface ThemeColors {
   semantic: {
     cash: string;
     investments: string;
+    property: string;
     credit: string;
     loan: string;
     netWorth: string;
@@ -41,6 +42,7 @@ const lightColors: ThemeColors = {
   semantic: {
     cash: '#10b981',
     investments: '#06b6d4',
+    property: '#14b8a6',
     credit: '#fb7185',
     loan: '#f59e0b',
     netWorth: '#8b5cf6',
@@ -60,6 +62,7 @@ const darkColors: ThemeColors = {
   semantic: {
     cash: '#34d399',
     investments: '#22d3ee',
+    property: '#2dd4bf',
     credit: '#fb7185',
     loan: '#fbbf24',
     netWorth: '#a78bfa',

@@ -5,6 +5,7 @@ import {
   LineChart,
   PiggyBank,
   RefreshCcw,
+  Home,
 } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import {
@@ -29,6 +30,7 @@ type BankBarDatum = {
   bank: string;
   cash: number | null;
   investments: number | null;
+  property: number | null;
   credit: number | null;
   loan: number | null;
 };
@@ -120,7 +122,7 @@ export function BalancesOverview() {
   };
 
   const maxPositive = banks.length
-    ? Math.max(0, ...banks.map((b) => (b.cash || 0) + (b.investments || 0)))
+    ? Math.max(0, ...banks.map((b) => (b.cash || 0) + (b.investments || 0) + (b.property || 0)))
     : 0;
   const maxNegativeAbs = banks.length
     ? Math.max(0, ...banks.map((b) => Math.abs((b.credit || 0) + (b.loan || 0))))
@@ -140,6 +142,7 @@ export function BalancesOverview() {
         bank: b.bankName,
         cash: b.cash,
         investments: b.investments,
+        property: b.property,
         credit: b.credit,
         loan: b.loan,
       })),
@@ -150,6 +153,7 @@ export function BalancesOverview() {
     bank: string;
     cash?: number | null;
     investments?: number | null;
+    property?: number | null;
     credit?: number | null;
     loan?: number | null;
   } | null>(null);
@@ -164,6 +168,7 @@ export function BalancesOverview() {
       bank: payload.bank,
       cash: payload.cash,
       investments: payload.investments,
+      property: payload.property,
       credit: payload.credit,
       loan: payload.loan,
     });
@@ -214,6 +219,20 @@ export function BalancesOverview() {
         ),
       },
       {
+        key: 'property',
+        title: 'Property',
+        accent: 'emerald' as const,
+        icon: <Home className={cn('h-4', 'w-4')} />,
+        value: (
+          <span
+            data-testid="overall-property"
+            className={cn('text-teal-500', 'dark:text-teal-300')}
+          >
+            {fmtUSD(overall?.property ?? 0)}
+          </span>
+        ),
+      },
+      {
         key: 'credit',
         title: 'Credit',
         accent: 'rose' as const,
@@ -236,7 +255,14 @@ export function BalancesOverview() {
         ),
       },
     ],
-    [overall?.cash, overall?.credit, overall?.investments, overall?.loan, overall?.net]
+    [
+      overall?.cash,
+      overall?.credit,
+      overall?.investments,
+      overall?.loan,
+      overall?.net,
+      overall?.property,
+    ]
   );
 
   return (
@@ -268,9 +294,9 @@ export function BalancesOverview() {
       {loading && (
         <div
           data-testid="balances-loading"
-          className={cn('grid', 'gap-3', 'sm:grid-cols-2', 'lg:grid-cols-5')}
+          className={cn('grid', 'gap-3', 'sm:grid-cols-2', 'lg:grid-cols-6')}
         >
-          {[1, 2, 3, 4, 5].map((id) => {
+          {[1, 2, 3, 4, 5, 6].map((id) => {
             return (
               <div
                 key={id}
@@ -369,6 +395,18 @@ export function BalancesOverview() {
                   'flex',
                   'items-center',
                   'gap-1',
+                  'text-teal-600',
+                  'dark:text-teal-300'
+                )}
+              >
+                <span className={cn('h-2', 'w-2', 'rounded-full', 'bg-teal-500')} />
+                Property: {fmtUSD(hoverInfo.property ?? 0)}
+              </span>
+              <span
+                className={cn(
+                  'flex',
+                  'items-center',
+                  'gap-1',
                   'text-rose-600',
                   'dark:text-rose-300'
                 )}
@@ -440,6 +478,15 @@ export function BalancesOverview() {
               name="Investments"
               stackId="pos"
               fill={colors.semantic.investments}
+              legendType="circle"
+              onMouseEnter={(entry) => handleBarHover(entry)}
+              onMouseLeave={() => setHoverInfo(null)}
+            />
+            <Bar
+              dataKey="property"
+              name="Property"
+              stackId="pos"
+              fill={colors.semantic.property}
               legendType="circle"
               onMouseEnter={(entry) => handleBarHover(entry)}
               onMouseLeave={() => setHoverInfo(null)}

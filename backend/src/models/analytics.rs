@@ -71,6 +71,7 @@ pub enum BalanceCategory {
     Credit,
     Loan,
     Investments,
+    Property,
 }
 
 pub struct DateRangeQuery {
@@ -91,7 +92,8 @@ pub struct MonthlyTotalsQuery {
     "credit": "-2500.00",
     "loan": "-15000.00",
     "investments": "12000.00",
-    "positives_total": "21500.00",
+    "property": "350000.00",
+    "positives_total": "371500.00",
     "negatives_total": "-17500.00",
     "net": "4000.00",
     "ratio": "1.23"
@@ -105,6 +107,8 @@ pub struct Totals {
     pub loan: Decimal,
     #[schema(value_type = String)]
     pub investments: Decimal,
+    #[schema(value_type = String)]
+    pub property: Decimal,
     #[schema(value_type = String)]
     pub positives_total: Decimal,
     #[schema(value_type = String)]
@@ -124,6 +128,7 @@ pub struct Totals {
     "credit": "-1200.00",
     "loan": "0.00",
     "investments": "2500.00",
+    "property": "0.00",
     "positives_total": "7500.00",
     "negatives_total": "-1200.00",
     "net": "6300.00",
@@ -145,7 +150,8 @@ pub struct BankTotals {
         "credit": "-2500.00",
         "loan": "-15000.00",
         "investments": "12000.00",
-        "positives_total": "21500.00",
+        "property": "350000.00",
+        "positives_total": "371500.00",
         "negatives_total": "-17500.00",
         "net": "4000.00",
         "ratio": "1.23"
@@ -157,6 +163,7 @@ pub struct BankTotals {
         "credit": "-1200.00",
         "loan": "0.00",
         "investments": "2500.00",
+        "property": "0.00",
         "positives_total": "7500.00",
         "negatives_total": "-1200.00",
         "net": "6300.00",
@@ -304,8 +311,9 @@ pub fn finalize_totals(
     credit: Decimal,
     loan: Decimal,
     investments: Decimal,
+    property: Decimal,
 ) -> Totals {
-    let positives = cash + investments;
+    let positives = cash + investments + property;
     let negatives = credit + loan;
     let net = positives + negatives;
     let ratio = if negatives == Decimal::ZERO {
@@ -319,6 +327,7 @@ pub fn finalize_totals(
         credit: round2(credit),
         loan: round2(loan),
         investments: round2(investments),
+        property: round2(property),
         positives_total: round2(positives),
         negatives_total: round2(negatives),
         net: round2(net),

@@ -69,6 +69,8 @@ use utoipa::OpenApi;
             crate::models::plaid::ProviderInfoResponse,
             crate::models::plaid::ClearSyncedDataResponse,
             crate::models::account::AccountResponse,
+            crate::models::account::CreateManualAssetAccountRequest,
+            crate::models::account::UpdateManualAssetAccountRequest,
             crate::models::api_error::ApiErrorResponse,
             schemas::SuccessResponse,
             schemas::ErrorResponse,
@@ -113,6 +115,9 @@ use utoipa::OpenApi;
         crate::create_authenticated_link_token,
         crate::exchange_authenticated_public_token,
         crate::get_authenticated_plaid_accounts,
+        crate::create_authenticated_manual_asset_account,
+        crate::update_authenticated_manual_asset_account,
+        crate::delete_authenticated_manual_asset_account,
         crate::clear_authenticated_synced_data,
     )
 )]

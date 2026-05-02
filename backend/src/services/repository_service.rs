@@ -15,6 +15,13 @@ use async_trait::async_trait;
 use sqlx::PgPool;
 use uuid::Uuid;
 
+#[derive(Debug, Clone)]
+pub struct ManualAccountBalanceHistoryPoint {
+    pub account_id: Uuid,
+    pub as_of_date: chrono::NaiveDate,
+    pub balance_current: rust_decimal::Decimal,
+}
+
 #[async_trait]
 #[cfg_attr(test, mockall::automock)]
 #[allow(dead_code)]
@@ -45,6 +52,18 @@ pub trait DatabaseRepository: Send + Sync {
     async fn create_manual_account(&self, account: &Account) -> Result<Account>;
     async fn update_manual_account(&self, account: &Account) -> Result<Account>;
     async fn delete_manual_account(&self, account_id: Uuid, user_id: Uuid) -> Result<()>;
+    async fn record_manual_account_balance(
+        &self,
+        account_id: Uuid,
+        user_id: Uuid,
+        as_of_date: chrono::NaiveDate,
+        balance_current: rust_decimal::Decimal,
+    ) -> Result<()>;
+    async fn get_manual_account_balance_history_for_user(
+        &self,
+        user_id: &Uuid,
+        end_date: chrono::NaiveDate,
+    ) -> Result<Vec<ManualAccountBalanceHistoryPoint>>;
     async fn upsert_account(&self, account: &Account) -> Result<()>;
     async fn upsert_transaction(&self, transaction: &Transaction) -> Result<()>;
 
@@ -405,7 +424,7 @@ impl DatabaseRepository for PostgresRepository {
             WHERE id = $5
               AND user_id = $6
               AND provider_connection_id IS NULL
-              AND account_type = 'investment'
+              AND account_type = $7
             "#,
         )
         .bind(&account.name)
@@ -414,12 +433,13 @@ impl DatabaseRepository for PostgresRepository {
         .bind(&account.institution_name)
         .bind(account.id)
         .bind(user_id)
+        .bind(&account.account_type)
         .execute(&mut *tx)
         .await?;
 
         if result.rows_affected() == 0 {
             let _ = tx.rollback().await;
-            return Err(anyhow::anyhow!("Manual investment account not found"));
+            return Err(anyhow::anyhow!("Manual account not found"));
         }
 
         tx.commit().await?;
@@ -439,7 +459,6 @@ impl DatabaseRepository for PostgresRepository {
             WHERE id = $1
               AND user_id = $2
               AND provider_connection_id IS NULL
-              AND account_type = 'investment'
             "#,
         )
         .bind(account_id)
@@ -449,11 +468,84 @@ impl DatabaseRepository for PostgresRepository {
 
         if result.rows_affected() == 0 {
             let _ = tx.rollback().await;
-            return Err(anyhow::anyhow!("Manual investment account not found"));
+            return Err(anyhow::anyhow!("Manual account not found"));
         }
 
         tx.commit().await?;
         Ok(())
+    }
+
+    async fn record_manual_account_balance(
+        &self,
+        account_id: Uuid,
+        user_id: Uuid,
+        as_of_date: chrono::NaiveDate,
+        balance_current: rust_decimal::Decimal,
+    ) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+
+        sqlx::query("SELECT set_config('app.current_user_id', $1, true)")
+            .bind(user_id.to_string())
+            .execute(&mut *tx)
+            .await?;
+
+        sqlx::query(
+            r#"
+            INSERT INTO manual_account_balance_history (
+                account_id, user_id, as_of_date, balance_current
+            )
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (account_id, as_of_date)
+            DO UPDATE SET balance_current = EXCLUDED.balance_current
+            "#,
+        )
+        .bind(account_id)
+        .bind(user_id)
+        .bind(as_of_date)
+        .bind(balance_current)
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+        Ok(())
+    }
+
+    async fn get_manual_account_balance_history_for_user(
+        &self,
+        user_id: &Uuid,
+        end_date: chrono::NaiveDate,
+    ) -> Result<Vec<ManualAccountBalanceHistoryPoint>> {
+        let mut tx = self.pool.begin().await?;
+
+        sqlx::query("SELECT set_config('app.current_user_id', $1, true)")
+            .bind(user_id.to_string())
+            .execute(&mut *tx)
+            .await?;
+
+        let rows = sqlx::query_as::<_, (Uuid, chrono::NaiveDate, rust_decimal::Decimal)>(
+            r#"
+            SELECT account_id, as_of_date, balance_current
+            FROM manual_account_balance_history
+            WHERE user_id = $1
+              AND as_of_date <= $2
+            ORDER BY account_id, as_of_date
+            "#,
+        )
+        .bind(user_id)
+        .bind(end_date)
+        .fetch_all(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|(account_id, as_of_date, balance_current)| ManualAccountBalanceHistoryPoint {
+                account_id,
+                as_of_date,
+                balance_current,
+            })
+            .collect())
     }
 
     async fn upsert_transaction(&self, transaction: &Transaction) -> Result<()> {

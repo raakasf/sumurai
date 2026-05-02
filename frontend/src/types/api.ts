@@ -84,6 +84,16 @@ export interface ManualInvestmentRequest {
   mask?: string | null;
 }
 
+export type ManualAssetAccountType = 'property' | 'real_estate' | 'loan' | 'investment';
+
+export interface ManualAssetRequest {
+  institution_name: string;
+  name: string;
+  account_type: ManualAssetAccountType;
+  balance_current: number;
+  mask?: string | null;
+}
+
 export interface PlaidLinkTokenResponse {
   link_token: string;
 }
