@@ -26,8 +26,6 @@ function getConfig() {
     endpoint: env.NEXT_PUBLIC_OTEL_EXPORTER_OTLP_ENDPOINT || '/ingest/otlp',
     seqApiKey: env.NEXT_PUBLIC_OTEL_SEQ_API_KEY || '',
     captureBodies: env.NEXT_PUBLIC_OTEL_CAPTURE_BODIES === 'true',
-    sanitizeHeaders: env.NEXT_PUBLIC_OTEL_SANITIZE_HEADERS !== 'false',
-    sanitizeUrls: env.NEXT_PUBLIC_OTEL_SANITIZE_URLS !== 'false',
     blockSensitiveEndpoints: env.NEXT_PUBLIC_OTEL_BLOCK_SENSITIVE_ENDPOINTS !== 'false',
   };
 }
@@ -149,9 +147,7 @@ export async function initTelemetry(): Promise<Tracer | null> {
             applyCustomAttributesOnSpan: (span: Span, request: Request, response: Response) => {
               setHttpSpanName(span, request.method, request.url);
               setEncryptedTokenAttribute(span);
-              if (config.sanitizeHeaders || config.sanitizeUrls) {
-                sanitizeSpanAttributes(span, request, response);
-              }
+              sanitizeSpanAttributes(span, request, response);
             },
           },
           '@opentelemetry/instrumentation-xml-http-request': {
@@ -168,9 +164,7 @@ export async function initTelemetry(): Promise<Tracer | null> {
                 getSpanUrl(span)
               );
               setEncryptedTokenAttribute(span);
-              if (config.sanitizeHeaders || config.sanitizeUrls) {
-                sanitizeSpanAttributes(span);
-              }
+              sanitizeSpanAttributes(span);
             },
           },
           '@opentelemetry/instrumentation-user-interaction': {
