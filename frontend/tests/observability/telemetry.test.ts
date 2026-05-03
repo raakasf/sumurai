@@ -1,8 +1,17 @@
-import { getTracer, initTelemetry, shutdownTelemetry } from '@/observability/telemetry';
+import {
+  TELEMETRY_EXPORT_SETTINGS,
+  getTracer,
+  initTelemetry,
+  resolveOtlpTracesUrl,
+  shutdownTelemetry,
+} from '@/observability/telemetry';
 
 describe('Telemetry - Business Logic', () => {
   afterEach(async () => {
     await shutdownTelemetry();
+    delete process.env.NEXT_PUBLIC_OTEL_SERVICE_NAME;
+    delete process.env.NEXT_PUBLIC_OTEL_SERVICE_VERSION;
+    delete process.env.NEXT_PUBLIC_OTEL_EXPORTER_OTLP_ENDPOINT;
   });
 
   describe('Graceful Degradation', () => {
@@ -65,6 +74,29 @@ describe('Telemetry - Business Logic', () => {
       const tracer = await initTelemetry();
 
       expect(tracer).not.toBeNull();
+    });
+  });
+
+  describe('OTLP Endpoint Resolution', () => {
+    it('should append the traces path to the configured endpoint', () => {
+      expect(resolveOtlpTracesUrl('/ingest/otlp')).toBe('/ingest/otlp/v1/traces');
+    });
+
+    it('should trim trailing slashes before appending the traces path', () => {
+      expect(resolveOtlpTracesUrl('http://localhost:5341/ingest/otlp/')).toBe(
+        'http://localhost:5341/ingest/otlp/v1/traces'
+      );
+    });
+  });
+
+  describe('OTLP Batch Cadence', () => {
+    it('should batch spans on a cadence instead of exporting continuously', () => {
+      expect(TELEMETRY_EXPORT_SETTINGS).toEqual({
+        maxExportBatchSize: 64,
+        scheduledDelayMillis: 15000,
+        maxQueueSize: 1024,
+        exportTimeoutMillis: 30000,
+      });
     });
   });
 

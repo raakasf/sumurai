@@ -17,6 +17,20 @@ import { preventSensitiveSpans, sanitizeSpanAttributes } from './sanitization';
 let tracerProvider: WebTracerProvider | null = null;
 let tracer: Tracer | null = null;
 
+export interface TelemetryExportSettings {
+  maxExportBatchSize: number;
+  scheduledDelayMillis: number;
+  maxQueueSize: number;
+  exportTimeoutMillis: number;
+}
+
+export const TELEMETRY_EXPORT_SETTINGS: TelemetryExportSettings = {
+  maxExportBatchSize: 64,
+  scheduledDelayMillis: 15000,
+  maxQueueSize: 1024,
+  exportTimeoutMillis: 30000,
+};
+
 function getConfig() {
   const env = process.env;
   return {
@@ -30,7 +44,7 @@ function getConfig() {
   };
 }
 
-function resolveOtlpTracesUrl(endpoint: string): string {
+export function resolveOtlpTracesUrl(endpoint: string): string {
   return `${endpoint.replace(/\/+$/, '')}/v1/traces`;
 }
 
@@ -118,7 +132,7 @@ export async function initTelemetry(): Promise<Tracer | null> {
       : {},
   });
 
-  const batchSpanProcessor = new BatchSpanProcessor(exporter);
+  const batchSpanProcessor = new BatchSpanProcessor(exporter, TELEMETRY_EXPORT_SETTINGS);
   const sensitiveDataProcessor = new SensitiveDataSpanProcessor({
     blockSensitiveEndpoints: config.blockSensitiveEndpoints,
     redactAuthEndpoints: true,
