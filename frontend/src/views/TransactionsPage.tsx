@@ -17,6 +17,10 @@ interface TransactionsPageProps {
 }
 
 const formatAccountOptionLabel = (account: ProviderAccount) => {
+  return account.name;
+};
+
+const formatAccountOptionTitle = (account: ProviderAccount) => {
   const mask = account.mask ? ` • ${account.mask}` : '';
   return `${account.institution_name} - ${account.name}${mask}`;
 };
@@ -322,6 +326,7 @@ const TransactionsPage: React.FC<TransactionsPageProps> = ({ initialAccountId = 
                     {accountOptions.map((account) => {
                       const isSelected = selectedAccountId === account.id;
                       const label = formatAccountOptionLabel(account);
+                      const title = formatAccountOptionTitle(account);
                       return (
                         <button
                           key={account.id}
@@ -349,7 +354,7 @@ const TransactionsPage: React.FC<TransactionsPageProps> = ({ initialAccountId = 
                               : 'bg-white/65 text-slate-600 hover:-translate-y-[2px] hover:shadow-lg dark:bg-white/10 dark:text-slate-300'
                           )}
                           aria-pressed={isSelected}
-                          title={isSelected ? `Remove account filter: ${label}` : `Filter by ${label}`}
+                          title={isSelected ? `Remove account filter: ${title}` : `Filter by ${title}`}
                         >
                           <span
                             className={cn(
