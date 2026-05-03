@@ -12,6 +12,7 @@ interface Account {
 
 interface AccountRowProps {
   account: Account;
+  onSelect?: (accountId: string) => void;
 }
 
 const cardContainerClasses = cn(
@@ -88,8 +89,13 @@ const transactionsPillClasses = cn(
 );
 
 const formatMoney = (amount?: number) => {
-  if (typeof amount !== 'number') return 'PLACEHOLDER';
+  if (typeof amount !== 'number') return 'Balance unavailable';
   return amount.toLocaleString(undefined, { style: 'currency', currency: 'USD' });
+};
+
+const formatTransactionCount = (count?: number) => {
+  const value = count ?? 0;
+  return `${value} ${value === 1 ? 'transaction' : 'transactions'}`;
 };
 
 const AccountTypeDot: React.FC<{ type: Account['type'] }> = ({ type }) => {
@@ -110,7 +116,7 @@ const AccountTypeDot: React.FC<{ type: Account['type'] }> = ({ type }) => {
   );
 };
 
-export const AccountRow: React.FC<AccountRowProps> = ({ account }) => {
+export const AccountRow: React.FC<AccountRowProps> = ({ account, onSelect }) => {
   const isDebtAccount = account.type === 'credit' || account.type === 'loan';
   const isOtherAccount = account.type === 'other' || account.type === 'investment';
 
@@ -136,6 +142,40 @@ export const AccountRow: React.FC<AccountRowProps> = ({ account }) => {
     rawBalance === 0 && 'text-slate-500 dark:text-slate-600'
   );
 
+  const content = (
+    <div className={cn('relative', 'p-6')}>
+      <div className={hoverOverlayClasses} aria-hidden />
+      <div className={cn('relative', 'z-10', 'space-y-3')}>
+        <div className={cn('flex', 'items-center', 'justify-between')}>
+          <div
+            className={cn(
+              'text-sm',
+              'font-semibold',
+              'text-slate-900',
+              'transition-colors',
+              'duration-300',
+              'ease-out',
+              'dark:text-white'
+            )}
+          >
+            {account.name}
+          </div>
+          <div className={balanceColor}>{balanceText}</div>
+        </div>
+        <div className={cn('flex', 'items-center', 'justify-between')}>
+          <div className={accountMetaClasses}>
+            <AccountTypeDot type={account.type} />
+            <span>{account.type}</span>
+            <span className={accountMaskClasses}>••{account.mask}</span>
+          </div>
+          <RequirementPill className={transactionsPillClasses} status="pending">
+            {formatTransactionCount(account.transactions)}
+          </RequirementPill>
+        </div>
+      </div>
+    </div>
+  );
+
   return (
     <GlassCard
       variant="accent"
@@ -144,37 +184,17 @@ export const AccountRow: React.FC<AccountRowProps> = ({ account }) => {
       withInnerEffects={false}
       containerClassName={cardContainerClasses}
     >
-      <div className={cn('relative', 'p-6')}>
-        <div className={hoverOverlayClasses} aria-hidden />
-        <div className={cn('relative', 'z-10', 'space-y-3')}>
-          <div className={cn('flex', 'items-center', 'justify-between')}>
-            <div
-              className={cn(
-                'text-sm',
-                'font-semibold',
-                'text-slate-900',
-                'transition-colors',
-                'duration-300',
-                'ease-out',
-                'dark:text-white'
-              )}
-            >
-              {account.name}
-            </div>
-            <div className={balanceColor}>{balanceText}</div>
-          </div>
-          <div className={cn('flex', 'items-center', 'justify-between')}>
-            <div className={accountMetaClasses}>
-              <AccountTypeDot type={account.type} />
-              <span>{account.type}</span>
-              <span className={accountMaskClasses}>••{account.mask}</span>
-            </div>
-            <RequirementPill className={transactionsPillClasses} status="pending">
-              {account.transactions ?? 0} items
-            </RequirementPill>
-          </div>
-        </div>
-      </div>
+      {onSelect ? (
+        <button
+          type="button"
+          className={cn('block', 'w-full', 'text-left', 'focus:outline-none', 'focus-visible:ring-2', 'focus-visible:ring-sky-400')}
+          onClick={() => onSelect(account.id)}
+        >
+          {content}
+        </button>
+      ) : (
+        content
+      )}
     </GlassCard>
   );
 };

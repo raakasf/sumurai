@@ -106,6 +106,23 @@ describe('TransactionFilter', () => {
       const result = TransactionFilter.filterByDateRange(transactions, '2024-01-01', '2024-01-31');
       expect(result).toHaveLength(3);
     });
+
+    it('does not shift date-only transaction dates into the previous local day', () => {
+      const transactions: Transaction[] = [
+        {
+          id: 'thai-tanium',
+          date: '2026-05-02',
+          name: 'THAI TANIUM',
+          amount: 35,
+          category: { primary: 'FOOD_AND_DRINK' },
+        },
+      ];
+
+      const result = TransactionFilter.filterByDateRange(transactions, '2026-05-02', '2026-05-02');
+
+      expect(result).toHaveLength(1);
+      expect(result[0].id).toBe('thai-tanium');
+    });
   });
 
   describe('sortByDate', () => {

@@ -103,9 +103,10 @@ const emptyManualPropertyForm: ManualPropertyFormState = {
 
 interface AccountsPageProps {
   onError?: (message: string | null) => void;
+  onAccountSelect?: (accountId: string) => void;
 }
 
-const AccountsPage = ({ onError }: AccountsPageProps) => {
+const AccountsPage = ({ onError, onAccountSelect }: AccountsPageProps) => {
   const providerInfo = useTellerProviderInfo();
   const selectedProvider = providerInfo.selectedProvider;
   const providerLoading = providerInfo.loading;
@@ -1069,6 +1070,7 @@ const AccountsPage = ({ onError }: AccountsPageProps) => {
           onConnect={connect}
           onSync={syncOne}
           onDisconnect={disconnect}
+          onAccountSelect={onAccountSelect}
         />
 
         <AnimatePresence>

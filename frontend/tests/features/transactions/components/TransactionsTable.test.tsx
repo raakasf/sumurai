@@ -49,6 +49,15 @@ describe('TransactionsTable', () => {
     expect(amount).not.toHaveClass('text-green-600');
   });
 
+  it('normalizes string amounts from the backend before display math', () => {
+    renderTable([
+      { ...baseTransaction, id: 'string-credit-purchase', account_type: 'credit', amount: '-35.00' as unknown as number },
+    ]);
+
+    const amount = screen.getByText('-$35.00');
+    expect(amount).toHaveClass('text-red-600');
+  });
+
   it('shows credit card refunds as positive green amounts', () => {
     renderTable([
       { ...baseTransaction, id: 'refund', account_type: 'credit', amount: 37.9 },
@@ -65,5 +74,13 @@ describe('TransactionsTable', () => {
     const amount = screen.getByText('-$42.25');
     expect(amount).toHaveClass('text-red-600');
     expect(amount).not.toHaveClass('text-green-600');
+  });
+
+  it('renders date-only transaction dates without timezone drift', () => {
+    renderTable([
+      { ...baseTransaction, id: 'pending-card-purchase', date: '2026-05-02', amount: -35 },
+    ]);
+
+    expect(screen.getByText('5/2/2026')).toBeInTheDocument();
   });
 });

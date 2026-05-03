@@ -2,6 +2,7 @@ import type { Transaction, TransactionCategory, TransactionLocation } from '../t
 
 export interface BackendTransaction {
   id: string;
+  account_id?: string;
   date: string;
   merchant_name?: string;
   amount: number;
@@ -33,6 +34,7 @@ export class TransactionTransformer {
 
     return {
       id: bt.id,
+      account_id: bt.account_id,
       date: bt.date,
       name: bt.merchant_name || 'Unknown',
       merchant: bt.merchant_name,

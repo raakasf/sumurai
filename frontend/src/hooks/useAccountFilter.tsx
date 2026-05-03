@@ -93,6 +93,7 @@ export function AccountFilterProvider({ children }: AccountFilterProviderProps) 
         ledger?: number | string | null;
         available?: number | string | null;
         institutionName?: string | null;
+        connection_id?: string | null;
       };
 
       const mappedAccounts: ProviderAccount[] = safeAccounts.map((account) => {
@@ -116,6 +117,13 @@ export function AccountFilterProvider({ children }: AccountFilterProviderProps) 
           mask: account.mask ?? null,
           provider: account.provider ?? 'plaid',
           institution_name: account.institution_name ?? legacy.institutionName ?? 'Unknown Bank',
+          provider_account_id: account.provider_account_id ?? null,
+          provider_connection_id:
+            account.provider_connection_id ??
+            account.plaid_connection_id ??
+            account.connection_id ??
+            legacy.connection_id ??
+            null,
         };
       });
 

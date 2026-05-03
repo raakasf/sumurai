@@ -29,6 +29,7 @@ interface BankCardProps {
   bank: BankConnection;
   onSync: (id: string) => Promise<void>;
   onDisconnect: (id: string) => Promise<void>;
+  onAccountSelect?: (accountId: string) => void;
 }
 
 const relativeTime = (iso?: string) => {
@@ -62,7 +63,7 @@ const CardMenu: React.FC<{
   );
 };
 
-export const BankCard: React.FC<BankCardProps> = ({ bank, onSync, onDisconnect }) => {
+export const BankCard: React.FC<BankCardProps> = ({ bank, onSync, onDisconnect, onAccountSelect }) => {
   const sectionBadgeClass = 'text-xs font-semibold text-slate-600 dark:text-slate-200';
 
   const [expanded, setExpanded] = useState(true);
@@ -118,7 +119,7 @@ export const BankCard: React.FC<BankCardProps> = ({ bank, onSync, onDisconnect }
       <span className={sectionBadgeClass}>{title}</span>
       <div className={cn('grid', 'grid-cols-1', 'gap-3', 'md:grid-cols-2')}>
         {accounts.map((account) => (
-          <AccountRow account={account} key={account.id} />
+          <AccountRow account={account} key={account.id} onSelect={onAccountSelect} />
         ))}
       </div>
     </div>

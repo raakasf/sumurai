@@ -9,6 +9,7 @@ import {
   computeDateRange,
   type DateRangeKey as DateRangeSelection,
 } from '../../../utils/dateRanges';
+import type { ProviderAccount } from '../../../context/AccountFilterContext';
 
 export type DateRangeKey = DateRangeSelection;
 
@@ -16,6 +17,7 @@ export interface UseTransactionsOptions {
   initialSearch?: string;
   initialCategory?: string | null;
   initialDateRange?: DateRangeKey;
+  initialAccountId?: string | null;
   pageSize?: number;
 }
 
@@ -30,6 +32,9 @@ export interface UseTransactionsResult {
   setSelectedCategory: (c: string | null) => void;
   dateRange: DateRangeKey;
   setDateRange: (r: DateRangeKey) => void;
+  accountOptions: ProviderAccount[];
+  selectedAccountId: string | null;
+  setSelectedAccountId: (accountId: string | null) => void;
   // pagination
   currentPage: number;
   setCurrentPage: (p: number) => void;
@@ -50,6 +55,7 @@ export function useTransactions(options: UseTransactionsOptions = {}): UseTransa
     initialSearch = '',
     initialCategory = null,
     initialDateRange = 'current-month',
+    initialAccountId = null,
     pageSize = 10,
   } = options;
 
@@ -59,6 +65,7 @@ export function useTransactions(options: UseTransactionsOptions = {}): UseTransa
   const [search, setSearch] = useState(initialSearch);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(initialCategory);
   const [dateRange, setDateRange] = useState<DateRangeKey>(initialDateRange);
+  const [selectedAccountId, setSelectedAccountId] = useState<string | null>(initialAccountId);
   const [currentPage, setCurrentPage] = useState(1);
   const [userCategories, setUserCategories] = useState<UserCategory[]>([]);
 
@@ -66,8 +73,21 @@ export function useTransactions(options: UseTransactionsOptions = {}): UseTransa
     selectedAccountIds,
     isAllAccountsSelected,
     allAccountIds,
+    accountsByBank,
     loading: accountsLoading,
   } = useAccountFilter();
+
+  const accountOptions = useMemo(
+    () =>
+      Object.values(accountsByBank)
+        .flat()
+        .filter((account) => account.provider_account_id || account.provider_connection_id)
+        .sort((a, b) => {
+          const bankCompare = a.institution_name.localeCompare(b.institution_name);
+          return bankCompare !== 0 ? bankCompare : a.name.localeCompare(b.name);
+        }),
+    [accountsByBank]
+  );
 
   const load = useCallback(async () => {
     if (accountsLoading) {
@@ -81,7 +101,9 @@ export function useTransactions(options: UseTransactionsOptions = {}): UseTransa
         setAll([]);
         return;
       }
-      if (!isAllAccountsSelected && selectedAccountIds.length > 0) {
+      if (selectedAccountId) {
+        filters.accountIds = [selectedAccountId];
+      } else if (!isAllAccountsSelected && selectedAccountIds.length > 0) {
         filters.accountIds = selectedAccountIds;
       }
       const txns = await TransactionService.getTransactions(filters);
@@ -97,7 +119,7 @@ export function useTransactions(options: UseTransactionsOptions = {}): UseTransa
     } finally {
       setIsLoading(false);
     }
-  }, [accountsLoading, isAllAccountsSelected, selectedAccountIds, allAccountIds]);
+  }, [accountsLoading, isAllAccountsSelected, selectedAccountIds, selectedAccountId, allAccountIds]);
 
   useEffect(() => {
     load();
@@ -205,6 +227,16 @@ export function useTransactions(options: UseTransactionsOptions = {}): UseTransa
     }
   }, [categories, selectedCategory]);
 
+  useEffect(() => {
+    if (
+      selectedAccountId &&
+      accountOptions.length > 0 &&
+      !accountOptions.some((account) => account.id === selectedAccountId)
+    ) {
+      setSelectedAccountId(null);
+    }
+  }, [accountOptions, selectedAccountId]);
+
   const totalItems = filtered.length;
   const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
   const start = (currentPage - 1) * pageSize;
@@ -215,7 +247,7 @@ export function useTransactions(options: UseTransactionsOptions = {}): UseTransa
   // biome-ignore lint/correctness/useExhaustiveDependencies: specific filters should reset pagination
   useEffect(() => {
     setCurrentPage(1);
-  }, [selectedCategory, debouncedSearch, dateRange, selectedAccountIds]);
+  }, [selectedCategory, debouncedSearch, dateRange, selectedAccountIds, selectedAccountId]);
 
   useEffect(() => {
     if (currentPage > totalPages) setCurrentPage(totalPages);
@@ -232,6 +264,9 @@ export function useTransactions(options: UseTransactionsOptions = {}): UseTransa
     setSelectedCategory,
     dateRange,
     setDateRange,
+    accountOptions,
+    selectedAccountId,
+    setSelectedAccountId,
     currentPage,
     setCurrentPage,
     pageItems,

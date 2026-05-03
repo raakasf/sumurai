@@ -36,9 +36,13 @@ export function MenuDropdown({
 
   return (
     <div className={cn('relative', className)}>
-      <button type="button" onClick={() => setOpen((v) => !v)}>
+      <span
+        role="presentation"
+        className="inline-flex"
+        onClick={() => setOpen((v) => !v)}
+      >
         {trigger}
-      </button>
+      </span>
       <AnimatePresence>
         {open && (
           <motion.div

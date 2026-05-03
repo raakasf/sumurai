@@ -127,7 +127,7 @@ describe('useTransactions', () => {
     const { result } = renderHook(
       () => {
         accountFilterHook = useAccountFilter();
-        return useTransactions({ pageSize: 10 });
+        return useTransactions({ pageSize: 10, initialDateRange: 'all-time' });
       },
       { wrapper: TestWrapper }
     );
@@ -191,6 +191,70 @@ describe('useTransactions', () => {
       expect(TransactionService.getTransactions).toHaveBeenCalledWith({
         accountIds: ['account1'],
       });
+    });
+  });
+
+  it('should pass the local account filter to the service when selected', async () => {
+    jest.mocked(TransactionService.getTransactions).mockResolvedValue([asTransaction('t1')] as any);
+
+    const { result } = renderHook(
+      () => useTransactions({ initialAccountId: 'account2' }),
+      { wrapper: TestWrapper }
+    );
+
+    await waitFor(() => {
+      expect(TransactionService.getTransactions).toHaveBeenCalledWith({
+        accountIds: ['account2'],
+      });
+    });
+
+    jest.mocked(TransactionService.getTransactions).mockClear();
+
+    await act(async () => {
+      result.current.setSelectedAccountId('account1');
+    });
+
+    await waitFor(() => {
+      expect(TransactionService.getTransactions).toHaveBeenCalledWith({
+        accountIds: ['account1'],
+      });
+    });
+  });
+
+  it('should expose account options for the transaction account selector', async () => {
+    jest.mocked(PlaidService.getAccounts).mockResolvedValueOnce([
+      ...mockPlaidAccounts,
+      {
+        id: 'manual-investment',
+        name: 'Brokerage',
+        account_type: 'investment',
+        balance_current: 10000,
+        mask: null,
+        institution_name: 'Robinhood',
+        provider: 'teller',
+        provider_account_id: null,
+        provider_connection_id: null,
+      },
+      {
+        id: 'manual-property',
+        name: 'Primary Home',
+        account_type: 'property',
+        balance_current: 850000,
+        mask: null,
+        institution_name: 'Home',
+        provider: 'teller',
+        provider_account_id: null,
+        provider_connection_id: null,
+      },
+    ] as any);
+
+    const { result } = renderHook(() => useTransactions(), { wrapper: TestWrapper });
+
+    await waitFor(() => {
+      expect(result.current.accountOptions.map((account) => account.id)).toEqual([
+        'account1',
+        'account2',
+      ]);
     });
   });
 

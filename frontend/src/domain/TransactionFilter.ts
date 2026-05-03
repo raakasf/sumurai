@@ -1,5 +1,6 @@
 import type { Transaction } from '../types/api';
 import { formatCategoryName } from '../utils/categories';
+import { toDateOnlyKey } from '../utils/dateOnly';
 
 export interface FilterCriteria {
   search?: string;
@@ -31,14 +32,14 @@ export class TransactionFilter {
 
   static filterByDateRange(transactions: Transaction[], start: string, end: string): Transaction[] {
     return transactions.filter((t) => {
-      const dateString = new Date(t.date).toISOString().slice(0, 10);
+      const dateString = toDateOnlyKey(t.date);
       return dateString >= start && dateString <= end;
     });
   }
 
   static sortByDate(transactions: Transaction[]): Transaction[] {
-    return [...transactions].sort(
-      (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
+    return [...transactions].sort((a, b) =>
+      toDateOnlyKey(b.date).localeCompare(toDateOnlyKey(a.date))
     );
   }
 

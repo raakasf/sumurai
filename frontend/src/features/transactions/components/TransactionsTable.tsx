@@ -4,7 +4,9 @@ import { Receipt } from 'lucide-react';
 import type React from 'react';
 import { cn, EmptyState } from '@/ui/primitives';
 import type { Transaction, UserCategory } from '../../../types/api';
+import { formatDateOnly } from '../../../utils/dateOnly';
 import { fmtUSD } from '../../../utils/format';
+import { getDisplayAmount } from '../../../utils/transactionAmounts';
 import { CategoryDropdown } from './CategoryDropdown';
 
 interface Props {
@@ -21,12 +23,6 @@ interface Props {
   onCategoryRule: (transactionId: string, pattern: string, categoryName: string) => Promise<void>;
   onCategoryDelete: (categoryId: string) => Promise<void>;
 }
-
-const getDisplayAmount = (transaction: Transaction) => {
-  const accountType = transaction.account_type?.toLowerCase() ?? '';
-  const isCreditAccount = accountType === 'credit' || accountType === 'credit card';
-  return isCreditAccount ? transaction.amount : -transaction.amount;
-};
 
 export const TransactionsTable: React.FC<Props> = ({
   items,
@@ -177,7 +173,7 @@ export const TransactionsTable: React.FC<Props> = ({
                             'dark:text-white'
                           )}
                         >
-                          {new Date(r.date).toLocaleDateString()}
+                          {formatDateOnly(r.date)}
                         </td>
                         <td
                           className={cn('truncate', 'px-4', 'py-3', 'align-middle')}

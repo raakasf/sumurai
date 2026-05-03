@@ -1,4 +1,5 @@
 import { cleanup, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { AccountRow } from '@/components/AccountRow';
 
 const mockCheckingAccount = {
@@ -83,7 +84,18 @@ describe('AccountRow', () => {
     it('shows transaction count', () => {
       render(<AccountRow account={mockCheckingAccount} />);
 
-      expect(screen.getByText('25 items')).toBeInTheDocument();
+      expect(screen.getByText('25 transactions')).toBeInTheDocument();
+    });
+
+    it('calls onSelect with the account id when clickable', async () => {
+      const user = userEvent.setup();
+      const onSelect = jest.fn();
+
+      render(<AccountRow account={mockCheckingAccount} onSelect={onSelect} />);
+
+      await user.click(screen.getByRole('button', { name: /chase checking/i }));
+
+      expect(onSelect).toHaveBeenCalledWith('acc-1');
     });
   });
 
@@ -95,7 +107,7 @@ describe('AccountRow', () => {
       expect(screen.getByText('••5678')).toBeInTheDocument();
       expect(screen.getByText('savings')).toBeInTheDocument();
       expect(screen.getByText('$5,000.00')).toBeInTheDocument();
-      expect(screen.getByText('10 items')).toBeInTheDocument();
+      expect(screen.getByText('10 transactions')).toBeInTheDocument();
     });
 
     it('displays credit account correctly', () => {
@@ -105,12 +117,12 @@ describe('AccountRow', () => {
       expect(screen.getByText('••9999')).toBeInTheDocument();
       expect(screen.getByText('credit')).toBeInTheDocument();
       expect(screen.getByText('-$1,200.75')).toBeInTheDocument();
-      expect(screen.getByText('35 items')).toBeInTheDocument();
+      expect(screen.getByText('35 transactions')).toBeInTheDocument();
     });
   });
 
   describe('when handling missing data', () => {
-    it('shows placeholder for undefined balance', () => {
+    it('shows unavailable text for undefined balance', () => {
       const accountWithoutBalance = {
         ...mockCheckingAccount,
         balance: undefined,
@@ -118,8 +130,8 @@ describe('AccountRow', () => {
 
       render(<AccountRow account={accountWithoutBalance} />);
 
-      expect(screen.getByText('PLACEHOLDER')).toBeInTheDocument();
-      const placeholderElement = screen.getByText('PLACEHOLDER');
+      expect(screen.getByText('Balance unavailable')).toBeInTheDocument();
+      const placeholderElement = screen.getByText('Balance unavailable');
       expect(placeholderElement).toHaveClass('text-slate-400');
     });
 
@@ -131,7 +143,7 @@ describe('AccountRow', () => {
 
       render(<AccountRow account={accountWithoutTransactions} />);
 
-      expect(screen.getByText('0 items')).toBeInTheDocument();
+      expect(screen.getByText('0 transactions')).toBeInTheDocument();
     });
 
     it('handles zero balance correctly', () => {
