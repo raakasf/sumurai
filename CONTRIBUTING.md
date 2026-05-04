@@ -9,7 +9,6 @@ Thanks for your interest in improving Sumurai! This guide helps you get set up q
 - Node 20+ and npm 9+
 - Rust (stable) and Cargo
 - Docker and Docker Compose
-- cross (for macOS → Linux backend builds)
 - sqlx‑cli (for running migrations locally)
 - OpenSSL
 
@@ -19,7 +18,6 @@ Thanks for your interest in improving Sumurai! This guide helps you get set up q
 ```bash
 brew install rustup-init
 rustup-init
-cargo install cross --git https://github.com/cross-rs/cross
 
 brew install node@20
 brew install --cask docker
@@ -34,7 +32,6 @@ brew install openssl
 ```powershell
 choco install rustup.install -y
 rustup-init -y
-cargo install cross --git https://github.com/cross-rs/cross
 
 choco install nodejs-lts -y
 choco install docker-desktop -y
@@ -49,7 +46,6 @@ choco install openssl-light -y
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 . "$HOME/.cargo/env"
-cargo install cross --git https://github.com/cross-rs/cross
 
 curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
 sudo apt-get install -y nodejs
@@ -75,7 +71,6 @@ git checkout -b feat/my-change
 The fastest way to boot everything:
 
 ```bash
-./scripts/build-backend.sh           # cross‑compile backend (x86_64 Linux)
 docker compose up -d --build         # frontend + backend + redis + postgres
 # Open http://localhost:8080
 ```
@@ -114,6 +109,9 @@ cargo check
 cargo test
 RUST_BACKTRACE=1 cargo test some_test -- --nocapture
 cargo build --release
+npm run rust:lint
+npm run rust:typecheck
+npm run rust:test
 ```
 
 ### Database Migrations
@@ -130,7 +128,6 @@ DATABASE_URL=postgresql://postgres:password@localhost:5432/accounting \
 
 - `frontend/` — React 19 + TypeScript + Next.js; Tailwind; Recharts
 - `backend/` — Rust + Axum + SQLx; Redis caching; RLS policies
-- `scripts/` — build helpers (e.g., `build-backend.sh`)
 - `docs/` — images/diagrams used in README
 
 See `README.md` for architecture details and endpoint mapping.
@@ -207,7 +204,7 @@ Login and register under `/api/auth/` are limited in the Axum backend (`tower-go
 ## Teller Setup
 
 1. Create a Teller developer account at https://teller.io.
-2. Download the mTLS certificate and private key. Store them as `certificate.pem` and `private_key.pem` under `.certs/teller/` on your machine (gitignored), or run `./scripts/ensure-teller-pem-files.sh` to create local dev PEMs at those paths.
+2. Download the mTLS certificate and private key. Store them as `certificate.pem` and `private_key.pem` under `.certs/teller/` on your machine (gitignored), or create local dev PEMs at those paths.
 3. In `.env`, set `TELLER_CERT_PATH` and `TELLER_KEY_PATH` to those **host** paths. Compose mounts them into the backend at `/etc/teller/certificate.pem` and `/etc/teller/private_key.pem` (see README).
 4. Set `TELLER_APPLICATION_ID` and `TELLER_ENV` (`sandbox`, `development`, `production`).
 5. Launch Teller Connect from the Connect tab to link accounts.
