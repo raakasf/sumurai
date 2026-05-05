@@ -6,7 +6,7 @@ Thanks for your interest in improving Sumurai! This guide helps you get set up q
 
 ## Prerequisites
 
-- Node 20+ and npm 9+
+- Node 24.10+ and npm 10+
 - Rust (stable) and Cargo
 - Docker and Docker Compose
 - sqlx‑cli (for running migrations locally)
