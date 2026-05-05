@@ -10,6 +10,8 @@ export interface ProviderAccount {
   mask: string | null;
   provider: Account['provider'];
   institution_name: string;
+  provider_account_id?: string | null;
+  provider_connection_id?: string | null;
 }
 
 export interface AccountsByBank {

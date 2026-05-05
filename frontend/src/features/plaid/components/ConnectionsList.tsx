@@ -26,9 +26,10 @@ interface ConnectionsListProps {
   onConnect: () => void;
   onSync: (id: string) => Promise<void>;
   onDisconnect: (id: string) => Promise<void>;
+  onAccountSelect?: (accountId: string) => void;
 }
 
-const ConnectionsList = ({ banks, onConnect, onSync, onDisconnect }: ConnectionsListProps) => {
+const ConnectionsList = ({ banks, onConnect, onSync, onDisconnect, onAccountSelect }: ConnectionsListProps) => {
   if (!banks.length) {
     return (
       <EmptyState
@@ -43,7 +44,13 @@ const ConnectionsList = ({ banks, onConnect, onSync, onDisconnect }: Connections
   return (
     <div className="space-y-6">
       {banks.map((bank) => (
-        <BankCard key={bank.id} bank={bank} onSync={onSync} onDisconnect={onDisconnect} />
+        <BankCard
+          key={bank.id}
+          bank={bank}
+          onSync={onSync}
+          onDisconnect={onDisconnect}
+          onAccountSelect={onAccountSelect}
+        />
       ))}
     </div>
   );

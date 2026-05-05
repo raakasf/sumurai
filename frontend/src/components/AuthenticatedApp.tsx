@@ -21,6 +21,12 @@ interface AuthenticatedAppProps {
 export function AuthenticatedApp({ onLogout, initialTab }: AuthenticatedAppProps) {
   const [tab, setTab] = useState<TabKey>(initialTab ?? 'dashboard');
   const [error, setError] = useState<string | null>(null);
+  const [transactionAccountId, setTransactionAccountId] = useState<string | null>(null);
+
+  const openTransactionsForAccount = (accountId: string) => {
+    setTransactionAccountId(accountId);
+    setTab('transactions');
+  };
 
   return (
     <ErrorBoundary>
@@ -56,9 +62,11 @@ export function AuthenticatedApp({ onLogout, initialTab }: AuthenticatedAppProps
               transition={{ duration: 0.28, ease: [0.25, 0.1, 0.25, 1] }}
             >
               {tab === 'dashboard' && <DashboardPage />}
-              {tab === 'transactions' && <TransactionsPage />}
+              {tab === 'transactions' && <TransactionsPage initialAccountId={transactionAccountId} />}
               {tab === 'budgets' && <BudgetsPage />}
-              {tab === 'accounts' && <AccountsPage onError={setError} />}
+              {tab === 'accounts' && (
+                <AccountsPage onError={setError} onAccountSelect={openTransactionsForAccount} />
+              )}
               {tab === 'settings' && <SettingsPage onLogout={onLogout} />}
             </motion.section>
           </AnimatePresence>

@@ -92,8 +92,8 @@ const DashboardPage: React.FC = () => {
     <div data-testid="dashboard-page">
       <PageLayout
         badge="Dashboard"
-        title="Overview of Balances"
-        subtitle="Track your assets and liabilities across all connected accounts with real-time balance updates."
+        title="Assets vs Liabilities"
+        subtitle="Assets appear above zero, debt appears below zero, and net worth is the difference."
         stats={
           <div ref={balancesOverviewRef}>
             <BalancesOverview />

@@ -62,6 +62,26 @@ describe('BankCard', () => {
       expect(screen.getByText('••5678')).toBeInTheDocument();
     });
 
+    it('passes account clicks up to the parent', async () => {
+      const user = userEvent.setup();
+      const mockOnSync = jest.fn();
+      const mockOnDisconnect = jest.fn();
+      const mockOnAccountSelect = jest.fn();
+
+      render(
+        <BankCard
+          bank={mockBank}
+          onSync={mockOnSync}
+          onDisconnect={mockOnDisconnect}
+          onAccountSelect={mockOnAccountSelect}
+        />
+      );
+
+      await user.click(screen.getByRole('button', { name: /checking account/i }));
+
+      expect(mockOnAccountSelect).toHaveBeenCalledWith('acc-1');
+    });
+
     it('can toggle account visibility', async () => {
       const user = userEvent.setup();
       const mockOnSync = jest.fn();

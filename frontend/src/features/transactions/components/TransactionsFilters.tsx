@@ -1,6 +1,5 @@
 import type React from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ChevronDown } from 'lucide-react';
 import { cn } from '@/ui/primitives';
 import { getTagThemeForCategory } from '../../../utils/categories';
 import type { DateRangeKey } from '../../../utils/dateRanges';
@@ -19,12 +18,12 @@ interface Props {
 }
 
 const dateRangeOptions: Array<{ key: DateRangeKey; label: string }> = [
-  { key: 'all-time', label: 'All time' },
-  { key: 'current-month', label: 'This month' },
-  { key: 'past-2-months', label: 'Last 2 months' },
-  { key: 'past-3-months', label: 'Last 3 months' },
-  { key: 'past-6-months', label: 'Last 6 months' },
-  { key: 'past-year', label: 'Past year' },
+  { key: 'current-month', label: 'Current Month' },
+  { key: 'past-2-months', label: '2 Months' },
+  { key: 'past-3-months', label: '3 Months' },
+  { key: 'past-6-months', label: '6 Months' },
+  { key: 'past-year', label: '1 Year' },
+  { key: 'all-time', label: '5 Years' },
 ];
 
 export const TransactionsFilters: React.FC<Props> = ({
@@ -60,79 +59,72 @@ export const TransactionsFilters: React.FC<Props> = ({
   return (
     <>
       {showDateRange && (
-        <div className={cn('relative', 'w-full', 'sm:w-44')}>
-          <select
-            value={dateRange}
-            onChange={(e) => onSelectDateRange?.(e.target.value as DateRangeKey)}
-            className={cn(
-              'w-full',
-              'appearance-none',
-              'rounded-xl',
-              'border',
-              'border-black/10',
-              'bg-white',
-              'px-4',
-              'pr-10',
-              'py-2.5',
-              'text-sm',
-              'font-medium',
-              'text-slate-900',
-              'shadow-[0_18px_45px_-30px_rgba(15,23,42,0.45)]',
-              'transition-all',
-              'duration-200',
-              'focus:outline-none',
-              'focus:ring-2',
-              'focus:ring-sky-400',
-              'focus:ring-offset-2',
-              'focus:ring-offset-white',
-              'dark:border-white/12',
-              'dark:bg-[#111a2f]',
-              'dark:text-white',
-              'dark:focus:ring-sky-400/80',
-              'dark:focus:ring-offset-[#0f172a]'
-            )}
-            aria-label="Filter transactions by date range"
-          >
-            {dateRangeOptions.map((option) => (
-              <option key={option.key} value={option.key}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-          <ChevronDown
-            className={cn(
-              'pointer-events-none',
-              'absolute',
-              'right-3',
-              'top-1/2',
-              'h-4',
-              'w-4',
-              '-translate-y-1/2',
-              'text-slate-500',
-              'dark:text-slate-400'
-            )}
-            aria-hidden="true"
-          />
+        <div
+          className={cn(
+            'flex',
+            'max-w-full',
+            'gap-2',
+            'overflow-x-auto',
+            'rounded-2xl',
+            'border',
+            'border-slate-200/70',
+            'bg-white/80',
+            'px-3',
+            'py-2',
+            'shadow-xl',
+            'backdrop-blur-md',
+            'ring-1',
+            'ring-slate-200/60',
+            'dark:border-slate-700/70',
+            'dark:bg-slate-800/80',
+            'dark:ring-slate-700/60'
+          )}
+          aria-label="Filter transactions by date range"
+          style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
+        >
+          {dateRangeOptions.map((option) => (
+            <button
+              type="button"
+              key={option.key}
+              onClick={() => onSelectDateRange?.(option.key)}
+              className={cn(
+                'whitespace-nowrap',
+                'rounded-lg',
+                'px-3',
+                'py-1.5',
+                'text-sm',
+                'font-medium',
+                'transition-all',
+                'duration-200',
+                dateRange === option.key
+                  ? 'bg-primary-100 text-slate-900 shadow dark:bg-slate-600 dark:text-slate-100'
+                  : 'text-slate-700 hover:-translate-y-[1px] hover:bg-white/60 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-700/60 dark:hover:text-slate-100'
+              )}
+              aria-pressed={dateRange === option.key}
+            >
+              {option.label}
+            </button>
+          ))}
         </div>
       )}
       {showSearch && (
-        <div className={cn('relative', 'w-full', 'sm:w-64')}>
+        <div className={cn('relative', 'w-full', 'sm:w-52')}>
           <input
             value={search}
             onChange={(e) => onSearch(e.target.value)}
             placeholder="Search transactions..."
             className={cn(
               'w-full',
-              'rounded-xl',
+              'rounded-full',
               'border',
               'border-black/10',
               'bg-white',
-              'px-4',
-              'py-2.5',
-              'text-sm',
+              'px-3.5',
+              'py-1.5',
+              'text-xs',
               'font-medium',
               'text-slate-900',
-              'shadow-[0_18px_45px_-30px_rgba(15,23,42,0.45)]',
+              'shadow-[0_14px_36px_-28px_rgba(15,23,42,0.45)]',
               'transition-all',
               'duration-200',
               'placeholder:text-slate-400',

@@ -35,7 +35,7 @@ type BankBarDatum = {
   loan: number | null;
 };
 
-function RatioPill({ ratio }: { ratio: number | string | null }) {
+function AssetsDebtPill({ ratio }: { ratio: number | string | null }) {
   const label = formatRatio(ratio);
   return (
     <span
@@ -45,12 +45,14 @@ function RatioPill({ ratio }: { ratio: number | string | null }) {
         'dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-200'
       )}
     >
-      A/L: {label}
+      Assets / Debt: {label}
     </span>
   );
 }
 
-type BalancesLegendProps = DefaultLegendContentProps & { ratio: number | string | null };
+type BalancesLegendProps = DefaultLegendContentProps & {
+  ratio: number | string | null;
+};
 
 function BalancesLegend({ payload, ratio }: BalancesLegendProps) {
   if (!payload?.length) {
@@ -84,8 +86,8 @@ function BalancesLegend({ payload, ratio }: BalancesLegendProps) {
         })}
       </div>
       {ratio != null && (
-        <div className="flex w-full justify-end sm:w-auto">
-          <RatioPill ratio={ratio} />
+        <div className="flex w-full flex-wrap justify-end gap-2 sm:w-auto">
+          <AssetsDebtPill ratio={ratio} />
         </div>
       )}
     </div>
@@ -344,6 +346,27 @@ export function BalancesOverview() {
         ))}
       </div>
 
+      <div
+        className={cn(
+          'flex',
+          'flex-wrap',
+          'items-end',
+          'justify-between',
+          'gap-3',
+          'pt-2',
+          'text-sm'
+        )}
+      >
+        <div>
+          <h3 className={cn('font-semibold', 'text-slate-900', 'dark:text-slate-100')}>
+            Assets and debt by institution
+          </h3>
+          <p className={cn('text-xs', 'text-slate-600', 'dark:text-slate-400')}>
+            Assets stack upward; credit, mortgages, and loans stack downward.
+          </p>
+        </div>
+      </div>
+
       <div className={cn('relative', 'h-12')}>
         {hoverInfo && (
           <div
@@ -461,7 +484,10 @@ export function BalancesOverview() {
               iconSize={10}
               wrapperStyle={{ paddingTop: 8 }}
               content={(legendProps) => (
-                <BalancesLegend {...legendProps} ratio={data?.overall?.ratio ?? null} />
+                <BalancesLegend
+                  {...legendProps}
+                  ratio={data?.overall?.ratio ?? null}
+                />
               )}
             />
             <Bar

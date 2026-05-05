@@ -15,6 +15,7 @@ export interface TransactionCategory {
 
 export interface Transaction {
   id: string;
+  account_id?: string;
   date: string;
   name: string;
   merchant?: string;

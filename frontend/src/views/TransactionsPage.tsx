@@ -2,6 +2,7 @@ import { AlertTriangle, ReceiptText, RefreshCcw, TrendingUp } from 'lucide-react
 import type React from 'react';
 import { useMemo } from 'react';
 import { cn } from '@/ui/primitives';
+import type { ProviderAccount } from '@/context/AccountFilterContext';
 import HeroStatCard from '../components/widgets/HeroStatCard';
 import TransactionsFilters from '../features/transactions/components/TransactionsFilters';
 import TransactionsTable from '../features/transactions/components/TransactionsTable';
@@ -9,8 +10,22 @@ import { useTransactions } from '../features/transactions/hooks/useTransactions'
 import { PageLayout } from '../layouts/PageLayout';
 import { formatCategoryName } from '../utils/categories';
 import { fmtUSD } from '../utils/format';
+import { getDisplayAmount } from '../utils/transactionAmounts';
 
-const TransactionsPage: React.FC = () => {
+interface TransactionsPageProps {
+  initialAccountId?: string | null;
+}
+
+const formatAccountOptionLabel = (account: ProviderAccount) => {
+  return account.name;
+};
+
+const formatAccountOptionTitle = (account: ProviderAccount) => {
+  const mask = account.mask ? ` • ${account.mask}` : '';
+  return `${account.institution_name} - ${account.name}${mask}`;
+};
+
+const TransactionsPage: React.FC<TransactionsPageProps> = ({ initialAccountId = null }) => {
   const {
     isLoading,
     error,
@@ -22,6 +37,9 @@ const TransactionsPage: React.FC = () => {
     setSelectedCategory,
     dateRange,
     setDateRange,
+    accountOptions,
+    selectedAccountId,
+    setSelectedAccountId,
     currentPage,
     setCurrentPage,
     pageItems,
@@ -33,20 +51,22 @@ const TransactionsPage: React.FC = () => {
     createCategoryAndAssign,
     createCategoryRule,
     deleteUserCategory,
-  } = useTransactions({ pageSize: 8 });
+  } = useTransactions({ pageSize: 8, initialAccountId });
 
   // Pills overflow handled within HeroStatCard
 
   const stats = useMemo(() => {
     const totalCount = transactions.length;
-    const totalSpent = transactions.reduce((sum, t) => sum + Math.abs(t.amount), 0);
+    const totalShown = transactions.reduce((sum, t) => sum + getDisplayAmount(t), 0);
+    const totalVolume = transactions.reduce((sum, t) => sum + Math.abs(getDisplayAmount(t)), 0);
 
-    const avgTransaction = totalCount > 0 ? totalSpent / totalCount : 0;
+    const avgTransaction = totalCount > 0 ? totalVolume / totalCount : 0;
 
     const largestTransaction =
       transactions.length > 0
         ? transactions.reduce(
-            (max, t) => (Math.abs(t.amount) > Math.abs(max.amount) ? t : max),
+            (max, t) =>
+              Math.abs(getDisplayAmount(t)) > Math.abs(getDisplayAmount(max)) ? t : max,
             transactions[0]
           )
         : null;
@@ -86,7 +106,7 @@ const TransactionsPage: React.FC = () => {
 
     return {
       totalCount,
-      totalSpent,
+      totalShown,
       avgTransaction,
       largestTransaction,
       recurringCount,
@@ -112,7 +132,7 @@ const TransactionsPage: React.FC = () => {
               icon={<ReceiptText className={cn('h-4', 'w-4')} />}
               value={stats.totalCount}
               suffix={stats.totalCount === 1 ? 'item' : 'items'}
-              subtext={fmtUSD(stats.totalSpent)}
+              subtext={fmtUSD(stats.totalShown)}
             />
 
             <HeroStatCard
@@ -128,7 +148,9 @@ const TransactionsPage: React.FC = () => {
               title="Largest size"
               icon={<AlertTriangle className={cn('h-4', 'w-4')} />}
               value={
-                stats.largestTransaction ? fmtUSD(Math.abs(stats.largestTransaction.amount)) : '$0'
+                stats.largestTransaction
+                  ? fmtUSD(Math.abs(getDisplayAmount(stats.largestTransaction)))
+                  : '$0'
               }
               pills={
                 stats.largestTransaction && stats.totalCount > 1
@@ -238,8 +260,116 @@ const TransactionsPage: React.FC = () => {
                     onSelectDateRange={setDateRange}
                     showSearch
                     showCategories={false}
-                    showDateRange
                   />
+                </div>
+              </div>
+              <div className={cn('mt-4', 'flex', 'items-center', 'gap-3')}>
+                <span
+                  className={cn(
+                    'flex-shrink-0',
+                    'text-[0.65rem]',
+                    'font-semibold',
+                    'uppercase',
+                    'tracking-[0.24em]',
+                    'text-slate-500',
+                    'transition-colors',
+                    'duration-500',
+                    'dark:text-slate-400'
+                  )}
+                >
+                  Account
+                </span>
+                <div className={cn('min-w-0', 'flex-1')}>
+                  <div
+                    className={cn(
+                      'scrollbar-hide',
+                      'flex',
+                      'items-center',
+                      'gap-2',
+                      'overflow-x-auto',
+                      'pb-1',
+                      'pl-1',
+                      'pt-1'
+                    )}
+                    style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
+                    aria-label="Filter transactions by account"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setSelectedAccountId(null)}
+                      className={cn(
+                        'inline-flex',
+                        'flex-shrink-0',
+                        'items-center',
+                        'gap-1.5',
+                        'whitespace-nowrap',
+                        'rounded-full',
+                        'px-2',
+                        'py-0.5',
+                        'text-xs',
+                        'font-semibold',
+                        'transition-all',
+                        'duration-150',
+                        'backdrop-blur-sm',
+                        'ring-1',
+                        'ring-white/60',
+                        'dark:ring-white/10',
+                        selectedAccountId === null
+                          ? 'bg-sky-100 text-sky-700 ring-2 ring-sky-300 dark:bg-sky-500/20 dark:text-sky-200 dark:ring-sky-400/40'
+                          : 'bg-white/65 text-slate-600 hover:-translate-y-[2px] hover:shadow-lg dark:bg-white/10 dark:text-slate-300'
+                      )}
+                      aria-pressed={selectedAccountId === null}
+                      title="Show transactions from all accounts"
+                    >
+                      All accounts
+                    </button>
+                    {accountOptions.map((account) => {
+                      const isSelected = selectedAccountId === account.id;
+                      const label = formatAccountOptionLabel(account);
+                      const title = formatAccountOptionTitle(account);
+                      return (
+                        <button
+                          key={account.id}
+                          type="button"
+                          onClick={() => setSelectedAccountId(isSelected ? null : account.id)}
+                          className={cn(
+                            'inline-flex',
+                            'flex-shrink-0',
+                            'items-center',
+                            'gap-1.5',
+                            'whitespace-nowrap',
+                            'rounded-full',
+                            'px-2',
+                            'py-0.5',
+                            'text-xs',
+                            'font-semibold',
+                            'transition-all',
+                            'duration-150',
+                            'backdrop-blur-sm',
+                            'ring-1',
+                            'ring-white/60',
+                            'dark:ring-white/10',
+                            isSelected
+                              ? 'bg-cyan-100 text-cyan-700 ring-2 ring-cyan-300 dark:bg-cyan-500/20 dark:text-cyan-200 dark:ring-cyan-400/40'
+                              : 'bg-white/65 text-slate-600 hover:-translate-y-[2px] hover:shadow-lg dark:bg-white/10 dark:text-slate-300'
+                          )}
+                          aria-pressed={isSelected}
+                          title={isSelected ? `Remove account filter: ${title}` : `Filter by ${title}`}
+                        >
+                          <span
+                            className={cn(
+                              'h-2',
+                              'w-2',
+                              'rounded-full',
+                              isSelected ? 'bg-cyan-500' : 'bg-slate-400 dark:bg-slate-500'
+                            )}
+                            aria-hidden="true"
+                          />
+                          {label}
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
               </div>
             </div>
@@ -279,6 +409,30 @@ const TransactionsPage: React.FC = () => {
               />
             )}
           </div>
+        </div>
+        <div
+          className={cn(
+            'fixed',
+            'left-0',
+            'right-0',
+            'z-50',
+            'flex',
+            'justify-center'
+          )}
+          style={{ bottom: 24 }}
+        >
+          <TransactionsFilters
+            search={search}
+            onSearch={setSearch}
+            categories={categories}
+            selectedCategory={selectedCategory}
+            onSelectCategory={setSelectedCategory}
+            dateRange={dateRange}
+            onSelectDateRange={setDateRange}
+            showSearch={false}
+            showCategories={false}
+            showDateRange
+          />
         </div>
       </PageLayout>
     </div>

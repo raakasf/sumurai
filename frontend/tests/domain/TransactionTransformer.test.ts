@@ -5,6 +5,7 @@ describe('TransactionTransformer', () => {
     it('should transform backend transaction to frontend format', () => {
       const backendTxn = {
         id: 'txn123',
+        account_id: 'account123',
         date: '2024-01-15',
         merchant_name: 'Starbucks',
         amount: 5.5,
@@ -14,6 +15,7 @@ describe('TransactionTransformer', () => {
       };
       const result = TransactionTransformer.backendToFrontend(backendTxn);
       expect(result.id).toBe('txn123');
+      expect(result.account_id).toBe('account123');
       expect(result.date).toBe('2024-01-15');
       expect(result.name).toBe('Starbucks');
       expect(result.amount).toBe(5.5);
