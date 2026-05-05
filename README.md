@@ -2,17 +2,21 @@
 
 Personal finance dashboard. Self-hosted. Connects to your bank via Teller or Plaid, syncs transactions, and shows where your money goes.
 
+<img width="1257" height="931" alt="image" src="https://github.com/user-attachments/assets/50d30e23-224c-4182-9dae-e7d8da8b75c5" />
+
 ## Privacy Disclosure for 3rd Party Financial Aggregators
 
 While this app is designed to handle your information securely after it is received, 3rd party aggregators still control how their own services collect and process your data. Sumurai uses external financial aggregation APIs, including Teller and Plaid, to connect accounts and sync transactions. Using those services requires accepting their terms of service and privacy policies.
 
 Teller policy: [https://teller.io/legal](https://teller.io/legal)
 
+Plaid policy: [https://plaid.com/legal/#consumers](https://plaid.com/legal/#consumers)
+
 Review the provider trade-offs before connecting real financial accounts.
 
 ## Why This Exists
 
-Most personal finance tools are either bloated, expensive, or hard to maintain. Sumurai is a focused alternative for tracking spending, setting budgets, and understanding cash flow without a subscription.
+Sumurai exists because there are not a lot of free, simple, and modern budgeting apps out there. We wanted a Bring Your Own Key (BYOK) self-hosted option that people can build a community around and decide its direction.
 
 ## What It Does
 
@@ -20,6 +24,12 @@ Most personal finance tools are either bloated, expensive, or hard to maintain. 
 - Syncs and categorizes transactions
 - Tracks budgets by category
 - Charts spending, balances, and net worth over time
+
+<img width="1478" height="870" alt="image" src="https://github.com/user-attachments/assets/ed35ee89-0e4b-461c-adf7-5401f3ef6021" />
+<img width="1477" height="872" alt="image" src="https://github.com/user-attachments/assets/704860a2-e206-4a9e-832b-67ae8dfd3338" />
+<img width="1477" height="870" alt="image" src="https://github.com/user-attachments/assets/b3b34a07-09c1-4736-b0d2-694ab3dda215" />
+<img width="1476" height="871" alt="image" src="https://github.com/user-attachments/assets/18721bc8-1191-4edb-8679-01129b65a98e" />
+<img width="1476" height="871" alt="image" src="https://github.com/user-attachments/assets/1e7bf41f-7cd4-4857-9add-f925b2d62ce5" />
 
 ## Quick Start
 
