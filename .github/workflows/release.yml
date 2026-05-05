@@ -37,4 +37,5 @@ jobs:
       - name: Semantic Release
         run: npm run release
         env:
+          HUSKY: "0"
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

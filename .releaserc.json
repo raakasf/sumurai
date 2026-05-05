@@ -1,7 +1,5 @@
 {
-  "branches": [
-    "main"
-  ],
+  "branches": ["main"],
   "plugins": [
     [
       "@semantic-release/commit-analyzer",
@@ -18,7 +16,7 @@
     [
       "@semantic-release/exec",
       {
-        "prepareCmd": "node tools/sync-release-version.mjs ${nextRelease.version}"
+        "prepareCmd": "node scripts/sync-release-version.mjs ${nextRelease.version}"
       }
     ],
     [
@@ -28,16 +26,13 @@
           "package.json",
           "package-lock.json",
           "frontend/package.json",
-          "frontend/package-lock.json"
+          "frontend/package-lock.json",
+          "backend/Cargo.toml",
+          "backend/Cargo.lock"
         ],
-        "message": "chore(release): ${nextRelease.version} [skip ci]\\n\\n${nextRelease.notes}"
+        "message": "chore(release): ${nextRelease.version} [skip ci]\n\n${nextRelease.notes}"
       }
     ],
-    [
-      "@semantic-release/github",
-      {
-        "assets": []
-      }
-    ]
+    "@semantic-release/github"
   ]
 }
