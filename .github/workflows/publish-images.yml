@@ -12,12 +12,20 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_PREFIX: ghcr.io/${{ github.repository_owner }}/sumurai
+  IMAGE_PREFIX: ghcr.io/twobitfoundry/sumurai
 
 jobs:
-  publish-backend:
-    name: Publish backend image
-    runs-on: ubuntu-24.04
+  build-backend:
+    name: Build backend image (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -32,16 +40,29 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Docker metadata
+      - name: Image tags
         id: meta
-        uses: docker/metadata-action@v6
-        with:
-          images: ${{ env.IMAGE_PREFIX }}-backend
-          tags: |
-            type=ref,event=branch
-            type=ref,event=tag
-            type=sha
-            type=raw,value=latest,enable={{is_default_branch}}
+        shell: bash
+        env:
+          IMAGE: ${{ env.IMAGE_PREFIX }}-backend
+        run: |
+          short_sha="${GITHUB_SHA::7}"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            {
+              echo "tags<<EOF"
+              echo "${IMAGE}:${GITHUB_REF_NAME}-${{ matrix.arch }}"
+              echo "${IMAGE}:sha-${short_sha}-${{ matrix.arch }}"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+          else
+            {
+              echo "tags<<EOF"
+              echo "${IMAGE}:latest-${{ matrix.arch }}"
+              echo "${IMAGE}:${GITHUB_REF_NAME}-${{ matrix.arch }}"
+              echo "${IMAGE}:sha-${short_sha}-${{ matrix.arch }}"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Build and push
         uses: docker/build-push-action@v7
@@ -50,13 +71,56 @@ jobs:
           file: backend/Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=backend
-          cache-to: type=gha,mode=max,scope=backend
+          cache-from: type=gha,scope=backend-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=backend-${{ matrix.arch }}
 
-  publish-frontend:
-    name: Publish frontend image
+  publish-backend:
+    name: Publish backend manifest
+    needs: build-backend
     runs-on: ubuntu-24.04
+    steps:
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create manifest
+        shell: bash
+        env:
+          IMAGE: ${{ env.IMAGE_PREFIX }}-backend
+        run: |
+          short_sha="${GITHUB_SHA::7}"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            targets=("${IMAGE}:${GITHUB_REF_NAME}" "${IMAGE}:sha-${short_sha}")
+            source_amd64="${IMAGE}:${GITHUB_REF_NAME}-amd64"
+            source_arm64="${IMAGE}:${GITHUB_REF_NAME}-arm64"
+          else
+            targets=("${IMAGE}:latest" "${IMAGE}:${GITHUB_REF_NAME}" "${IMAGE}:sha-${short_sha}")
+            source_amd64="${IMAGE}:${GITHUB_REF_NAME}-amd64"
+            source_arm64="${IMAGE}:${GITHUB_REF_NAME}-arm64"
+          fi
+          args=()
+          for target in "${targets[@]}"; do
+            args+=(--tag "$target")
+          done
+          docker buildx imagetools create "${args[@]}" "$source_amd64" "$source_arm64"
+
+  build-frontend:
+    name: Build frontend image (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -71,16 +135,29 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Docker metadata
+      - name: Image tags
         id: meta
-        uses: docker/metadata-action@v6
-        with:
-          images: ${{ env.IMAGE_PREFIX }}-frontend
-          tags: |
-            type=ref,event=branch
-            type=ref,event=tag
-            type=sha
-            type=raw,value=latest,enable={{is_default_branch}}
+        shell: bash
+        env:
+          IMAGE: ${{ env.IMAGE_PREFIX }}-frontend
+        run: |
+          short_sha="${GITHUB_SHA::7}"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            {
+              echo "tags<<EOF"
+              echo "${IMAGE}:${GITHUB_REF_NAME}-${{ matrix.arch }}"
+              echo "${IMAGE}:sha-${short_sha}-${{ matrix.arch }}"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+          else
+            {
+              echo "tags<<EOF"
+              echo "${IMAGE}:latest-${{ matrix.arch }}"
+              echo "${IMAGE}:${GITHUB_REF_NAME}-${{ matrix.arch }}"
+              echo "${IMAGE}:sha-${short_sha}-${{ matrix.arch }}"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Build and push
         uses: docker/build-push-action@v7
@@ -89,6 +166,41 @@ jobs:
           file: frontend/Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=frontend
-          cache-to: type=gha,mode=max,scope=frontend
+          cache-from: type=gha,scope=frontend-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=frontend-${{ matrix.arch }}
+
+  publish-frontend:
+    name: Publish frontend manifest
+    needs: build-frontend
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create manifest
+        shell: bash
+        env:
+          IMAGE: ${{ env.IMAGE_PREFIX }}-frontend
+        run: |
+          short_sha="${GITHUB_SHA::7}"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            targets=("${IMAGE}:${GITHUB_REF_NAME}" "${IMAGE}:sha-${short_sha}")
+            source_amd64="${IMAGE}:${GITHUB_REF_NAME}-amd64"
+            source_arm64="${IMAGE}:${GITHUB_REF_NAME}-arm64"
+          else
+            targets=("${IMAGE}:latest" "${IMAGE}:${GITHUB_REF_NAME}" "${IMAGE}:sha-${short_sha}")
+            source_amd64="${IMAGE}:${GITHUB_REF_NAME}-amd64"
+            source_arm64="${IMAGE}:${GITHUB_REF_NAME}-arm64"
+          fi
+          args=()
+          for target in "${targets[@]}"; do
+            args+=(--tag "$target")
+          done
+          docker buildx imagetools create "${args[@]}" "$source_amd64" "$source_arm64"

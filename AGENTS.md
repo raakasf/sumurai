@@ -4,10 +4,10 @@
 - `frontend-next/` — Next.js + React + TypeScript UI (Tailwind, Recharts).
 - `backend/` — Rust (Axum) API with SQLx, Redis cache, and Postgres.
 - `docs/` — architecture diagrams and screenshots used by the README.
-- `docker-compose.yml` — local stack: nginx + backend + frontend + postgres + redis.
+- `docker-compose.yml` — local stack: nginx + backend + frontend + postgres + redis (app images from GHCR by default).
 
 ## Build, Test, and Development Commands
-- `docker compose up -d --build` — run the full stack at `http://localhost:8080` (required for end-to-end flows).
+- `docker compose up -d` — run the full stack at `http://localhost:8080` (pulls `frontend`/`backend` from GHCR; use `docker compose pull` to refresh). To build app images locally: `docker compose -f docker-compose.yml -f docker-compose.development.yml up -d --build`.
 - `docker compose up -d redis` — start Redis for local backend runs.
 - `REDIS_URL=redis://localhost:6379 cargo run` — run the backend locally.
 - `cargo check` / `cargo test` / `cargo build --release` — Rust build and test.
