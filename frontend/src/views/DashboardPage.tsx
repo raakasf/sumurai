@@ -1,4 +1,4 @@
-import { RefreshCcw, TrendingUp } from 'lucide-react';
+import { CalendarClock, CreditCard, RefreshCcw, TrendingUp } from 'lucide-react';
 import type React from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { TooltipProps } from 'recharts';
@@ -22,13 +22,29 @@ import { SpendingByCategoryChart } from '../features/analytics/components/Spendi
 import { TopMerchantsList } from '../features/analytics/components/TopMerchantsList';
 import { useAnalytics } from '../features/analytics/hooks/useAnalytics';
 import { useNetWorthSeries } from '../features/analytics/hooks/useNetWorthSeries';
+import { useAccountFilter } from '../hooks/useAccountFilter';
 import { PageLayout } from '../layouts/PageLayout';
+import { TransactionService } from '../services/TransactionService';
+import type { Transaction } from '../types/api';
+import { formatDateOnly } from '../utils/dateOnly';
 import type { DateRangeKey as DateRange } from '../utils/dateRanges';
 import { fmtUSD } from '../utils/format';
 
 const netTooltipFormatter: TooltipProps<number, string>['formatter'] = (value) => {
   const numericValue = Array.isArray(value) ? Number(value[0]) : Number(value);
   return fmtUSD(Number.isFinite(numericValue) ? numericValue : 0);
+};
+
+const getDaysUntilEndOfMonth = (today = new Date()) => {
+  const endOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+  return Math.max(
+    0,
+    Math.round(
+      (endOfMonth.getTime() -
+        new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime()) /
+        86400000
+    )
+  );
 };
 
 const DashboardPage: React.FC = () => {
@@ -38,6 +54,15 @@ const DashboardPage: React.FC = () => {
   const spendingOverviewRef = useRef<HTMLDivElement | null>(null);
   const balancesOverviewRef = useRef<HTMLDivElement | null>(null);
   const [showTimeBar, setShowTimeBar] = useState(false);
+  const [chargeTransactions, setChargeTransactions] = useState<Transaction[]>([]);
+  const [chargesLoading, setChargesLoading] = useState(false);
+  const [chargesError, setChargesError] = useState<string | null>(null);
+  const {
+    selectedAccountIds,
+    isAllAccountsSelected,
+    allAccountIds,
+    loading: accountsLoading,
+  } = useAccountFilter();
 
   const analytics = useAnalytics(dateRange);
   const analyticsLoading = analytics.loading;
@@ -67,6 +92,65 @@ const DashboardPage: React.FC = () => {
   }, []);
 
   const monthSpend = analytics.spendingTotal;
+  const predictionHorizonDays = useMemo(() => getDaysUntilEndOfMonth(), []);
+  const upcomingCharges = useMemo(
+    () =>
+      DashboardCalculator.predictUpcomingCharges(
+        chargeTransactions,
+        new Date(),
+        predictionHorizonDays
+      ),
+    [chargeTransactions, predictionHorizonDays]
+  );
+  const totalUpcomingCharges = useMemo(
+    () => upcomingCharges.reduce((sum, charge) => sum + charge.amount, 0),
+    [upcomingCharges]
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadChargeTransactions() {
+      if (accountsLoading) return;
+
+      if (allAccountIds.length > 0 && selectedAccountIds.length === 0) {
+        setChargeTransactions([]);
+        setChargesError(null);
+        setChargesLoading(false);
+        return;
+      }
+
+      setChargesLoading(true);
+      setChargesError(null);
+
+      try {
+        const txns = await TransactionService.getTransactions(
+          !isAllAccountsSelected && selectedAccountIds.length > 0
+            ? { accountIds: selectedAccountIds }
+            : undefined
+        );
+
+        if (!cancelled) {
+          setChargeTransactions(txns);
+        }
+      } catch {
+        if (!cancelled) {
+          setChargeTransactions([]);
+          setChargesError('Unable to predict upcoming charges right now.');
+        }
+      } finally {
+        if (!cancelled) {
+          setChargesLoading(false);
+        }
+      }
+    }
+
+    loadChargeTransactions();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [accountsLoading, allAccountIds.length, isAllAccountsSelected, selectedAccountIds]);
 
   const netDotRenderer = useMemo<((props: DotItemDotProps) => React.ReactNode) | undefined>(() => {
     const n = netSeries?.length || 0;
@@ -436,6 +520,147 @@ const DashboardPage: React.FC = () => {
               )}
             </Card>
           </div>
+          <Card>
+            <div className={cn('mb-5', 'flex', 'items-start', 'justify-between', 'gap-4')}>
+              <div>
+                <h3
+                  className={cn(
+                    'text-base',
+                    'font-semibold',
+                    'text-slate-900',
+                    'dark:text-slate-100'
+                  )}
+                >
+                  Upcoming Charges
+                </h3>
+                <p className={cn('text-xs', 'text-slate-600', 'dark:text-slate-400')}>
+                  Predicted from recurring transaction patterns
+                </p>
+              </div>
+              <div className={cn('text-right')}>
+                <div className={cn('text-xs', 'text-slate-500', 'dark:text-slate-400')}>
+                  Through month end
+                </div>
+                <div
+                  className={cn(
+                    'text-lg',
+                    'font-semibold',
+                    'text-slate-900',
+                    'dark:text-slate-100'
+                  )}
+                >
+                  {fmtUSD(totalUpcomingCharges)}
+                </div>
+              </div>
+            </div>
+            {chargesLoading ? (
+              <div
+                className={cn('grid', 'grid-cols-1', 'md:grid-cols-2', 'lg:grid-cols-4', 'gap-3')}
+              >
+                {[0, 1, 2, 3].map((index) => (
+                  <div
+                    key={index}
+                    className={cn(
+                      'h-24',
+                      'rounded-lg',
+                      'bg-slate-100/70',
+                      'dark:bg-slate-900/40',
+                      'animate-pulse',
+                      'border',
+                      'border-slate-200/60',
+                      'dark:border-slate-700/60'
+                    )}
+                  />
+                ))}
+              </div>
+            ) : chargesError ? (
+              <div className={cn('text-sm', 'text-rose-600', 'dark:text-rose-400')}>
+                {chargesError}
+              </div>
+            ) : upcomingCharges.length === 0 ? (
+              <div className={cn('py-6')}>
+                <EmptyState
+                  icon={CalendarClock}
+                  title="No upcoming charges found"
+                  description="Recurring charges will appear here after a few matching transactions."
+                />
+              </div>
+            ) : (
+              <div
+                className={cn('grid', 'grid-cols-1', 'md:grid-cols-2', 'lg:grid-cols-4', 'gap-3')}
+              >
+                {upcomingCharges.map((charge) => (
+                  <div
+                    key={`${charge.merchant}-${charge.nextDate}`}
+                    className={cn(
+                      'rounded-lg',
+                      'border',
+                      'border-slate-200',
+                      'dark:border-slate-700',
+                      'p-4',
+                      'bg-white/60',
+                      'dark:bg-slate-900/30'
+                    )}
+                  >
+                    <div className={cn('flex', 'items-start', 'justify-between', 'gap-3')}>
+                      <div className={cn('min-w-0')}>
+                        <div
+                          className={cn(
+                            'text-sm',
+                            'font-semibold',
+                            'text-slate-900',
+                            'dark:text-slate-100',
+                            'truncate'
+                          )}
+                        >
+                          {charge.merchant}
+                        </div>
+                        <div
+                          className={cn('mt-1', 'text-xs', 'text-slate-500', 'dark:text-slate-400')}
+                        >
+                          {formatDateOnly(charge.nextDate)}
+                        </div>
+                      </div>
+                      <CreditCard className={cn('h-4', 'w-4', 'text-slate-400', 'shrink-0')} />
+                    </div>
+                    <div className={cn('mt-4', 'flex', 'items-end', 'justify-between', 'gap-3')}>
+                      <div>
+                        <div
+                          className={cn(
+                            'text-lg',
+                            'font-semibold',
+                            'text-slate-900',
+                            'dark:text-slate-100'
+                          )}
+                        >
+                          {fmtUSD(charge.amount)}
+                        </div>
+                        <div className={cn('text-xs', 'text-slate-500', 'dark:text-slate-400')}>
+                          {charge.daysUntil === 0
+                            ? 'Today'
+                            : `In ${charge.daysUntil} day${charge.daysUntil === 1 ? '' : 's'}`}
+                        </div>
+                      </div>
+                      <div
+                        className={cn(
+                          'rounded-full',
+                          'px-2',
+                          'py-1',
+                          'text-[10px]',
+                          'font-medium',
+                          charge.confidence === 'high'
+                            ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300'
+                            : 'bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-300'
+                        )}
+                      >
+                        {charge.confidence}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Card>
           <div
             className={cn(
               'fixed',

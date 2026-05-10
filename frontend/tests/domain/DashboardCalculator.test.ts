@@ -5,6 +5,25 @@ interface NetWorthPoint {
   value: number;
 }
 
+const charge = (
+  overrides: Partial<{
+    account_id: string;
+    account_type: string;
+    amount: number;
+    date: string;
+    merchant: string;
+    name: string;
+  }> = {}
+) => ({
+  account_id: 'checking-1',
+  account_type: 'depository',
+  amount: 12.99,
+  date: '2026-04-01',
+  merchant: 'StreamCo',
+  name: 'StreamCo',
+  ...overrides,
+});
+
 describe('DashboardCalculator', () => {
   describe('calculateNetYAxisDomain', () => {
     it('returns null for empty series', () => {
@@ -130,6 +149,106 @@ describe('DashboardCalculator', () => {
       ];
       const indices = DashboardCalculator.calculateNetDotIndices(series);
       expect(indices.size).toBeGreaterThanOrEqual(0);
+    });
+  });
+
+  describe('predictUpcomingCharges', () => {
+    it('predicts monthly charges from recurring merchant history', () => {
+      const predictions = DashboardCalculator.predictUpcomingCharges(
+        [
+          charge({ date: '2026-02-05', amount: 14.99 }),
+          charge({ date: '2026-03-05', amount: 14.99 }),
+          charge({ date: '2026-04-05', amount: 14.99 }),
+        ],
+        new Date(2026, 3, 20)
+      );
+
+      expect(predictions).toHaveLength(1);
+      expect(predictions[0]).toMatchObject({
+        merchant: 'StreamCo',
+        amount: 14.99,
+        nextDate: '2026-05-05',
+        daysUntil: 15,
+        cadence: 'monthly',
+        confidence: 'high',
+        occurrenceCount: 3,
+      });
+    });
+
+    it('treats negative credit card purchases as charges', () => {
+      const predictions = DashboardCalculator.predictUpcomingCharges(
+        [
+          charge({
+            account_type: 'credit',
+            amount: -49,
+            date: '2026-03-10',
+            merchant: 'Gym Club',
+          }),
+          charge({
+            account_type: 'credit',
+            amount: -49,
+            date: '2026-04-10',
+            merchant: 'Gym Club',
+          }),
+        ],
+        new Date(2026, 3, 20)
+      );
+
+      expect(predictions[0]).toMatchObject({
+        merchant: 'Gym Club',
+        amount: 49,
+        nextDate: '2026-05-10',
+        cadence: 'monthly',
+      });
+    });
+
+    it('ignores deposits and one-off charges', () => {
+      const predictions = DashboardCalculator.predictUpcomingCharges(
+        [
+          charge({ amount: -2000, date: '2026-04-01', merchant: 'Payroll' }),
+          charge({ amount: 80, date: '2026-04-03', merchant: 'One Off Store' }),
+        ],
+        new Date(2026, 3, 20)
+      );
+
+      expect(predictions).toEqual([]);
+    });
+
+    it('only returns charges inside the prediction horizon', () => {
+      const predictions = DashboardCalculator.predictUpcomingCharges(
+        [
+          charge({ date: '2025-01-01', merchant: 'Annual App', amount: 120 }),
+          charge({ date: '2026-01-01', merchant: 'Annual App', amount: 120 }),
+        ],
+        new Date(2026, 1, 1),
+        45
+      );
+
+      expect(predictions).toEqual([]);
+    });
+
+    it('sorts by due date and limits results', () => {
+      const transactions = Array.from({ length: 10 }, (_, index) => [
+        charge({
+          date: `2026-03-${String(index + 1).padStart(2, '0')}`,
+          merchant: `Service ${index}`,
+          amount: 10 + index,
+        }),
+        charge({
+          date: `2026-04-${String(index + 1).padStart(2, '0')}`,
+          merchant: `Service ${index}`,
+          amount: 10 + index,
+        }),
+      ]).flat();
+
+      const predictions = DashboardCalculator.predictUpcomingCharges(
+        transactions,
+        new Date(2026, 3, 20)
+      );
+
+      expect(predictions).toHaveLength(8);
+      expect(predictions[0].nextDate).toBe('2026-05-01');
+      expect(predictions[7].nextDate).toBe('2026-05-08');
     });
   });
 });
