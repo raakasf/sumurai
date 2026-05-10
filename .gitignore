@@ -192,3 +192,4 @@ backend/src/*.bak
 # ================================
 AGENTS.md
 CLAUDE.md
+migrations/*

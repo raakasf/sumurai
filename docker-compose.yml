@@ -105,6 +105,7 @@ services:
 
   squid:
     image: ubuntu/squid:latest
+    platform: linux/amd64
     restart: unless-stopped
     volumes:
       - ./squid/squid.conf:/etc/squid/squid.conf:ro
@@ -114,6 +115,7 @@ services:
 
   redis:
     image: redis:7-alpine
+    platform: linux/amd64
     command: redis-server --appendonly yes
     networks:
       - app_net
@@ -122,6 +124,7 @@ services:
 
   postgres:
     image: postgres:15-alpine
+    platform: linux/amd64
     environment:
       POSTGRES_DB: accounting
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
@@ -138,6 +141,7 @@ services:
 
   seq:
     image: datalust/seq:2025.2
+    platform: linux/amd64
     pull_policy: if_not_present
     environment:
       ACCEPT_EULA: "Y"
@@ -152,6 +156,7 @@ services:
     build:
       context: ./nginx
       dockerfile: Dockerfile
+    platform: linux/amd64
     depends_on:
       frontend:
         condition: service_healthy
@@ -185,6 +190,7 @@ services:
 
   certbot:
     image: certbot/certbot:latest
+    platform: linux/amd64
     profiles: [ "certbot" ]
     # certbot needs internet access to reach Let's Encrypt ACME servers.
     networks:
