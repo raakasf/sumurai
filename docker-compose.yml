@@ -167,6 +167,7 @@ services:
     environment:
       DOMAIN: ${DOMAIN:-localhost}
       SSL_PORT: ${SSL_PORT:-8443}
+      LOCAL_HTTPS_CERT_DIR: /etc/nginx/local-certs
       NGINX_EGRESS_LOCKDOWN: ${NGINX_EGRESS_LOCKDOWN:-true}
     command: [ "/bin/sh", "/etc/nginx/entrypoint.sh" ]
     cap_add:
@@ -180,6 +181,7 @@ services:
     volumes:
       - ./nginx/nginx.conf.template:/etc/nginx/nginx.conf.template:ro
       - ./nginx/entrypoint.sh:/etc/nginx/entrypoint.sh:ro
+      - ./.certs/mkcert:/etc/nginx/local-certs:ro
       - certbot-etc:/etc/letsencrypt
       - certbot-var:/var/www/certbot
     healthcheck:
