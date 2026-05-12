@@ -2,9 +2,9 @@ import { CheckIcon, PencilSquareIcon, XMarkIcon } from '@heroicons/react/24/outl
 import { TrashIcon as TrashSolidIcon } from '@heroicons/react/24/solid';
 import { Target } from 'lucide-react';
 import React from 'react';
+import { useCurrency } from '@/hooks/useCurrency';
 import { cn, EmptyState } from '@/ui/primitives';
 import { formatCategoryName, getTagThemeForCategory } from '../../../utils/categories';
-import { fmtUSD } from '../../../utils/format';
 import type { BudgetProgressEntry } from '../hooks/useBudgets';
 import BudgetProgress from './BudgetProgress';
 
@@ -25,6 +25,7 @@ export function BudgetList({
   onSaveEdit: (id: string, amount: number) => void;
   onDelete: (id: string) => void;
 }) {
+  const { format } = useCurrency();
   const [amountDrafts, setAmountDrafts] = React.useState<Record<string, string>>({});
 
   if (items.length === 0) {
@@ -326,7 +327,7 @@ export function BudgetList({
                         'dark:text-slate-200'
                       )}
                     >
-                      {fmtUSD(b.spent)}
+                      {format(b.spent)}
                     </span>
                   </div>
                 </div>
@@ -369,7 +370,7 @@ export function BudgetList({
                         'dark:text-white'
                       )}
                     >
-                      {fmtUSD(b.amount)}
+                      {format(b.amount)}
                     </div>
                   </div>
                   <div className="text-right">
@@ -390,7 +391,7 @@ export function BudgetList({
                     <div
                       className={`mt-1 text-2xl font-semibold transition-colors duration-300 ${isOver ? 'text-red-600 dark:text-red-300' : 'text-slate-700 dark:text-slate-200'}`}
                     >
-                      {fmtUSD(b.spent)}
+                      {format(b.spent)}
                     </div>
                   </div>
                 </div>

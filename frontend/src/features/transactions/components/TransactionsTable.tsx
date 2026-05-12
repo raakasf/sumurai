@@ -2,10 +2,10 @@ import { ChevronLeftIcon, ChevronRightIcon } from '@heroicons/react/24/outline';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Receipt } from 'lucide-react';
 import type React from 'react';
+import { useCurrency } from '@/hooks/useCurrency';
 import { cn, EmptyState } from '@/ui/primitives';
 import type { Transaction, UserCategory } from '../../../types/api';
 import { formatDateOnly } from '../../../utils/dateOnly';
-import { fmtUSD } from '../../../utils/format';
 import { getDisplayAmount } from '../../../utils/transactionAmounts';
 import { CategoryDropdown } from './CategoryDropdown';
 
@@ -38,6 +38,8 @@ export const TransactionsTable: React.FC<Props> = ({
   onCategoryRule,
   onCategoryDelete,
 }) => {
+  const { format } = useCurrency();
+
   const pageSize = items.length > 0 ? Math.ceil(total / totalPages) : 8;
   const from = total === 0 ? 0 : (currentPage - 1) * pageSize + 1;
   const to = Math.min(total, currentPage * pageSize);
@@ -202,7 +204,7 @@ export const TransactionsTable: React.FC<Props> = ({
                                 : 'text-slate-600 dark:text-slate-400'
                           }`}
                         >
-                          {fmtUSD(displayAmount)}
+                          {format(displayAmount)}
                         </td>
                         <td className={cn('whitespace-nowrap', 'px-4', 'py-3', 'align-middle')}>
                           <span

@@ -1,6 +1,6 @@
 import { AnimatePresence } from 'framer-motion';
 import { Building2, Clock, CreditCard, Home, Pencil, Plus, RefreshCw, Trash2, X } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Button, cn, GlassCard, Input } from '@/ui/primitives';
 import { getProviderCardConfig } from '@/utils/providerCards';
 import { Toast } from '../components/Toast';
@@ -8,12 +8,18 @@ import HeroStatCard from '../components/widgets/HeroStatCard';
 import ConnectButton from '../features/plaid/components/ConnectButton';
 import ConnectionsList from '../features/plaid/components/ConnectionsList';
 import { usePlaidLinkFlow } from '../features/plaid/hooks/usePlaidLinkFlow';
+import {
+  type DisplayCurrency,
+  SUPPORTED_DISPLAY_CURRENCIES,
+} from '../context/CurrencyContext';
+import { useCurrency } from '../hooks/useCurrency';
 import { useTellerLinkFlow } from '../hooks/useTellerLinkFlow';
 import { useTellerProviderInfo } from '../hooks/useTellerProviderInfo';
 import { PageLayout } from '../layouts/PageLayout';
 import { ManualAssetService } from '../services/ManualAssetService';
 import { ManualInvestmentService } from '../services/ManualInvestmentService';
 import { ProviderCatalog } from '../services/ProviderCatalog';
+import { getUsdRate } from '../services/CurrencyRateService';
 import type {
   Account,
   FinancialProvider,
@@ -79,17 +85,25 @@ type ManualInvestmentFormState = {
   institution_name: string;
   name: string;
   balance_current: string;
+  currency: DisplayCurrency;
+  conversion_rate: string;
   mask: string;
 };
 
-type ManualPropertyFormState = ManualInvestmentFormState & {
+type ManualPropertyFormState = {
+  institution_name: string;
+  name: string;
   account_type: ManualAssetAccountType;
+  balance_current: string;
+  mask: string;
 };
 
 const emptyManualInvestmentForm: ManualInvestmentFormState = {
   institution_name: 'Robinhood',
   name: 'Brokerage',
   balance_current: '',
+  currency: 'USD',
+  conversion_rate: '1',
   mask: '',
 };
 
@@ -107,6 +121,7 @@ interface AccountsPageProps {
 }
 
 const AccountsPage = ({ onError, onAccountSelect }: AccountsPageProps) => {
+  const { format } = useCurrency();
   const providerInfo = useTellerProviderInfo();
   const selectedProvider = providerInfo.selectedProvider;
   const providerLoading = providerInfo.loading;
@@ -124,6 +139,10 @@ const AccountsPage = ({ onError, onAccountSelect }: AccountsPageProps) => {
   const [manualPropertySaving, setManualPropertySaving] = useState(false);
   const [manualError, setManualError] = useState<string | null>(null);
   const [manualPropertyError, setManualPropertyError] = useState<string | null>(null);
+  const [manualRateLoading, setManualRateLoading] = useState(false);
+  const [manualRateError, setManualRateError] = useState<string | null>(null);
+  const [manualRateDate, setManualRateDate] = useState<string | null>(null);
+  const autoSyncAttemptedRef = useRef(false);
 
   const loadManualInvestments = useCallback(async () => {
     try {
@@ -199,23 +218,74 @@ const AccountsPage = ({ onError, onAccountSelect }: AccountsPageProps) => {
     setManualPropertyError(null);
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadManualInvestmentRate() {
+      setManualRateLoading(true);
+      setManualRateError(null);
+      try {
+        const next = await getUsdRate(manualForm.currency);
+        if (cancelled) return;
+
+        const nativeToUsdRate = next.rate > 0 ? 1 / next.rate : 1;
+        setManualForm((prev) =>
+          prev.currency === manualForm.currency
+            ? {
+                ...prev,
+                conversion_rate: nativeToUsdRate.toFixed(8),
+              }
+            : prev
+        );
+        setManualRateDate(next.date);
+      } catch (err) {
+        if (cancelled) return;
+        console.warn('Failed to load manual investment currency rate', err);
+        setManualRateError('Could not load the currency rate.');
+      } finally {
+        if (!cancelled) {
+          setManualRateLoading(false);
+        }
+      }
+    }
+
+    void loadManualInvestmentRate();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [manualForm.currency]);
+
   const manualInvestmentPayload = useCallback((): ManualInvestmentRequest | null => {
     const institution = manualForm.institution_name.trim();
     const name = manualForm.name.trim();
     const balance = Number(manualForm.balance_current);
+    const conversionRate = Number(manualForm.conversion_rate || '1');
 
-    if (!institution || !name || !Number.isFinite(balance) || balance < 0) {
-      setManualError('Enter an institution, account name, and non-negative balance.');
+    if (
+      !institution ||
+      !name ||
+      !Number.isFinite(balance) ||
+      balance < 0 ||
+      !Number.isFinite(conversionRate) ||
+      conversionRate <= 0
+    ) {
+      setManualError('Enter an institution, account name, balance, and currency.');
+      return null;
+    }
+
+    if (manualRateLoading || manualRateError) {
+      setManualError('Wait for the currency rate to load before saving.');
       return null;
     }
 
     return {
       institution_name: institution,
       name,
-      balance_current: balance,
+      balance_current: Number((balance * conversionRate).toFixed(2)),
       mask: manualForm.mask.trim() || null,
     };
-  }, [manualForm]);
+  }, [manualForm, manualRateError, manualRateLoading]);
 
   const saveManualInvestment = useCallback(async () => {
     const payload = manualInvestmentPayload();
@@ -249,6 +319,8 @@ const AccountsPage = ({ onError, onAccountSelect }: AccountsPageProps) => {
       institution_name: account.institution_name || 'Investment',
       name: account.name,
       balance_current: String(parseAccountBalance(account.balance_current)),
+      currency: 'USD',
+      conversion_rate: '1',
       mask: account.mask || '',
     });
   }, []);
@@ -399,10 +471,26 @@ const AccountsPage = ({ onError, onAccountSelect }: AccountsPageProps) => {
     return {
       institutions: banks.length,
       connectedInstitutions,
-      accounts: totalAccounts + manualInvestments.length,
+      accounts: totalAccounts + manualInvestments.length + manualPropertyAccounts.length,
       latestSync: latestSyncIso,
     };
-  }, [banks, manualInvestments.length]);
+  }, [banks, manualInvestments.length, manualPropertyAccounts.length]);
+
+  useEffect(() => {
+    if (
+      autoSyncAttemptedRef.current ||
+      flowLoading ||
+      syncingAll ||
+      summary.connectedInstitutions === 0
+    ) {
+      return;
+    }
+
+    autoSyncAttemptedRef.current = true;
+    void syncAll().catch((err) => {
+      console.warn('Auto sync on account refresh failed', err);
+    });
+  }, [flowLoading, summary.connectedInstitutions, syncAll, syncingAll]);
 
   if (providerLoading) {
     return (
@@ -750,6 +838,11 @@ const AccountsPage = ({ onError, onAccountSelect }: AccountsPageProps) => {
     (sum, account) => sum + parseAccountBalance(account.balance_current),
     0
   );
+  const manualNativeToUsdRate = Number(manualForm.conversion_rate || '1');
+  const manualConvertedUsd =
+    Number.isFinite(Number(manualForm.balance_current)) && Number.isFinite(manualNativeToUsdRate)
+      ? Number(manualForm.balance_current) * manualNativeToUsdRate
+      : 0;
   const manualPropertyAssetsTotal = manualPropertyAccounts
     .filter((account) => account.account_type !== 'loan')
     .reduce((sum, account) => sum + parseAccountBalance(account.balance_current), 0);
@@ -768,19 +861,30 @@ const AccountsPage = ({ onError, onAccountSelect }: AccountsPageProps) => {
           <div className={cn('text-sm', 'text-slate-600', 'dark:text-slate-300')}>
             {manualInvestments.length
               ? `${manualInvestments.length} account${manualInvestments.length === 1 ? '' : 's'} tracked`
-              : 'Track brokerage, IRA, and 401k balances manually'}
+              : 'Track brokerage, IRA, 401k, and foreign balances manually'}
           </div>
         </div>
-        <div className={cn('text-right', 'text-sm', 'font-semibold', 'text-cyan-600', 'dark:text-cyan-300')}>
-          {manualInvestmentsTotal.toLocaleString(undefined, {
-            style: 'currency',
-            currency: 'USD',
-          })}
+        <div
+          className={cn(
+            'text-right',
+            'text-sm',
+            'font-semibold',
+            'text-cyan-600',
+            'dark:text-cyan-300'
+          )}
+        >
+          {format(manualInvestmentsTotal)}
         </div>
       </div>
 
       <GlassCard variant="accent" rounded="xl" padding="lg" withInnerEffects={false}>
-        <div className={cn('grid', 'gap-3', 'md:grid-cols-[1.2fr_1.2fr_1fr_0.8fr_auto]')}>
+        <div
+          className={cn(
+            'grid',
+            'gap-3',
+            'md:grid-cols-[1.15fr_1.15fr_0.85fr_0.75fr_0.85fr_auto]'
+          )}
+        >
           <Input
             value={manualForm.institution_name}
             onChange={(event) =>
@@ -804,6 +908,28 @@ const AccountsPage = ({ onError, onAccountSelect }: AccountsPageProps) => {
             inputMode="decimal"
             variant="glass"
           />
+          <select
+            value={manualForm.currency}
+            onChange={(event) =>
+              setManualForm((prev) => ({
+                ...prev,
+                currency: event.target.value as DisplayCurrency,
+              }))
+            }
+            className={cn(
+              'rounded-xl border px-3 py-2 text-sm',
+              'border-white/40 bg-white/60 text-slate-900 shadow-inner',
+              'focus:border-primary-400 focus:outline-none focus:ring-2 focus:ring-primary-400/30',
+              'dark:border-slate-700/70 dark:bg-slate-900/50 dark:text-slate-100'
+            )}
+            aria-label="Investment currency"
+          >
+            {SUPPORTED_DISPLAY_CURRENCIES.map((currency) => (
+              <option key={currency} value={currency}>
+                {currency}
+              </option>
+            ))}
+          </select>
           <Input
             value={manualForm.mask}
             onChange={(event) => setManualForm((prev) => ({ ...prev, mask: event.target.value }))}
@@ -811,7 +937,12 @@ const AccountsPage = ({ onError, onAccountSelect }: AccountsPageProps) => {
             variant="glass"
           />
           <div className={cn('flex', 'gap-2')}>
-            <Button onClick={saveManualInvestment} loading={manualSaving} variant="secondary">
+            <Button
+              onClick={saveManualInvestment}
+              loading={manualSaving}
+              disabled={manualRateLoading}
+              variant="secondary"
+            >
               <Plus className={cn('h-4', 'w-4')} />
               {editingManualId ? 'Update' : 'Add'}
             </Button>
@@ -821,6 +952,15 @@ const AccountsPage = ({ onError, onAccountSelect }: AccountsPageProps) => {
               </Button>
             )}
           </div>
+        </div>
+        <div className={cn('mt-3', 'text-xs', 'text-slate-600', 'dark:text-slate-300')}>
+          {manualRateLoading
+            ? 'Loading currency rate...'
+            : manualRateError
+              ? manualRateError
+              : manualForm.currency === 'USD'
+                ? 'Saved as USD.'
+                : `Using ${manualForm.currency} rate${manualRateDate ? ` from ${manualRateDate}` : ''}: ${manualForm.balance_current || '0'} ${manualForm.currency} = ${format(manualConvertedUsd)}.`}
         </div>
         {manualError && (
           <div className={cn('mt-3', 'text-sm', 'font-medium', 'text-red-600', 'dark:text-red-300')}>
@@ -851,10 +991,7 @@ const AccountsPage = ({ onError, onAccountSelect }: AccountsPageProps) => {
                 </div>
                 <div className={cn('text-right')}>
                   <div className={cn('text-sm', 'font-semibold', 'text-cyan-600', 'dark:text-cyan-300')}>
-                    {parseAccountBalance(account.balance_current).toLocaleString(undefined, {
-                      style: 'currency',
-                      currency: 'USD',
-                    })}
+                    {format(parseAccountBalance(account.balance_current))}
                   </div>
                   <div className={cn('mt-3', 'flex', 'justify-end', 'gap-2')}>
                     <Button
@@ -898,10 +1035,7 @@ const AccountsPage = ({ onError, onAccountSelect }: AccountsPageProps) => {
         </div>
         <div className={cn('text-right')}>
           <div className={cn('text-sm', 'font-semibold', 'text-teal-600', 'dark:text-teal-300')}>
-            {manualHomeEquity.toLocaleString(undefined, {
-              style: 'currency',
-              currency: 'USD',
-            })}
+            {format(manualHomeEquity)}
           </div>
           <div className={cn('text-xs', 'text-slate-500', 'dark:text-slate-400')}>equity</div>
         </div>
@@ -1020,10 +1154,7 @@ const AccountsPage = ({ onError, onAccountSelect }: AccountsPageProps) => {
                         : 'text-teal-600 dark:text-teal-300'
                     )}
                   >
-                    {parseAccountBalance(account.balance_current).toLocaleString(undefined, {
-                      style: 'currency',
-                      currency: 'USD',
-                    })}
+                    {format(parseAccountBalance(account.balance_current))}
                   </div>
                   <div className={cn('mt-3', 'flex', 'justify-end', 'gap-2')}>
                     <Button

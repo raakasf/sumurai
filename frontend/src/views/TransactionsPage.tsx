@@ -7,9 +7,9 @@ import HeroStatCard from '../components/widgets/HeroStatCard';
 import TransactionsFilters from '../features/transactions/components/TransactionsFilters';
 import TransactionsTable from '../features/transactions/components/TransactionsTable';
 import { useTransactions } from '../features/transactions/hooks/useTransactions';
+import { useCurrency } from '../hooks/useCurrency';
 import { PageLayout } from '../layouts/PageLayout';
 import { formatCategoryName } from '../utils/categories';
-import { fmtUSD } from '../utils/format';
 import { getDisplayAmount } from '../utils/transactionAmounts';
 
 interface TransactionsPageProps {
@@ -26,6 +26,7 @@ const formatAccountOptionTitle = (account: ProviderAccount) => {
 };
 
 const TransactionsPage: React.FC<TransactionsPageProps> = ({ initialAccountId = null }) => {
+  const { format } = useCurrency();
   const {
     isLoading,
     error,
@@ -132,14 +133,14 @@ const TransactionsPage: React.FC<TransactionsPageProps> = ({ initialAccountId = 
               icon={<ReceiptText className={cn('h-4', 'w-4')} />}
               value={stats.totalCount}
               suffix={stats.totalCount === 1 ? 'item' : 'items'}
-              subtext={fmtUSD(stats.totalShown)}
+              subtext={format(stats.totalShown)}
             />
 
             <HeroStatCard
               index={2}
               title="Average size"
               icon={<TrendingUp className={cn('h-4', 'w-4')} />}
-              value={fmtUSD(stats.avgTransaction)}
+              value={format(stats.avgTransaction)}
               subtext={stats.categoryDriver || undefined}
             />
 
@@ -149,8 +150,8 @@ const TransactionsPage: React.FC<TransactionsPageProps> = ({ initialAccountId = 
               icon={<AlertTriangle className={cn('h-4', 'w-4')} />}
               value={
                 stats.largestTransaction
-                  ? fmtUSD(Math.abs(getDisplayAmount(stats.largestTransaction)))
-                  : '$0'
+                  ? format(Math.abs(getDisplayAmount(stats.largestTransaction)))
+                  : format(0)
               }
               pills={
                 stats.largestTransaction && stats.totalCount > 1
@@ -292,7 +293,6 @@ const TransactionsPage: React.FC<TransactionsPageProps> = ({ initialAccountId = 
                       'pt-1'
                     )}
                     style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
-                    aria-label="Filter transactions by account"
                   >
                     <button
                       type="button"

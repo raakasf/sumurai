@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { cn } from '@/ui/primitives';
+import { CurrencySelector } from '../components/CurrencySelector';
 import { HeaderAccountFilter } from '../components/HeaderAccountFilter';
 import { useTheme } from '../context/ThemeContext';
 import { useScrollDetection } from '../hooks/useScrollDetection';
@@ -36,7 +37,12 @@ export function AppLayout({
           onLogout={onLogout}
           currentTab={currentTab}
           onTabChange={onTabChange}
-          accountFilterNode={<HeaderAccountFilter scrolled={scrolled} />}
+          accountFilterNode={
+            <div className={cn('flex', 'items-center', 'gap-2')}>
+              <HeaderAccountFilter scrolled={scrolled} />
+              <CurrencySelector scrolled={scrolled} />
+            </div>
+          }
         />
 
         <main

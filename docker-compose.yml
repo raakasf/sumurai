@@ -8,7 +8,8 @@ name: sumurai
 #                inbound traffic without initiating internet egress.
 #
 # The backend has no internet route of its own. Any outbound HTTPS must go
-# through squid (HTTPS_PROXY), which whitelists only *.teller.io.
+# through squid (HTTPS_PROXY), which whitelists only Teller, Plaid, and
+# Frankfurter exchange-rate endpoints.
 networks:
   app_net:
     internal: true
@@ -32,6 +33,7 @@ services:
         NEXT_PUBLIC_OTEL_BLOCK_SENSITIVE_ENDPOINTS: ${NEXT_PUBLIC_OTEL_BLOCK_SENSITIVE_ENDPOINTS:-true}
     environment:
       DEFAULT_PROVIDER: ${DEFAULT_PROVIDER:-teller}
+    restart: unless-stopped
     networks:
       - app_net
     depends_on:
@@ -72,13 +74,14 @@ services:
       OTEL_STARTUP_TEST_SPAN: ${OTEL_STARTUP_TEST_SPAN:-0}
 
       # Route all outbound HTTPS through the squid egress proxy.
-      # squid only allows CONNECT tunnels to *.teller.io.
+      # squid only allows CONNECT tunnels to Teller, Plaid, and Frankfurter.
       HTTPS_PROXY: http://squid:3128
       # Bypass the proxy for internal Docker service names.
       NO_PROXY: postgres,redis,seq,nginx,frontend,squid,localhost,127.0.0.1,::1
     volumes:
       - ${TELLER_CERT_PATH}:/etc/teller/teller_certificate.pem:ro
       - ${TELLER_KEY_PATH}:/etc/teller/teller_private_key.pem:ro
+    restart: unless-stopped
     networks:
       - app_net
     command: >
@@ -117,6 +120,7 @@ services:
     image: redis:7-alpine
     platform: linux/amd64
     command: redis-server --appendonly yes
+    restart: unless-stopped
     networks:
       - app_net
     volumes:
@@ -129,6 +133,7 @@ services:
       POSTGRES_DB: accounting
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    restart: unless-stopped
     networks:
       - app_net
     volumes:
@@ -147,6 +152,7 @@ services:
       ACCEPT_EULA: "Y"
       SEQ_INGESTION__OTLP__ENABLED: "true"
       SEQ_PASSWORD: ${SEQ_PASSWORD}
+    restart: unless-stopped
     networks:
       - app_net
     volumes:
@@ -175,6 +181,7 @@ services:
     ports:
       - "8080:80"
       - "8443:443"
+    restart: unless-stopped
     networks:
       - app_net
       - public_net
@@ -194,6 +201,7 @@ services:
     image: certbot/certbot:latest
     platform: linux/amd64
     profiles: [ "certbot" ]
+    restart: unless-stopped
     # certbot needs internet access to reach Let's Encrypt ACME servers.
     networks:
       - egress_net

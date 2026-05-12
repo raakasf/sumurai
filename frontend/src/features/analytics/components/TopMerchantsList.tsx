@@ -1,8 +1,8 @@
 import { MapPin } from 'lucide-react';
 import type React from 'react';
+import { useCurrency } from '@/hooks/useCurrency';
 import { cn, EmptyState } from '@/ui/primitives';
 import type { AnalyticsTopMerchantsResponse } from '../../../types/api';
-import { fmtUSD } from '../../../utils/format';
 
 type Props = {
   merchants: AnalyticsTopMerchantsResponse[];
@@ -10,6 +10,7 @@ type Props = {
 };
 
 export const TopMerchantsList: React.FC<Props> = ({ merchants, className = '' }) => {
+  const { format } = useCurrency();
   const merchantsToShow = merchants.slice(0, 6);
 
   return (
@@ -83,7 +84,7 @@ export const TopMerchantsList: React.FC<Props> = ({ merchants, className = '' })
                     'dark:text-slate-100'
                   )}
                 >
-                  {fmtUSD(merchant.amount)}
+                  {format(merchant.amount)}
                 </div>
                 <div className={cn('text-xs', 'text-slate-500', 'dark:text-slate-400')}>
                   {merchant.percentage}%

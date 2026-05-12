@@ -1,9 +1,9 @@
 import { BarChart3 } from 'lucide-react';
 import type React from 'react';
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from 'recharts';
+import { useCurrency } from '@/hooks/useCurrency';
 import { cn, EmptyState } from '@/ui/primitives';
 import { useTheme } from '../../../context/ThemeContext';
-import { fmtUSD } from '../../../utils/format';
 import type { DonutDatum } from '../adapters/chartData';
 
 type Props = {
@@ -13,17 +13,6 @@ type Props = {
   setHoveredCategory: (name: string | null) => void;
 };
 
-type TooltipItem = { payload?: DonutDatum };
-
-const tooltipFormatter = (
-  value: number | string,
-  _name: string,
-  item: TooltipItem
-): [string, string] => {
-  const numericValue = typeof value === 'number' ? value : Number(value);
-  return [fmtUSD(Number.isFinite(numericValue) ? numericValue : 0), item.payload?.name ?? ''];
-};
-
 export const SpendingByCategoryChart: React.FC<Props> = ({
   data,
   total,
@@ -31,6 +20,16 @@ export const SpendingByCategoryChart: React.FC<Props> = ({
   setHoveredCategory,
 }) => {
   const { mode, colors } = useTheme();
+  const { format } = useCurrency();
+  const tooltipFormatter = (
+    value: number | string,
+    _name: string,
+    item: { payload?: DonutDatum }
+  ): [string, string] => {
+    const numericValue = typeof value === 'number' ? value : Number(value);
+    return [format(Number.isFinite(numericValue) ? numericValue : 0), item.payload?.name ?? ''];
+  };
+
   return (
     <div
       className={cn(
@@ -119,7 +118,7 @@ export const SpendingByCategoryChart: React.FC<Props> = ({
                 'tracking-tight'
               )}
             >
-              {fmtUSD(total)}
+              {format(total)}
             </div>
           </div>
         </div>

@@ -14,7 +14,9 @@ use axum::{
 use axum_tracing_opentelemetry::middleware::{OtelAxumLayer, OtelInResponseLayer};
 use axum_tracing_opentelemetry::tracing_opentelemetry_instrumentation_sdk as otel_sdk;
 use chrono::Utc;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use std::time::Duration;
 use tower::ServiceBuilder;
 use tower_http::cors::CorsLayer;
 use uuid::Uuid;
@@ -86,6 +88,25 @@ use services::{
     TellerConnectError, TellerSyncError,
 };
 use sqlx::PgPool;
+
+#[derive(Debug, Deserialize)]
+struct CurrencyRateQuery {
+    currency: String,
+}
+
+#[derive(Debug, Serialize)]
+struct CurrencyRateResponse {
+    base: String,
+    currency: String,
+    rate: f64,
+    date: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FrankfurterLatestResponse {
+    date: Option<String>,
+    rate: f64,
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -214,6 +235,10 @@ pub fn create_app(state: AppState) -> Router {
         .route(
             "/api/providers/accounts",
             get(get_authenticated_plaid_accounts),
+        )
+        .route(
+            "/api/currency/rate",
+            get(get_authenticated_currency_rate),
         )
         .route(
             "/api/plaid/link-token",
@@ -1169,6 +1194,79 @@ async fn get_authenticated_plaid_accounts(
     );
 
     Ok(Json(account_responses))
+}
+
+async fn get_authenticated_currency_rate(
+    _auth_context: AuthContext,
+    Query(query): Query<CurrencyRateQuery>,
+) -> Result<Json<CurrencyRateResponse>, StatusCode> {
+    let currency = query.currency.trim().to_uppercase();
+    let allowed = ["USD", "EUR", "GBP", "CAD", "AUD", "JPY", "INR"];
+
+    if !allowed.contains(&currency.as_str()) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    if currency == "USD" {
+        return Ok(Json(CurrencyRateResponse {
+            base: "USD".to_string(),
+            currency,
+            rate: 1.0,
+            date: Some(Utc::now().date_naive().to_string()),
+        }));
+    }
+
+    let client = reqwest::Client::builder()
+        .https_only(true)
+        .timeout(Duration::from_secs(8))
+        .build()
+        .map_err(|e| {
+            tracing::error!("Failed to build currency rate HTTP client: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    let response = client
+        .get(format!(
+            "https://api.frankfurter.dev/v2/rate/USD/{}",
+            currency
+        ))
+        .send()
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to fetch currency rate for {}: {}", currency, e);
+            StatusCode::BAD_GATEWAY
+        })?;
+
+    if !response.status().is_success() {
+        tracing::error!(
+            status = %response.status(),
+            currency = %currency,
+            "Currency rate provider returned non-success"
+        );
+        return Err(StatusCode::BAD_GATEWAY);
+    }
+
+    let payload = response
+        .json::<FrankfurterLatestResponse>()
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to parse currency rate response for {}: {}", currency, e);
+            StatusCode::BAD_GATEWAY
+        })?;
+
+    let rate = payload.rate;
+
+    if !rate.is_finite() || rate <= 0.0 {
+        tracing::error!("Currency rate response invalid for {}: {}", currency, rate);
+        return Err(StatusCode::BAD_GATEWAY);
+    }
+
+    Ok(Json(CurrencyRateResponse {
+        base: "USD".to_string(),
+        currency,
+        rate,
+        date: payload.date,
+    }))
 }
 
 fn clean_manual_account_mask(mask: Option<String>) -> Option<String> {

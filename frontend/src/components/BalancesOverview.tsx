@@ -20,10 +20,11 @@ import {
 } from 'recharts';
 import type { Props as DefaultLegendContentProps } from 'recharts/types/component/DefaultLegendContent';
 import { useTheme } from '../context/ThemeContext';
+import { useCurrency } from '../hooks/useCurrency';
 import { useBalancesOverview } from '../hooks/useBalancesOverview';
 import { formatRatio } from '../services/AnalyticsService';
 import { Alert, Button, cn, GlassCard } from '../ui/primitives';
-import { Amount, fmtUSD } from './Amount';
+import { Amount } from './Amount';
 import HeroStatCard from './widgets/HeroStatCard';
 
 type BankBarDatum = {
@@ -97,6 +98,7 @@ function BalancesLegend({ payload, ratio }: BalancesLegendProps) {
 export function BalancesOverview() {
   const { loading, refreshing, error, data, refresh } = useBalancesOverview();
   const { colors } = useTheme();
+  const { convert, format, formatConverted } = useCurrency();
 
   const banks = data?.banks || [];
   const overall = data?.overall;
@@ -142,13 +144,13 @@ export function BalancesOverview() {
     () =>
       (data?.banks || []).map((b) => ({
         bank: b.bankName,
-        cash: b.cash,
-        investments: b.investments,
-        property: b.property,
-        credit: b.credit,
-        loan: b.loan,
+        cash: b.cash == null ? null : convert(b.cash),
+        investments: b.investments == null ? null : convert(b.investments),
+        property: b.property == null ? null : convert(b.property),
+        credit: b.credit == null ? null : convert(b.credit),
+        loan: b.loan == null ? null : convert(b.loan),
       })),
-    [data?.banks]
+    [convert, data?.banks]
   );
 
   const [hoverInfo, setHoverInfo] = useState<{
@@ -202,7 +204,7 @@ export function BalancesOverview() {
             data-testid="overall-cash"
             className={cn('text-emerald-500', 'dark:text-emerald-300')}
           >
-            {fmtUSD(overall?.cash ?? 0)}
+            {format(overall?.cash ?? 0)}
           </span>
         ),
       },
@@ -216,7 +218,7 @@ export function BalancesOverview() {
             data-testid="overall-investments"
             className={cn('text-sky-500', 'dark:text-sky-300')}
           >
-            {fmtUSD(overall?.investments ?? 0)}
+            {format(overall?.investments ?? 0)}
           </span>
         ),
       },
@@ -230,7 +232,7 @@ export function BalancesOverview() {
             data-testid="overall-property"
             className={cn('text-teal-500', 'dark:text-teal-300')}
           >
-            {fmtUSD(overall?.property ?? 0)}
+            {format(overall?.property ?? 0)}
           </span>
         ),
       },
@@ -241,7 +243,7 @@ export function BalancesOverview() {
         icon: <CreditCard className={cn('h-4', 'w-4')} />,
         value: (
           <span data-testid="overall-credit" className={cn('text-rose-500', 'dark:text-rose-300')}>
-            {fmtUSD(overall?.credit ?? 0)}
+            {format(overall?.credit ?? 0)}
           </span>
         ),
       },
@@ -252,7 +254,7 @@ export function BalancesOverview() {
         icon: <HandCoins className={cn('h-4', 'w-4')} />,
         value: (
           <span data-testid="overall-loan" className={cn('text-amber-600', 'dark:text-amber-400')}>
-            {fmtUSD(overall?.loan ?? 0)}
+            {format(overall?.loan ?? 0)}
           </span>
         ),
       },
@@ -264,6 +266,7 @@ export function BalancesOverview() {
       overall?.loan,
       overall?.net,
       overall?.property,
+      format,
     ]
   );
 
@@ -399,7 +402,7 @@ export function BalancesOverview() {
                 )}
               >
                 <span className={cn('h-2', 'w-2', 'rounded-full', 'bg-emerald-500')} />
-                Cash: {fmtUSD(hoverInfo.cash ?? 0)}
+                Cash: {formatConverted(hoverInfo.cash ?? 0)}
               </span>
               <span
                 className={cn(
@@ -411,7 +414,7 @@ export function BalancesOverview() {
                 )}
               >
                 <span className={cn('h-2', 'w-2', 'rounded-full', 'bg-cyan-500')} />
-                Investments: {fmtUSD(hoverInfo.investments ?? 0)}
+                Investments: {formatConverted(hoverInfo.investments ?? 0)}
               </span>
               <span
                 className={cn(
@@ -423,7 +426,7 @@ export function BalancesOverview() {
                 )}
               >
                 <span className={cn('h-2', 'w-2', 'rounded-full', 'bg-teal-500')} />
-                Property: {fmtUSD(hoverInfo.property ?? 0)}
+                Property: {formatConverted(hoverInfo.property ?? 0)}
               </span>
               <span
                 className={cn(
@@ -435,7 +438,7 @@ export function BalancesOverview() {
                 )}
               >
                 <span className={cn('h-2', 'w-2', 'rounded-full', 'bg-rose-500')} />
-                Credit: {fmtUSD(hoverInfo.credit ?? 0)}
+                Credit: {formatConverted(hoverInfo.credit ?? 0)}
               </span>
               <span
                 className={cn(
@@ -447,7 +450,7 @@ export function BalancesOverview() {
                 )}
               >
                 <span className={cn('h-2', 'w-2', 'rounded-full', 'bg-amber-500')} />
-                Loan: {fmtUSD(hoverInfo.loan ?? 0)}
+                Loan: {formatConverted(hoverInfo.loan ?? 0)}
               </span>
             </GlassCard>
           </div>

@@ -17,11 +17,12 @@ import { BudgetCalculator } from '../domain/BudgetCalculator';
 import { BudgetForm, type BudgetFormValue } from '../features/budgets/components/BudgetForm';
 import { BudgetList, type BudgetWithProgress } from '../features/budgets/components/BudgetList';
 import { useBudgets } from '../features/budgets/hooks/useBudgets';
+import { useCurrency } from '../hooks/useCurrency';
 import { PageLayout } from '../layouts/PageLayout';
 import { formatCategoryName } from '../utils/categories';
-import { fmtUSD } from '../utils/format';
 
 export default function BudgetsPage() {
+  const { format } = useCurrency();
   const {
     isLoading,
     transactionsLoading,
@@ -209,8 +210,7 @@ export default function BudgetsPage() {
           title="Days remaining"
           icon={<Clock className={cn('h-4', 'w-4')} />}
           value={stats.daysRemaining}
-          suffix={`out of`}
-          subtext={`${stats.totalDays} total days`}
+          suffix={`of ${stats.totalDays} days`}
         />
         <HeroStatCard
           index={4}
@@ -288,7 +288,7 @@ export default function BudgetsPage() {
                 'dark:text-white'
               )}
             >
-              {fmtUSD(stats.totalBudgeted)}
+              {format(stats.totalBudgeted)}
             </div>
           </div>
           <div className="text-right">
@@ -309,7 +309,7 @@ export default function BudgetsPage() {
             <div
               className={`mt-1 text-2xl font-semibold transition-colors duration-500 ${stats.totalSpent > stats.totalBudgeted ? 'text-red-600 dark:text-red-300' : 'text-slate-700 dark:text-slate-200'}`}
             >
-              {fmtUSD(stats.totalSpent)}
+              {format(stats.totalSpent)}
             </div>
           </div>
         </div>
@@ -360,8 +360,8 @@ export default function BudgetsPage() {
               }
             >
               {stats.totalSpent > stats.totalBudgeted
-                ? `-${fmtUSD(stats.totalSpent - stats.totalBudgeted)} over`
-                : `${fmtUSD(stats.remaining)} left`}
+                ? `-${format(stats.totalSpent - stats.totalBudgeted)} over`
+                : `${format(stats.remaining)} left`}
             </span>
           </div>
         </div>

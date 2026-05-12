@@ -1,4 +1,5 @@
 import type React from 'react';
+import { useCurrency } from '@/hooks/useCurrency';
 import { cn, GlassCard, RequirementPill } from '@/ui/primitives';
 
 interface Account {
@@ -88,11 +89,6 @@ const transactionsPillClasses = cn(
   'dark:text-slate-300'
 );
 
-const formatMoney = (amount?: number) => {
-  if (typeof amount !== 'number') return 'Balance unavailable';
-  return amount.toLocaleString(undefined, { style: 'currency', currency: 'USD' });
-};
-
 const formatTransactionCount = (count?: number) => {
   const value = count ?? 0;
   return `${value} ${value === 1 ? 'transaction' : 'transactions'}`;
@@ -117,11 +113,12 @@ const AccountTypeDot: React.FC<{ type: Account['type'] }> = ({ type }) => {
 };
 
 export const AccountRow: React.FC<AccountRowProps> = ({ account, onSelect }) => {
+  const { format } = useCurrency();
   const isDebtAccount = account.type === 'credit' || account.type === 'loan';
   const isOtherAccount = account.type === 'other' || account.type === 'investment';
 
   const rawBalance = account.balance;
-  const balanceText = formatMoney(rawBalance);
+  const balanceText = typeof rawBalance === 'number' ? format(rawBalance) : 'Balance unavailable';
 
   const balanceColor = cn(
     'text-sm font-semibold tabular-nums',
