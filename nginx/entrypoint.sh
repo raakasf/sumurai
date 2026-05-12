@@ -3,30 +3,45 @@ set -euo pipefail
 
 DOMAIN="${DOMAIN:-localhost}"
 SSL_PORT="${SSL_PORT:-8443}"
-CERT_DIR="/etc/letsencrypt/live/${DOMAIN}"
-FULLCHAIN="${CERT_DIR}/fullchain.pem"
-PRIVKEY="${CERT_DIR}/privkey.pem"
+LE_CERT_DIR="/etc/letsencrypt/live/${DOMAIN}"
+LE_FULLCHAIN="${LE_CERT_DIR}/fullchain.pem"
+LE_PRIVKEY="${LE_CERT_DIR}/privkey.pem"
+LOCAL_CERT_DIR="${LOCAL_HTTPS_CERT_DIR:-/etc/nginx/local-certs}"
+LOCAL_FULLCHAIN="${LOCAL_CERT_DIR}/fullchain.pem"
+LOCAL_PRIVKEY="${LOCAL_CERT_DIR}/privkey.pem"
 
 # Ensure tools present
 if ! command -v openssl >/dev/null 2>&1 || ! command -v envsubst >/dev/null 2>&1; then
   apk add --no-cache openssl gettext >/dev/null
 fi
 
-mkdir -p "${CERT_DIR}"
+mkdir -p "${LE_CERT_DIR}"
 mkdir -p /var/www/certbot
 
-# Generate a self-signed cert if none exists (useful for first boot/local)
-if [ ! -s "${FULLCHAIN}" ] || [ ! -s "${PRIVKEY}" ]; then
+# Prefer host-generated mkcert certs for local development when mounted.
+if [ -s "${LOCAL_FULLCHAIN}" ] && [ -s "${LOCAL_PRIVKEY}" ]; then
+  echo "Using local mkcert certificate from ${LOCAL_CERT_DIR}"
+  SSL_CERTIFICATE="${LOCAL_FULLCHAIN}"
+  SSL_CERTIFICATE_KEY="${LOCAL_PRIVKEY}"
+else
+  SSL_CERTIFICATE="${LE_FULLCHAIN}"
+  SSL_CERTIFICATE_KEY="${LE_PRIVKEY}"
+fi
+
+# Generate a self-signed cert if none exists (useful for first boot/local).
+if [ ! -s "${SSL_CERTIFICATE}" ] || [ ! -s "${SSL_CERTIFICATE_KEY}" ]; then
   echo "Generating self-signed certificate for ${DOMAIN}"
   openssl req -x509 -nodes -newkey rsa:2048 -days 1 \
-    -keyout "${PRIVKEY}" \
-    -out "${FULLCHAIN}" \
+    -keyout "${LE_PRIVKEY}" \
+    -out "${LE_FULLCHAIN}" \
     -subj "/CN=${DOMAIN}" >/dev/null 2>&1
+  SSL_CERTIFICATE="${LE_FULLCHAIN}"
+  SSL_CERTIFICATE_KEY="${LE_PRIVKEY}"
 fi
 
 # Render nginx config from template with env vars
-export DOMAIN SSL_PORT
-envsubst '${DOMAIN} ${SSL_PORT}' < /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf
+export DOMAIN SSL_PORT SSL_CERTIFICATE SSL_CERTIFICATE_KEY
+envsubst '${DOMAIN} ${SSL_PORT} ${SSL_CERTIFICATE} ${SSL_CERTIFICATE_KEY}' < /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf
 
 if [ "${NGINX_EGRESS_LOCKDOWN:-true}" = "true" ]; then
   echo "Applying nginx egress lockdown"

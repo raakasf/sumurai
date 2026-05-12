@@ -18,8 +18,8 @@ WORKDIR /build
 
 # Dependency-cache layer: copy manifests only and build a stub binary so that
 # all crate downloads + compilation are cached in a Docker layer that only
-# busts when Cargo.toml / Cargo.lock change.
-COPY backend/Cargo.toml backend/Cargo.lock ./
+# busts when Cargo.toml changes.
+COPY backend/Cargo.toml ./
 RUN mkdir src && echo 'fn main() {}' > src/main.rs \
     && cargo build --release \
     && rm -rf src

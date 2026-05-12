@@ -12,6 +12,7 @@ Thanks for your interest in improving Sumurai! This guide helps you get set up q
 - cross (for macOS → Linux backend builds)
 - sqlx‑cli (for running migrations locally)
 - OpenSSL
+- mkcert (optional, for trusted local HTTPS)
 
 <details>
 <summary>macOS (Homebrew)</summary>
@@ -24,6 +25,7 @@ cargo install cross --git https://github.com/cross-rs/cross
 brew install node@20
 brew install --cask docker
 brew install openssl
+brew install mkcert nss
 ```
 
 </details>
@@ -39,6 +41,7 @@ cargo install cross --git https://github.com/cross-rs/cross
 choco install nodejs-lts -y
 choco install docker-desktop -y
 choco install openssl-light -y
+choco install mkcert -y
 ```
 
 </details>
@@ -56,6 +59,8 @@ sudo apt-get install -y nodejs
 
 sudo apt-get update
 sudo apt-get install -y docker.io docker-compose-plugin openssl
+# Install mkcert from your distro package manager or:
+# https://github.com/FiloSottile/mkcert#installation
 ```
 
 </details>
@@ -97,6 +102,27 @@ npm test                  # unit tests (Jest + RTL)
 Notes:
 - Validate integrated flows at `http://localhost:8080` (Docker) or use `npm run dev` for local development.
 - For E2E testing, use `docker compose up -d --build` to run the full stack with Nginx proxy.
+
+### Trusted Local HTTPS
+
+For browser-trusted HTTPS on the Docker stack, generate a local certificate with mkcert:
+
+```bash
+./scripts/setup-local-https.sh
+docker compose up -d --build
+# Open https://localhost:8443
+```
+
+The script installs the mkcert local CA if needed and writes certificates to `.certs/mkcert/`, which is gitignored. Nginx automatically uses those certificates when present; otherwise it falls back to the existing self-signed first-boot certificate or your Let's Encrypt certificate.
+
+If you need to open the site from another device on your LAN, generate the certificate on the machine running Docker and include that machine's LAN address or local hostname:
+
+```bash
+LOCAL_HTTPS_HOSTS="$(hostname -I | awk '{print $1}') $(hostname -s).local" ./scripts/setup-local-https.sh
+docker compose restart nginx
+```
+
+Install the Docker host's mkcert root CA from `$(mkcert -CAROOT)/rootCA.pem` on each device that should trust the local site.
 
 ### Backend Development
 

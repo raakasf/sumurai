@@ -45,6 +45,26 @@ Open <http://localhost:8080>. Demo: `me@test.com` / `Test1234!`
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for prerequisites and full setup.
 
+### Trusted Local HTTPS
+
+Use mkcert when you need the local stack over browser-trusted HTTPS:
+
+```bash
+./scripts/setup-local-https.sh
+docker compose up -d --build
+```
+
+Open <https://localhost:8443>. The generated certificates live in `.certs/mkcert/` and are ignored by git.
+
+For access from another device on your network, generate the certificate on the machine running Docker and include that machine's LAN address or local hostname:
+
+```bash
+LOCAL_HTTPS_HOSTS="$(hostname -I | awk '{print $1}') $(hostname -s).local" ./scripts/setup-local-https.sh
+docker compose restart nginx
+```
+
+The device opening the site must also trust the Docker host's mkcert root CA. On the Docker host, find it with `mkcert -CAROOT`, then install `rootCA.pem` on the client device.
+
 ## Architecture
 
 React 19 + Next.js frontend, Rust (Axum) backend, PostgreSQL, Redis. JWT auth. Docker Compose deployment.
