@@ -283,11 +283,16 @@ export const HeroStatCard: React.FC<HeroStatCardProps> = ({
               {title}
             </div>
           </div>
-          <div className={cn('flex', 'items-baseline', 'gap-2')}>
+          <div className={cn('flex', 'min-w-0', 'items-baseline', 'gap-2')}>
             <div
               className={cn(
-                'text-2xl',
+                'min-w-0',
+                'max-w-full',
+                'overflow-visible',
+                'whitespace-nowrap',
+                'text-[clamp(0.78rem,1.15vw,1.5rem)]',
                 'font-semibold',
+                'leading-tight',
                 'text-slate-900',
                 'transition-colors',
                 'duration-500',
@@ -352,7 +357,7 @@ export const HeroStatCard: React.FC<HeroStatCardProps> = ({
                     const theme = getTagThemeForCategory(p.categoryName || p.label);
                     return (
                       <span
-                        key={idx}
+                        key={`category-${p.categoryName ?? p.label}-${idx}`}
                         className={classNames(
                           'inline-flex flex-shrink-0 items-center gap-1.5 rounded-full px-2 py-0.5 text-[0.6rem] font-bold uppercase tracking-[0.18em]',
                           theme.tag
@@ -380,7 +385,7 @@ export const HeroStatCard: React.FC<HeroStatCardProps> = ({
 
                   return (
                     <span
-                      key={idx}
+                      key={`${p.type ?? 'default'}-${p.tone ?? 'none'}-${p.label}-${idx}`}
                       className={classNames(
                         'inline-flex flex-shrink-0 items-center gap-1.5 rounded-full px-2 py-0.5 text-[0.6rem] font-bold uppercase tracking-[0.18em]',
                         wrapperClass

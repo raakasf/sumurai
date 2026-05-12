@@ -23,17 +23,12 @@ import { TopMerchantsList } from '../features/analytics/components/TopMerchantsL
 import { useAnalytics } from '../features/analytics/hooks/useAnalytics';
 import { useNetWorthSeries } from '../features/analytics/hooks/useNetWorthSeries';
 import { useAccountFilter } from '../hooks/useAccountFilter';
+import { useCurrency } from '../hooks/useCurrency';
 import { PageLayout } from '../layouts/PageLayout';
 import { TransactionService } from '../services/TransactionService';
 import type { Transaction } from '../types/api';
 import { formatDateOnly } from '../utils/dateOnly';
 import type { DateRangeKey as DateRange } from '../utils/dateRanges';
-import { fmtUSD } from '../utils/format';
-
-const netTooltipFormatter: TooltipProps<number, string>['formatter'] = (value) => {
-  const numericValue = Array.isArray(value) ? Number(value[0]) : Number(value);
-  return fmtUSD(Number.isFinite(numericValue) ? numericValue : 0);
-};
 
 const getDaysUntilEndOfMonth = (today = new Date()) => {
   const endOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0);
@@ -49,6 +44,7 @@ const getDaysUntilEndOfMonth = (today = new Date()) => {
 
 const DashboardPage: React.FC = () => {
   const { colors } = useTheme();
+  const { convert, format, formatConverted } = useCurrency();
   const [hoveredCategory, setHoveredCategory] = useState<string | null>(null);
   const [dateRange, setDateRange] = useState<DateRange>('current-month');
   const spendingOverviewRef = useRef<HTMLDivElement | null>(null);
@@ -70,9 +66,17 @@ const DashboardPage: React.FC = () => {
   const byCat = useMemo(() => categoriesToDonut(analytics.categories), [analytics.categories]);
   const netWorth = useNetWorthSeries(dateRange);
   const netSeries = netWorth.series;
+  const displayNetSeries = useMemo(
+    () => netSeries.map((point) => ({ ...point, value: convert(point.value) })),
+    [convert, netSeries]
+  );
   const netLoading = netWorth.loading;
   const netRefreshing = netWorth.refreshing;
   const netError = netWorth.error;
+  const netTooltipFormatter: TooltipProps<number, string>['formatter'] = (value) => {
+    const numericValue = Array.isArray(value) ? Number(value[0]) : Number(value);
+    return formatConverted(Number.isFinite(numericValue) ? numericValue : 0);
+  };
 
   useEffect(() => {
     const target = balancesOverviewRef.current;
@@ -153,11 +157,11 @@ const DashboardPage: React.FC = () => {
   }, [accountsLoading, allAccountIds.length, isAllAccountsSelected, selectedAccountIds]);
 
   const netDotRenderer = useMemo<((props: DotItemDotProps) => React.ReactNode) | undefined>(() => {
-    const n = netSeries?.length || 0;
+    const n = displayNetSeries?.length || 0;
     const fill = colors.chart.dotFill;
     const stroke = '#10b981';
     if (!n) return undefined;
-    const selected = DashboardCalculator.calculateNetDotIndices(netSeries);
+    const selected = DashboardCalculator.calculateNetDotIndices(displayNetSeries);
     return ({ index, cx, cy }: DotItemDotProps) => {
       if (index == null || cx == null || cy == null) return null;
       if (!selected.has(index)) return null;
@@ -165,11 +169,11 @@ const DashboardPage: React.FC = () => {
         <circle cx={cx} cy={cy} r={3} stroke={stroke} strokeWidth={1} fill={fill} />
       ) as React.ReactElement<SVGCircleElement>;
     };
-  }, [netSeries, colors.chart.dotFill]);
+  }, [displayNetSeries, colors.chart.dotFill]);
 
   const netYAxisDomain = useMemo(
-    () => DashboardCalculator.calculateNetYAxisDomain(netSeries),
-    [netSeries]
+    () => DashboardCalculator.calculateNetYAxisDomain(displayNetSeries),
+    [displayNetSeries]
   );
 
   return (
@@ -305,7 +309,7 @@ const DashboardPage: React.FC = () => {
                                     'dark:text-slate-100'
                                   )}
                                 >
-                                  {fmtUSD(cat.value)}
+                                  {format(cat.value)}
                                 </div>
                                 <div
                                   className={cn(
@@ -421,7 +425,7 @@ const DashboardPage: React.FC = () => {
                 >
                   {netError}
                 </div>
-              ) : netSeries.length === 0 ? (
+              ) : displayNetSeries.length === 0 ? (
                 <div
                   className={cn(
                     'flex-1',
@@ -440,7 +444,10 @@ const DashboardPage: React.FC = () => {
               ) : (
                 <div className={cn('flex-1', 'min-h-[240px]', 'overflow-hidden')}>
                   <ResponsiveContainer width="100%" height="100%">
-                    <AreaChart data={netSeries} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
+                    <AreaChart
+                      data={displayNetSeries}
+                      margin={{ top: 8, right: 16, left: 0, bottom: 0 }}
+                    >
                       <defs>
                         <linearGradient id="netGradient" x1="0" y1="0" x2="0" y2="1">
                           <stop offset="5%" stopColor="#10b981" stopOpacity={0.4} />
@@ -458,8 +465,8 @@ const DashboardPage: React.FC = () => {
                         tickFormatter={(value: string) => {
                           try {
                             if (!value) return '';
-                            const first = netSeries[0]?.date;
-                            const last = netSeries[netSeries.length - 1]?.date;
+                            const first = displayNetSeries[0]?.date;
+                            const last = displayNetSeries[displayNetSeries.length - 1]?.date;
                             const d = new Date(value);
                             const spanDays =
                               first && last
@@ -494,10 +501,11 @@ const DashboardPage: React.FC = () => {
                         tickFormatter={(v) => {
                           const n = Math.abs(Number(v));
                           const sign = Number(v) < 0 ? '-' : '';
-                          if (n >= 1e9) return `${sign}$${(n / 1e9).toFixed(0)}b`;
-                          if (n >= 1e6) return `${sign}$${(n / 1e6).toFixed(0)}m`;
-                          if (n >= 1e3) return `${sign}$${(n / 1e3).toFixed(0)}k`;
-                          return `${sign}$${Number(n).toFixed(0)}`;
+                          const compact = new Intl.NumberFormat('en-US', {
+                            notation: 'compact',
+                            maximumFractionDigits: 0,
+                          }).format(n);
+                          return `${sign}${compact}`;
                         }}
                       />
                       <Tooltip
@@ -549,7 +557,7 @@ const DashboardPage: React.FC = () => {
                     'dark:text-slate-100'
                   )}
                 >
-                  {fmtUSD(totalUpcomingCharges)}
+                  {format(totalUpcomingCharges)}
                 </div>
               </div>
             </div>
@@ -633,7 +641,7 @@ const DashboardPage: React.FC = () => {
                             'dark:text-slate-100'
                           )}
                         >
-                          {fmtUSD(charge.amount)}
+                          {format(charge.amount)}
                         </div>
                         <div className={cn('text-xs', 'text-slate-500', 'dark:text-slate-400')}>
                           {charge.daysUntil === 0

@@ -1,7 +1,8 @@
+import { useCurrency } from '@/hooks/useCurrency';
 import { cn } from '@/ui/primitives';
-import { fmtUSD } from '../../../utils/format';
 
 export function BudgetProgress({ amount, spent }: { amount: number; spent: number }) {
+  const { format } = useCurrency();
   const percent = amount > 0 ? (spent / amount) * 100 : 0;
   const isOver = spent > amount;
   const remaining = Math.max(0, amount - spent);
@@ -50,7 +51,7 @@ export function BudgetProgress({ amount, spent }: { amount: number; spent: numbe
               : 'font-semibold text-slate-600 dark:text-slate-300'
           }
         >
-          {isOver ? `-${fmtUSD(spent - amount)} over` : `${fmtUSD(remaining)} left`}
+          {isOver ? `-${format(spent - amount)} over` : `${format(remaining)} left`}
         </span>
       </div>
     </div>

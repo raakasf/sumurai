@@ -8,6 +8,7 @@ import { OnboardingWizard } from './components/onboarding/OnboardingWizard';
 import { ProviderMismatchCheck } from './components/ProviderMismatchCheck';
 import { ThemeProvider, useTheme } from './context/ThemeContext';
 import { AccountFilterProvider } from './hooks/useAccountFilter';
+import { CurrencyProvider } from './hooks/useCurrency';
 import { TelemetryProvider, TelemetryService } from './observability';
 import { SessionManager } from './SessionManager';
 import { AuthService } from './services/authService';
@@ -172,11 +173,13 @@ function AppContent({ initialTab, initialAuthScreen }: AppContentProps) {
   return (
     <SessionManager onLogout={handleLogout}>
       <AccountFilterProvider key={`filter-${mainAppKey}`}>
-        <AuthenticatedApp
-          key={`app-${mainAppKey}`}
-          onLogout={handleLogout}
-          initialTab={initialTab}
-        />
+        <CurrencyProvider>
+          <AuthenticatedApp
+            key={`app-${mainAppKey}`}
+            onLogout={handleLogout}
+            initialTab={initialTab}
+          />
+        </CurrencyProvider>
       </AccountFilterProvider>
 
       <ProviderMismatchCheck
