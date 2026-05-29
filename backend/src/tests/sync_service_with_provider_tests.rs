@@ -75,6 +75,7 @@ async fn given_sync_service_with_provider_when_sync_then_maps_accounts_correctly
         balance_current: None,
         mask: None,
         institution_name: None,
+        updated_at: None,
     }];
 
     let transaction = Transaction {

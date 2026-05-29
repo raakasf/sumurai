@@ -380,13 +380,14 @@ impl DatabaseRepository for PostgresRepository {
                 .await?;
         }
 
-        sqlx::query(
+        let (updated_at,) = sqlx::query_as::<_, (chrono::DateTime<chrono::Utc>,)>(
             r#"
             INSERT INTO accounts (
                 id, user_id, provider_account_id, provider_connection_id,
                 name, account_type, balance_current, mask, institution_name
             )
             VALUES ($1, $2, NULL, NULL, $3, $4, $5, $6, $7)
+            RETURNING updated_at
             "#,
         )
         .bind(account.id)
@@ -396,11 +397,14 @@ impl DatabaseRepository for PostgresRepository {
         .bind(account.balance_current)
         .bind(&account.mask)
         .bind(&account.institution_name)
-        .execute(&mut *tx)
+        .fetch_one(&mut *tx)
         .await?;
 
         tx.commit().await?;
-        Ok(account.clone())
+        Ok(Account {
+            updated_at: Some(updated_at),
+            ..account.clone()
+        })
     }
 
     async fn update_manual_account(&self, account: &Account) -> Result<Account> {
@@ -413,7 +417,7 @@ impl DatabaseRepository for PostgresRepository {
             .execute(&mut *tx)
             .await?;
 
-        let result = sqlx::query(
+        let updated_at = sqlx::query_scalar::<_, chrono::DateTime<chrono::Utc>>(
             r#"
             UPDATE accounts
             SET name = $1,
@@ -425,6 +429,7 @@ impl DatabaseRepository for PostgresRepository {
               AND user_id = $6
               AND provider_connection_id IS NULL
               AND account_type = $7
+            RETURNING updated_at
             "#,
         )
         .bind(&account.name)
@@ -434,16 +439,19 @@ impl DatabaseRepository for PostgresRepository {
         .bind(account.id)
         .bind(user_id)
         .bind(&account.account_type)
-        .execute(&mut *tx)
+        .fetch_optional(&mut *tx)
         .await?;
 
-        if result.rows_affected() == 0 {
+        let Some(updated_at) = updated_at else {
             let _ = tx.rollback().await;
             return Err(anyhow::anyhow!("Manual account not found"));
-        }
+        };
 
         tx.commit().await?;
-        Ok(account.clone())
+        Ok(Account {
+            updated_at: Some(updated_at),
+            ..account.clone()
+        })
     }
 
     async fn delete_manual_account(&self, account_id: Uuid, user_id: Uuid) -> Result<()> {
@@ -1216,10 +1224,11 @@ impl DatabaseRepository for PostgresRepository {
                 Option<rust_decimal::Decimal>,
                 Option<String>,
                 Option<String>,
+                Option<chrono::DateTime<chrono::Utc>>,
             ),
         >(
             r#"
-            SELECT a.id, a.user_id, a.provider_account_id, a.provider_connection_id, a.name, a.account_type, a.balance_current, a.mask, COALESCE(a.institution_name, pc.institution_name) AS institution_name
+            SELECT a.id, a.user_id, a.provider_account_id, a.provider_connection_id, a.name, a.account_type, a.balance_current, a.mask, COALESCE(a.institution_name, pc.institution_name) AS institution_name, a.updated_at
             FROM accounts a
             LEFT JOIN provider_connections pc ON pc.id = a.provider_connection_id
             WHERE a.user_id = $1
@@ -1245,6 +1254,7 @@ impl DatabaseRepository for PostgresRepository {
                     balance_current,
                     mask,
                     institution_name,
+                    updated_at,
                 )| Account {
                     id,
                     user_id,
@@ -1255,6 +1265,7 @@ impl DatabaseRepository for PostgresRepository {
                     balance_current,
                     mask,
                     institution_name,
+                    updated_at,
                 },
             )
             .collect())

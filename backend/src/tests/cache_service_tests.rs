@@ -73,6 +73,7 @@ async fn given_bank_accounts_when_caching_with_jwt_scope_then_stores_with_correc
             balance_current: Some(Decimal::new(150000, 2)),
             mask: Some("1234".to_string()),
             institution_name: None,
+            updated_at: None,
         },
         Account {
             id: Uuid::new_v4(),
@@ -84,6 +85,7 @@ async fn given_bank_accounts_when_caching_with_jwt_scope_then_stores_with_correc
             balance_current: Some(Decimal::new(300000, 2)),
             mask: Some("5678".to_string()),
             institution_name: None,
+            updated_at: None,
         },
     ];
 
