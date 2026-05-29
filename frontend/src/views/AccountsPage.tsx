@@ -988,6 +988,23 @@ const AccountsPage = ({ onError, onAccountSelect }: AccountsPageProps) => {
                     {account.institution_name || 'Manual investment'}
                     {account.mask ? ` • ${account.mask}` : ''}
                   </div>
+                  {account.updated_at && (
+                    <div
+                      className={cn(
+                        'mt-2',
+                        'flex',
+                        'items-center',
+                        'gap-1.5',
+                        'text-xs',
+                        'text-slate-500',
+                        'dark:text-slate-400'
+                      )}
+                      title={`Updated ${formatAbsoluteTime(account.updated_at)}`}
+                    >
+                      <Clock className={cn('h-3.5', 'w-3.5')} />
+                      <span>Updated {formatRelativeTime(account.updated_at)}</span>
+                    </div>
+                  )}
                 </div>
                 <div className={cn('text-right')}>
                   <div className={cn('text-sm', 'font-semibold', 'text-cyan-600', 'dark:text-cyan-300')}>
@@ -1143,6 +1160,23 @@ const AccountsPage = ({ onError, onAccountSelect }: AccountsPageProps) => {
                     {account.account_type === 'loan' ? ' • mortgage' : ' • property'}
                     {account.mask ? ` • ${account.mask}` : ''}
                   </div>
+                  {account.updated_at && (
+                    <div
+                      className={cn(
+                        'mt-2',
+                        'flex',
+                        'items-center',
+                        'gap-1.5',
+                        'text-xs',
+                        'text-slate-500',
+                        'dark:text-slate-400'
+                      )}
+                      title={`Updated ${formatAbsoluteTime(account.updated_at)}`}
+                    >
+                      <Clock className={cn('h-3.5', 'w-3.5')} />
+                      <span>Updated {formatRelativeTime(account.updated_at)}</span>
+                    </div>
+                  )}
                 </div>
                 <div className={cn('text-right')}>
                   <div

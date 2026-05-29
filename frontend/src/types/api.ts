@@ -76,6 +76,7 @@ export interface Account {
   plaid_connection_id?: string | null;
   provider_account_id?: string | null;
   transaction_count?: number | null;
+  updated_at?: string | null;
 }
 
 export interface ManualInvestmentRequest {

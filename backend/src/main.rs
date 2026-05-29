@@ -1183,6 +1183,7 @@ async fn get_authenticated_plaid_accounts(
                 mask: account.mask,
                 transaction_count: *transaction_count,
                 institution_name: account.institution_name,
+                updated_at: account.updated_at,
             }
         })
         .collect();
@@ -1286,6 +1287,7 @@ fn manual_account_response(account: Account, user_id: Uuid) -> AccountResponse {
         mask: account.mask,
         transaction_count: 0,
         institution_name: account.institution_name,
+        updated_at: account.updated_at,
     }
 }
 
@@ -1352,7 +1354,10 @@ async fn create_authenticated_manual_investment_account(
     let institution_name = req.institution_name.trim().to_string();
     let name = req.name.trim().to_string();
 
-    if institution_name.is_empty() || name.is_empty() || req.balance_current < rust_decimal::Decimal::ZERO {
+    if institution_name.is_empty()
+        || name.is_empty()
+        || req.balance_current < rust_decimal::Decimal::ZERO
+    {
         return Err(StatusCode::BAD_REQUEST);
     }
 
@@ -1366,6 +1371,7 @@ async fn create_authenticated_manual_investment_account(
         balance_current: Some(req.balance_current),
         mask: clean_manual_account_mask(req.mask),
         institution_name: Some(institution_name),
+        updated_at: None,
     };
 
     match state.db_repository.create_manual_account(&account).await {
@@ -1375,7 +1381,11 @@ async fn create_authenticated_manual_investment_account(
             Ok(Json(manual_account_response(created, user_id)))
         }
         Err(e) => {
-            tracing::error!("Failed to create manual investment for user {}: {}", user_id, e);
+            tracing::error!(
+                "Failed to create manual investment for user {}: {}",
+                user_id,
+                e
+            );
             Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
     }
@@ -1406,7 +1416,10 @@ async fn update_authenticated_manual_investment_account(
     let institution_name = req.institution_name.trim().to_string();
     let name = req.name.trim().to_string();
 
-    if institution_name.is_empty() || name.is_empty() || req.balance_current < rust_decimal::Decimal::ZERO {
+    if institution_name.is_empty()
+        || name.is_empty()
+        || req.balance_current < rust_decimal::Decimal::ZERO
+    {
         return Err(StatusCode::BAD_REQUEST);
     }
 
@@ -1420,6 +1433,7 @@ async fn update_authenticated_manual_investment_account(
         balance_current: Some(req.balance_current),
         mask: clean_manual_account_mask(req.mask),
         institution_name: Some(institution_name),
+        updated_at: None,
     };
 
     match state.db_repository.update_manual_account(&account).await {
@@ -1479,6 +1493,7 @@ async fn create_authenticated_manual_asset_account(
         balance_current: Some(req.balance_current),
         mask: clean_manual_account_mask(req.mask),
         institution_name: Some(institution_name),
+        updated_at: None,
     };
 
     match state.db_repository.create_manual_account(&account).await {
@@ -1539,6 +1554,7 @@ async fn update_authenticated_manual_asset_account(
         balance_current: Some(req.balance_current),
         mask: clean_manual_account_mask(req.mask),
         institution_name: Some(institution_name),
+        updated_at: None,
     };
 
     match state.db_repository.update_manual_account(&account).await {

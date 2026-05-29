@@ -169,6 +169,7 @@ async fn given_authenticated_user_when_get_transactions_with_account_ids_then_re
                 balance_current: Some(rust_decimal_macros::dec!(1000.00)),
                 mask: Some("0001".to_string()),
                 institution_name: Some("Test Bank".to_string()),
+                updated_at: None,
             },
             Account {
                 id: account_id_2,
@@ -180,6 +181,7 @@ async fn given_authenticated_user_when_get_transactions_with_account_ids_then_re
                 balance_current: Some(rust_decimal_macros::dec!(5000.00)),
                 mask: Some("0002".to_string()),
                 institution_name: Some("Test Bank".to_string()),
+                updated_at: None,
             },
         ];
         Box::pin(async { Ok(accounts) })
@@ -310,6 +312,7 @@ async fn given_authenticated_user_when_get_spending_with_account_ids_then_return
                 balance_current: Some(rust_decimal_macros::dec!(1000.00)),
                 mask: Some("0001".to_string()),
                 institution_name: Some("Test Bank".to_string()),
+                updated_at: None,
             },
             Account {
                 id: account_id_2,
@@ -321,6 +324,7 @@ async fn given_authenticated_user_when_get_spending_with_account_ids_then_return
                 balance_current: Some(rust_decimal_macros::dec!(5000.00)),
                 mask: Some("0002".to_string()),
                 institution_name: Some("Test Bank".to_string()),
+                updated_at: None,
             },
         ];
         Box::pin(async { Ok(accounts) })
@@ -463,6 +467,7 @@ async fn given_authenticated_user_when_get_categories_with_account_ids_then_retu
                 balance_current: Some(rust_decimal_macros::dec!(1000.00)),
                 mask: Some("0001".to_string()),
                 institution_name: None,
+                updated_at: None,
             },
             Account {
                 id: account_id_2,
@@ -474,6 +479,7 @@ async fn given_authenticated_user_when_get_categories_with_account_ids_then_retu
                 balance_current: Some(rust_decimal_macros::dec!(5000.00)),
                 mask: Some("0002".to_string()),
                 institution_name: None,
+                updated_at: None,
             },
         ];
         Box::pin(async { Ok(accounts) })
@@ -614,6 +620,7 @@ async fn given_authenticated_user_when_get_balances_with_account_ids_then_return
             balance_current: Some(rust_decimal_macros::dec!(1000.00)),
             mask: Some("0001".to_string()),
             institution_name: None,
+            updated_at: None,
         },
         Account {
             id: account_id_2,
@@ -625,6 +632,7 @@ async fn given_authenticated_user_when_get_balances_with_account_ids_then_return
             balance_current: Some(rust_decimal_macros::dec!(5000.00)),
             mask: Some("0002".to_string()),
             institution_name: None,
+            updated_at: None,
         },
     ];
 
@@ -761,6 +769,7 @@ async fn given_different_account_filters_when_caching_then_uses_different_cache_
             balance_current: Some(rust_decimal_macros::dec!(1000.00)),
             mask: Some("0001".to_string()),
             institution_name: None,
+            updated_at: None,
         },
         crate::models::account::Account {
             id: account_id_2,
@@ -772,6 +781,7 @@ async fn given_different_account_filters_when_caching_then_uses_different_cache_
             balance_current: Some(rust_decimal_macros::dec!(5000.00)),
             mask: Some("0002".to_string()),
             institution_name: None,
+            updated_at: None,
         },
     ];
 
@@ -894,6 +904,7 @@ async fn given_user_with_multiple_banks_when_get_accounts_then_returns_all_accou
             balance_current: Some(dec!(1000.00)),
             mask: Some("1234".to_string()),
             institution_name: Some("Chase".to_string()),
+            updated_at: None,
         },
         Account {
             id: Uuid::new_v4(),
@@ -905,6 +916,7 @@ async fn given_user_with_multiple_banks_when_get_accounts_then_returns_all_accou
             balance_current: Some(dec!(5000.00)),
             mask: Some("5678".to_string()),
             institution_name: Some("Bank of America".to_string()),
+            updated_at: None,
         },
     ];
 

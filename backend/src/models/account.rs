@@ -29,6 +29,7 @@ pub struct Account {
     pub balance_current: Option<Decimal>,
     pub mask: Option<String>,
     pub institution_name: Option<String>,
+    pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -56,6 +57,7 @@ pub struct AccountResponse {
     pub mask: Option<String>,
     pub transaction_count: i64,
     pub institution_name: Option<String>,
+    pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -134,6 +136,7 @@ impl Account {
             balance_current: None,
             mask: teller_acc["last_four"].as_str().map(String::from),
             institution_name: teller_acc["institution"]["name"].as_str().map(String::from),
+            updated_at: None,
         }
     }
 
@@ -150,6 +153,7 @@ impl Account {
                 .and_then(Decimal::from_f64_retain),
             mask: plaid_acc["mask"].as_str().map(String::from),
             institution_name: None,
+            updated_at: None,
         }
     }
 }
