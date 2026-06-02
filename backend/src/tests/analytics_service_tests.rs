@@ -561,6 +561,31 @@ fn given_effective_credit_card_bill_category_when_grouping_then_excludes_from_ca
 }
 
 #[test]
+fn given_negative_spending_transactions_when_grouping_then_uses_absolute_amounts() {
+    let txns = vec![
+        create_test_transaction_with_account(
+            dec!(-25.00),
+            NaiveDate::from_ymd_opt(2024, 3, 5).unwrap(),
+            "GENERAL_MERCHANDISE",
+            Some("Medical"),
+        ),
+        create_test_transaction_with_account(
+            dec!(500.00),
+            NaiveDate::from_ymd_opt(2024, 3, 6).unwrap(),
+            "OTHER",
+            Some("Credit Card Bills"),
+        ),
+    ];
+
+    let result =
+        AnalyticsService::group_transactions_with_account_by_effective_category(&txns, None, None);
+
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].name, "Medical");
+    assert_eq!(result[0].value, dec!(25.00));
+}
+
+#[test]
 fn given_effective_credit_card_bill_category_when_summing_spending_then_excludes_from_total() {
     let txns = vec![
         create_test_transaction_with_account(
@@ -587,6 +612,38 @@ fn given_effective_credit_card_bill_category_when_summing_spending_then_excludes
 }
 
 #[test]
+fn given_negative_spending_transactions_when_summing_then_uses_absolute_amounts() {
+    let txns = vec![
+        create_test_transaction_with_account(
+            dec!(-100.00),
+            NaiveDate::from_ymd_opt(2024, 3, 5).unwrap(),
+            "Home",
+            None,
+        ),
+        create_test_transaction_with_account(
+            dec!(-30.00),
+            NaiveDate::from_ymd_opt(2024, 3, 6).unwrap(),
+            "Food",
+            None,
+        ),
+        create_test_transaction_with_account(
+            dec!(500.00),
+            NaiveDate::from_ymd_opt(2024, 3, 7).unwrap(),
+            "OTHER",
+            Some("Credit Card Bills"),
+        ),
+    ];
+
+    let total = AnalyticsService::sum_spending_transactions_with_account(
+        &txns,
+        Some(NaiveDate::from_ymd_opt(2024, 3, 1).unwrap()),
+        Some(NaiveDate::from_ymd_opt(2024, 3, 31).unwrap()),
+    );
+
+    assert_eq!(total, dec!(130.00));
+}
+
+#[test]
 fn given_effective_credit_card_bill_category_when_calculating_daily_spending_then_excludes_it() {
     let analytics = AnalyticsService::new();
     let txns = vec![
@@ -608,6 +665,22 @@ fn given_effective_credit_card_bill_category_when_calculating_daily_spending_the
 
     assert_eq!(daily[4].spend, dec!(60.00));
     assert_eq!(daily[4].cumulative, dec!(60.00));
+}
+
+#[test]
+fn given_negative_spending_transactions_when_calculating_daily_spending_then_uses_absolute_amounts() {
+    let analytics = AnalyticsService::new();
+    let txns = vec![create_test_transaction_with_account(
+        dec!(-40.00),
+        NaiveDate::from_ymd_opt(2024, 3, 5).unwrap(),
+        "Food",
+        None,
+    )];
+
+    let daily = analytics.calculate_daily_spending_with_account(&txns, 2024, 3);
+
+    assert_eq!(daily[4].spend, dec!(40.00));
+    assert_eq!(daily[4].cumulative, dec!(40.00));
 }
 
 #[test]
@@ -653,4 +726,42 @@ fn given_transactions_when_getting_top_merchants_with_date_range_then_filters_an
     assert_eq!(merchant.name, "Test Merchant");
     assert_eq!(merchant.amount, dec!(325.00));
     assert_eq!(merchant.count, 3);
+}
+
+#[test]
+fn given_negative_spending_transactions_when_getting_top_merchants_then_uses_absolute_amounts() {
+    let analytics = AnalyticsService::new();
+    let txns = vec![
+        create_test_transaction_with_account(
+            dec!(-100.00),
+            NaiveDate::from_ymd_opt(2024, 3, 5).unwrap(),
+            "Home",
+            None,
+        ),
+        create_test_transaction_with_account(
+            dec!(-25.00),
+            NaiveDate::from_ymd_opt(2024, 3, 6).unwrap(),
+            "Home",
+            None,
+        ),
+        create_test_transaction_with_account(
+            dec!(500.00),
+            NaiveDate::from_ymd_opt(2024, 3, 7).unwrap(),
+            "OTHER",
+            Some("Credit Card Bills"),
+        ),
+    ];
+
+    let result = analytics.get_top_merchants_with_account_date_range(
+        &txns,
+        Some(NaiveDate::from_ymd_opt(2024, 3, 1).unwrap()),
+        Some(NaiveDate::from_ymd_opt(2024, 3, 31).unwrap()),
+        5,
+    );
+
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].name, "Test Merchant");
+    assert_eq!(result[0].amount, dec!(125.00));
+    assert_eq!(result[0].count, 2);
+    assert_eq!(result[0].percentage, dec!(100.00));
 }

@@ -6,7 +6,7 @@ import type {
   AnalyticsMonthlyTotalsResponse,
   AnalyticsTopMerchantsResponse,
 } from '../../../types/api';
-import { computeDateRange, type DateRangeKey } from '../../../utils/dateRanges';
+import { computeMonthRange, type MonthYearSelection } from '../../../utils/dateRanges';
 
 export type UseAnalyticsResult = {
   loading: boolean;
@@ -20,7 +20,7 @@ export type UseAnalyticsResult = {
   end?: string;
 };
 
-export function useAnalytics(range: DateRangeKey): UseAnalyticsResult {
+export function useAnalytics(range: MonthYearSelection): UseAnalyticsResult {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -39,7 +39,7 @@ export function useAnalytics(range: DateRangeKey): UseAnalyticsResult {
   const abortRef = useRef<AbortController | null>(null);
   const hasLoadedRef = useRef(false);
 
-  const { start, end } = useMemo(() => computeDateRange(range), [range]);
+  const { start, end } = useMemo(() => computeMonthRange(range), [range]);
 
   const load = useCallback(async () => {
     abortRef.current?.abort();

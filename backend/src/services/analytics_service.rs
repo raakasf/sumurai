@@ -219,8 +219,16 @@ impl AnalyticsService {
     }
 
     fn is_spending_transaction_with_account(transaction: &TransactionWithAccount) -> bool {
-        transaction.amount > Decimal::ZERO
+        transaction.amount != Decimal::ZERO
             && !Self::is_spending_excluded_category(&Self::get_effective_category_name(transaction))
+    }
+
+    fn get_spending_amount_with_account(transaction: &TransactionWithAccount) -> Decimal {
+        if transaction.amount < Decimal::ZERO {
+            -transaction.amount
+        } else {
+            transaction.amount
+        }
     }
 
     pub fn sum_spending_transactions_with_account(
@@ -238,7 +246,7 @@ impl AnalyticsService {
                 }
                 Self::is_spending_transaction_with_account(transaction)
             })
-            .map(|transaction| transaction.amount)
+            .map(Self::get_spending_amount_with_account)
             .sum()
     }
 
@@ -291,7 +299,8 @@ impl AnalyticsService {
 
             let category_name = Self::get_effective_category_name(transaction);
 
-            *category_map.entry(category_name).or_insert(Decimal::ZERO) += transaction.amount;
+            *category_map.entry(category_name).or_insert(Decimal::ZERO) +=
+                Self::get_spending_amount_with_account(transaction);
         }
 
         category_map
@@ -353,7 +362,8 @@ impl AnalyticsService {
                 transaction.date.year(),
                 transaction.date.month()
             );
-            *monthly_totals.entry(month_key).or_insert(Decimal::ZERO) += transaction.amount;
+            *monthly_totals.entry(month_key).or_insert(Decimal::ZERO) +=
+                Self::get_spending_amount_with_account(transaction);
         }
 
         let mut result: Vec<MonthlySpending> = monthly_totals
@@ -469,7 +479,7 @@ impl AnalyticsService {
             let entry = merchant_map
                 .entry(merchant_name)
                 .or_insert((Decimal::ZERO, 0));
-            entry.0 += transaction.amount;
+            entry.0 += Self::get_spending_amount_with_account(transaction);
             entry.1 += 1;
         }
 
@@ -572,7 +582,7 @@ impl AnalyticsService {
                 && Self::is_spending_transaction_with_account(t)
             {
                 let idx = (t.date.day() - 1) as usize;
-                totals[idx] += t.amount;
+                totals[idx] += Self::get_spending_amount_with_account(t);
             }
         }
         let mut cumulative = Decimal::ZERO;

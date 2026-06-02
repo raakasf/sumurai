@@ -6,13 +6,44 @@ export type DateRangeKey =
   | 'past-year'
   | 'all-time';
 
+export type MonthYearSelection = {
+  year: number;
+  month: number;
+};
+
+const fmt = (d: Date) => {
+  const year = String(d.getFullYear()).padStart(4, '0');
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const localDate = (year: number, month0: number, day: number) => {
+  const date = new Date(0);
+  date.setFullYear(year, month0, day);
+  date.setHours(0, 0, 0, 0);
+  return date;
+};
+
+export function getCurrentMonthSelection(today = new Date()): MonthYearSelection {
+  return {
+    year: today.getFullYear(),
+    month: today.getMonth(),
+  };
+}
+
+export function computeMonthRange(selection: MonthYearSelection): { start: string; end: string } {
+  const start = localDate(selection.year, selection.month, 1);
+  const end = localDate(selection.year, selection.month + 1, 0);
+  return { start: fmt(start), end: fmt(end) };
+}
+
 export function computeDateRange(key?: DateRangeKey): { start?: string; end?: string } {
   const now = new Date();
   const y = now.getFullYear();
   const m = now.getMonth(); // 0-based
-  const firstOfMonth = (year: number, month0: number) => new Date(year, month0, 1);
-  const lastOfMonth = (year: number, month0: number) => new Date(year, month0 + 1, 0);
-  const fmt = (d: Date) => d.toISOString().slice(0, 10);
+  const firstOfMonth = (year: number, month0: number) => localDate(year, month0, 1);
+  const lastOfMonth = (year: number, month0: number) => localDate(year, month0 + 1, 0);
 
   switch (key) {
     case 'current-month': {
@@ -39,8 +70,7 @@ export function computeDateRange(key?: DateRangeKey): { start?: string; end?: st
       return { start: fmt(start), end: fmt(end) };
     }
     case 'all-time': {
-      const fiveYearsAgo = new Date(now.getFullYear() - 5, now.getMonth(), now.getDate());
-      return { start: fmt(fiveYearsAgo), end: fmt(now) };
+      return {};
     }
     default:
       return {};

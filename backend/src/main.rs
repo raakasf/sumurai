@@ -3132,7 +3132,7 @@ async fn get_authenticated_net_worth_over_time(
 
     // Cache lookup
     let base_cache_key = format!(
-        "{}_net_worth_over_time_{}_{}",
+        "{}_net_worth_over_time_v2_{}_{}",
         auth_context.jwt_id, start_date, end_date
     );
     let cache_key = utils::cache_keys::generate_cache_key_with_account_filter(
@@ -3163,6 +3163,7 @@ async fn get_authenticated_net_worth_over_time(
     let mut static_current_by_id: HashMap<uuid::Uuid, Decimal> = HashMap::new();
     let mut manual_static_account_ids: HashSet<uuid::Uuid> = HashSet::new();
     let mut liability_static_account_ids: HashSet<uuid::Uuid> = HashSet::new();
+    let mut account_anchor_dates: Vec<chrono::NaiveDate> = Vec::new();
     for acc in accounts.into_iter() {
         if let Some(ref allowed_ids) = filtered_account_ids {
             if !allowed_ids.contains(&acc.id) {
@@ -3177,6 +3178,9 @@ async fn get_authenticated_net_worth_over_time(
             }
             BalanceCategory::Investments | BalanceCategory::Property => {
                 static_current_by_id.insert(acc.id, balance);
+                if let Some(updated_at) = acc.updated_at {
+                    account_anchor_dates.push(updated_at.naive_utc().date());
+                }
                 if acc.provider_connection_id.is_none() && acc.provider_account_id.is_none() {
                     manual_static_account_ids.insert(acc.id);
                 }
@@ -3184,6 +3188,9 @@ async fn get_authenticated_net_worth_over_time(
             BalanceCategory::Credit | BalanceCategory::Loan => {
                 static_current_by_id.insert(acc.id, -balance.abs());
                 liability_static_account_ids.insert(acc.id);
+                if let Some(updated_at) = acc.updated_at {
+                    account_anchor_dates.push(updated_at.naive_utc().date());
+                }
                 if acc.provider_connection_id.is_none() && acc.provider_account_id.is_none() {
                     manual_static_account_ids.insert(acc.id);
                 }
@@ -3215,6 +3222,7 @@ async fn get_authenticated_net_worth_over_time(
             if !manual_static_account_ids.contains(&point.account_id) {
                 continue;
             }
+            account_anchor_dates.push(point.as_of_date);
             let signed_balance = if liability_static_account_ids.contains(&point.account_id) {
                 -point.balance_current.abs()
             } else {
@@ -3244,6 +3252,7 @@ async fn get_authenticated_net_worth_over_time(
     // Group flows by account and date; filter to depository account_ids
     let mut flows_by_account: HashMap<uuid::Uuid, BTreeMap<chrono::NaiveDate, Decimal>> =
         HashMap::new();
+    let mut transaction_anchor_dates: Vec<chrono::NaiveDate> = Vec::new();
     for t in txns.into_iter() {
         if let Some(ref allowed_ids) = filtered_account_ids {
             if !allowed_ids.contains(&t.account_id) {
@@ -3253,6 +3262,7 @@ async fn get_authenticated_net_worth_over_time(
         if !depository_ids.contains(&t.account_id) {
             continue;
         }
+        transaction_anchor_dates.push(t.date);
         flows_by_account
             .entry(t.account_id)
             .or_default()
@@ -3261,14 +3271,25 @@ async fn get_authenticated_net_worth_over_time(
             .or_insert(t.amount);
     }
 
-    // Compute baseline at start_date for each account:
-    // base_start = balance_current - sum(flows in (start_date, today]]
+    let effective_start_date = transaction_anchor_dates
+        .into_iter()
+        .chain(account_anchor_dates.into_iter())
+        .min()
+        .map(|earliest| std::cmp::max(start_date, earliest))
+        .unwrap_or(start_date);
+
+    // Compute baseline at effective_start_date for each account:
+    // base_start = balance_current - sum(flows in (effective_start_date, today]]
     let mut base_start_by_account: HashMap<uuid::Uuid, Decimal> = HashMap::new();
     for acc_id in depository_ids.iter() {
         let current_balance = *balance_current_by_id.get(acc_id).unwrap_or(&Decimal::ZERO);
         let mut rollback_sum = Decimal::ZERO;
         if let Some(map) = flows_by_account.get(acc_id) {
-            for (d, amt) in map.range((start_date.succ_opt().unwrap_or(start_date))..=today) {
+            for (d, amt) in map.range(
+                (effective_start_date
+                    .succ_opt()
+                    .unwrap_or(effective_start_date))..=today,
+            ) {
                 let _ = d; // unused binding except for range
                 rollback_sum += *amt;
             }
@@ -3278,7 +3299,7 @@ async fn get_authenticated_net_worth_over_time(
 
     // Build daily cumulative series for the requested range (carry forward past end_anchor)
     let mut series: Vec<models::analytics::NetWorthSeriesPoint> = Vec::new();
-    let mut day = start_date;
+    let mut day = effective_start_date;
     let mut per_account_cum: HashMap<uuid::Uuid, Decimal> = HashMap::new();
     while day <= end_date {
         // Update cumulative flows up to this day for each account
