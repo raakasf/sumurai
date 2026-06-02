@@ -2,7 +2,6 @@ import type React from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { cn } from '@/ui/primitives';
 import { getTagThemeForCategory } from '../../../utils/categories';
-import type { DateRangeKey } from '../../../utils/dateRanges';
 
 interface Props {
   search: string;
@@ -10,21 +9,9 @@ interface Props {
   categories: string[];
   selectedCategory: string | null;
   onSelectCategory: (c: string | null) => void;
-  dateRange?: DateRangeKey;
-  onSelectDateRange?: (range: DateRangeKey) => void;
   showSearch?: boolean;
   showCategories?: boolean;
-  showDateRange?: boolean;
 }
-
-const dateRangeOptions: Array<{ key: DateRangeKey; label: string }> = [
-  { key: 'current-month', label: 'Current Month' },
-  { key: 'past-2-months', label: '2 Months' },
-  { key: 'past-3-months', label: '3 Months' },
-  { key: 'past-6-months', label: '6 Months' },
-  { key: 'past-year', label: '1 Year' },
-  { key: 'all-time', label: '5 Years' },
-];
 
 export const TransactionsFilters: React.FC<Props> = ({
   search,
@@ -32,11 +19,8 @@ export const TransactionsFilters: React.FC<Props> = ({
   categories,
   selectedCategory,
   onSelectCategory,
-  dateRange = 'all-time',
-  onSelectDateRange,
   showSearch = true,
   showCategories = true,
-  showDateRange = false,
 }) => {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [showLeftFade, setShowLeftFade] = useState(false);
@@ -56,57 +40,33 @@ export const TransactionsFilters: React.FC<Props> = ({
     return () => window.removeEventListener('resize', checkScroll);
   }, [checkScroll]);
 
+  useEffect(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+
+    const handleWheel = (event: WheelEvent) => {
+      if (el.scrollWidth <= el.clientWidth) return;
+
+      const delta =
+        Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+      if (delta === 0) return;
+
+      event.preventDefault();
+      el.scrollLeft += delta;
+      checkScroll();
+    };
+
+    el.addEventListener('wheel', handleWheel, { passive: false });
+    return () => el.removeEventListener('wheel', handleWheel);
+  }, [checkScroll]);
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(checkScroll);
+    return () => window.cancelAnimationFrame(frame);
+  }, [categories, checkScroll]);
+
   return (
     <>
-      {showDateRange && (
-        <div
-          className={cn(
-            'flex',
-            'max-w-full',
-            'gap-2',
-            'overflow-x-auto',
-            'rounded-2xl',
-            'border',
-            'border-slate-200/70',
-            'bg-white/80',
-            'px-3',
-            'py-2',
-            'shadow-xl',
-            'backdrop-blur-md',
-            'ring-1',
-            'ring-slate-200/60',
-            'dark:border-slate-700/70',
-            'dark:bg-slate-800/80',
-            'dark:ring-slate-700/60'
-          )}
-          aria-label="Filter transactions by date range"
-          style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
-        >
-          {dateRangeOptions.map((option) => (
-            <button
-              type="button"
-              key={option.key}
-              onClick={() => onSelectDateRange?.(option.key)}
-              className={cn(
-                'whitespace-nowrap',
-                'rounded-lg',
-                'px-3',
-                'py-1.5',
-                'text-sm',
-                'font-medium',
-                'transition-all',
-                'duration-200',
-                dateRange === option.key
-                  ? 'bg-primary-100 text-slate-900 shadow dark:bg-slate-600 dark:text-slate-100'
-                  : 'text-slate-700 hover:-translate-y-[1px] hover:bg-white/60 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-700/60 dark:hover:text-slate-100'
-              )}
-              aria-pressed={dateRange === option.key}
-            >
-              {option.label}
-            </button>
-          ))}
-        </div>
-      )}
       {showSearch && (
         <div className={cn('relative', 'w-full', 'sm:w-52')}>
           <input
@@ -170,11 +130,16 @@ export const TransactionsFilters: React.FC<Props> = ({
                 'items-center',
                 'gap-2',
                 'overflow-x-auto',
+                'overscroll-contain',
                 'pb-1',
                 'pl-1',
                 'pt-1'
               )}
-              style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
+              style={{
+                scrollbarWidth: 'none',
+                msOverflowStyle: 'none',
+                overscrollBehavior: 'contain',
+              }}
             >
               {categories.map((name) => {
                 const isSelected = selectedCategory === name;

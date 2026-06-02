@@ -81,6 +81,19 @@ const isManualPropertyAccount = (account: Account) =>
   !account.provider_connection_id &&
   !account.provider_account_id;
 
+const formatManualInvestmentTitle = (account: Account) =>
+  account.institution_name?.trim() || account.name || 'Manual investment';
+
+const formatManualInvestmentDetail = (account: Account) => {
+  const detail = account.name?.trim();
+  const type = account.account_type?.trim();
+  const parts = [detail, type].filter(Boolean);
+  return parts.length > 0 ? parts.join(' • ') : 'Manual investment';
+};
+
+const getManualPropertyInstitutionName = (accountType: ManualAssetAccountType) =>
+  accountType === 'loan' ? 'Mortgage' : 'Property';
+
 type ManualInvestmentFormState = {
   institution_name: string;
   name: string;
@@ -91,11 +104,9 @@ type ManualInvestmentFormState = {
 };
 
 type ManualPropertyFormState = {
-  institution_name: string;
   name: string;
   account_type: ManualAssetAccountType;
   balance_current: string;
-  mask: string;
 };
 
 const emptyManualInvestmentForm: ManualInvestmentFormState = {
@@ -108,11 +119,9 @@ const emptyManualInvestmentForm: ManualInvestmentFormState = {
 };
 
 const emptyManualPropertyForm: ManualPropertyFormState = {
-  institution_name: 'Home',
   name: 'Primary Home',
   account_type: 'property',
   balance_current: '',
-  mask: '',
 };
 
 interface AccountsPageProps {
@@ -348,21 +357,20 @@ const AccountsPage = ({ onError, onAccountSelect }: AccountsPageProps) => {
   );
 
   const manualPropertyPayload = useCallback((): ManualAssetRequest | null => {
-    const institution = manualPropertyForm.institution_name.trim();
     const name = manualPropertyForm.name.trim();
     const balance = Number(manualPropertyForm.balance_current);
 
-    if (!institution || !name || !Number.isFinite(balance) || balance < 0) {
-      setManualPropertyError('Enter a label, account name, and non-negative balance.');
+    if (!name || !Number.isFinite(balance) || balance < 0) {
+      setManualPropertyError('Enter an account name and non-negative balance.');
       return null;
     }
 
     return {
-      institution_name: institution,
+      institution_name: getManualPropertyInstitutionName(manualPropertyForm.account_type),
       name,
       account_type: manualPropertyForm.account_type,
       balance_current: balance,
-      mask: manualPropertyForm.mask.trim() || null,
+      mask: null,
     };
   }, [manualPropertyForm]);
 
@@ -401,11 +409,9 @@ const AccountsPage = ({ onError, onAccountSelect }: AccountsPageProps) => {
     setEditingManualPropertyId(account.id);
     setManualPropertyError(null);
     setManualPropertyForm({
-      institution_name: account.institution_name || 'Home',
       name: account.name,
       account_type: account.account_type === 'loan' ? 'loan' : 'property',
       balance_current: String(parseAccountBalance(account.balance_current)),
-      mask: account.mask || '',
     });
   }, []);
 
@@ -982,10 +988,10 @@ const AccountsPage = ({ onError, onAccountSelect }: AccountsPageProps) => {
               <div className={cn('flex', 'items-start', 'justify-between', 'gap-3')}>
                 <div>
                   <div className={cn('text-sm', 'font-semibold', 'text-slate-900', 'dark:text-white')}>
-                    {account.name}
+                    {formatManualInvestmentTitle(account)}
                   </div>
                   <div className={cn('mt-1', 'text-xs', 'text-slate-600', 'dark:text-slate-300')}>
-                    {account.institution_name || 'Manual investment'}
+                    {formatManualInvestmentDetail(account)}
                     {account.mask ? ` • ${account.mask}` : ''}
                   </div>
                   {account.updated_at && (
@@ -1015,7 +1021,7 @@ const AccountsPage = ({ onError, onAccountSelect }: AccountsPageProps) => {
                       onClick={() => editManualInvestment(account)}
                       variant="icon"
                       size="icon"
-                      aria-label={`Edit ${account.name}`}
+                      aria-label={`Edit ${formatManualInvestmentTitle(account)}`}
                     >
                       <Pencil className={cn('h-4', 'w-4')} />
                     </Button>
@@ -1023,7 +1029,7 @@ const AccountsPage = ({ onError, onAccountSelect }: AccountsPageProps) => {
                       onClick={() => deleteManualInvestment(account)}
                       variant="icon"
                       size="icon"
-                      aria-label={`Delete ${account.name}`}
+                      aria-label={`Delete ${formatManualInvestmentTitle(account)}`}
                     >
                       <Trash2 className={cn('h-4', 'w-4')} />
                     </Button>
@@ -1059,14 +1065,13 @@ const AccountsPage = ({ onError, onAccountSelect }: AccountsPageProps) => {
       </div>
 
       <GlassCard variant="accent" rounded="xl" padding="lg" withInnerEffects={false}>
-        <div className={cn('grid', 'gap-3', 'md:grid-cols-[0.9fr_1.1fr_1.1fr_1fr_0.8fr_auto]')}>
+        <div className={cn('grid', 'gap-3', 'md:grid-cols-[0.9fr_1.4fr_1fr_auto]')}>
           <select
             value={manualPropertyForm.account_type}
             onChange={(event) =>
               setManualPropertyForm((prev) => ({
                 ...prev,
                 account_type: event.target.value as ManualAssetAccountType,
-                institution_name: event.target.value === 'loan' ? 'Mortgage' : prev.institution_name,
                 name: event.target.value === 'loan' ? 'Primary Mortgage' : prev.name,
               }))
             }
@@ -1080,14 +1085,6 @@ const AccountsPage = ({ onError, onAccountSelect }: AccountsPageProps) => {
             <option value="property">Property</option>
             <option value="loan">Mortgage</option>
           </select>
-          <Input
-            value={manualPropertyForm.institution_name}
-            onChange={(event) =>
-              setManualPropertyForm((prev) => ({ ...prev, institution_name: event.target.value }))
-            }
-            placeholder="Label"
-            variant="glass"
-          />
           <Input
             value={manualPropertyForm.name}
             onChange={(event) =>
@@ -1103,14 +1100,6 @@ const AccountsPage = ({ onError, onAccountSelect }: AccountsPageProps) => {
             }
             placeholder="Balance"
             inputMode="decimal"
-            variant="glass"
-          />
-          <Input
-            value={manualPropertyForm.mask}
-            onChange={(event) =>
-              setManualPropertyForm((prev) => ({ ...prev, mask: event.target.value }))
-            }
-            placeholder="Note"
             variant="glass"
           />
           <div className={cn('flex', 'gap-2')}>
@@ -1156,9 +1145,7 @@ const AccountsPage = ({ onError, onAccountSelect }: AccountsPageProps) => {
                     </div>
                   </div>
                   <div className={cn('mt-1', 'text-xs', 'text-slate-600', 'dark:text-slate-300')}>
-                    {account.institution_name || 'Manual property'}
-                    {account.account_type === 'loan' ? ' • mortgage' : ' • property'}
-                    {account.mask ? ` • ${account.mask}` : ''}
+                    {account.account_type === 'loan' ? 'Mortgage' : 'Property'}
                   </div>
                   {account.updated_at && (
                     <div

@@ -1,6 +1,6 @@
 import { CalendarClock, CreditCard, RefreshCcw, TrendingUp } from 'lucide-react';
 import type React from 'react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { TooltipProps } from 'recharts';
 import {
   Area,
@@ -14,6 +14,7 @@ import {
 import type { DotItemDotProps } from 'recharts/types/util/types';
 import { cn, EmptyState } from '@/ui/primitives';
 import BalancesOverview from '../components/BalancesOverview';
+import MonthYearSelector from '../components/MonthYearSelector';
 import Card from '../components/ui/Card';
 import { useTheme } from '../context/ThemeContext';
 import { DashboardCalculator } from '../domain/DashboardCalculator';
@@ -28,28 +29,33 @@ import { PageLayout } from '../layouts/PageLayout';
 import { TransactionService } from '../services/TransactionService';
 import type { Transaction } from '../types/api';
 import { formatDateOnly } from '../utils/dateOnly';
-import type { DateRangeKey as DateRange } from '../utils/dateRanges';
+import type { MonthYearSelection } from '../utils/dateRanges';
 
-const getDaysUntilEndOfMonth = (today = new Date()) => {
-  const endOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0);
-  return Math.max(
-    0,
-    Math.round(
-      (endOfMonth.getTime() -
-        new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime()) /
-        86400000
-    )
-  );
+const getSelectedMonthWindow = (period: MonthYearSelection) => {
+  const start = new Date(0);
+  start.setFullYear(period.year, period.month, 1);
+  start.setHours(0, 0, 0, 0);
+  const end = new Date(0);
+  end.setFullYear(period.year, period.month + 1, 0);
+  end.setHours(0, 0, 0, 0);
+  return {
+    start,
+    horizonDays: Math.max(
+      0,
+      Math.round((end.getTime() - start.getTime()) / 86400000)
+    ),
+  };
 };
 
-const DashboardPage: React.FC = () => {
+interface DashboardPageProps {
+  period: MonthYearSelection;
+  onPeriodChange: (period: MonthYearSelection) => void;
+}
+
+const DashboardPage: React.FC<DashboardPageProps> = ({ period, onPeriodChange }) => {
   const { colors } = useTheme();
   const { convert, format, formatConverted } = useCurrency();
   const [hoveredCategory, setHoveredCategory] = useState<string | null>(null);
-  const [dateRange, setDateRange] = useState<DateRange>('current-month');
-  const spendingOverviewRef = useRef<HTMLDivElement | null>(null);
-  const balancesOverviewRef = useRef<HTMLDivElement | null>(null);
-  const [showTimeBar, setShowTimeBar] = useState(false);
   const [chargeTransactions, setChargeTransactions] = useState<Transaction[]>([]);
   const [chargesLoading, setChargesLoading] = useState(false);
   const [chargesError, setChargesError] = useState<string | null>(null);
@@ -60,11 +66,11 @@ const DashboardPage: React.FC = () => {
     loading: accountsLoading,
   } = useAccountFilter();
 
-  const analytics = useAnalytics(dateRange);
+  const analytics = useAnalytics(period);
   const analyticsLoading = analytics.loading;
   const analyticsRefreshing = analytics.refreshing;
   const byCat = useMemo(() => categoriesToDonut(analytics.categories), [analytics.categories]);
-  const netWorth = useNetWorthSeries(dateRange);
+  const netWorth = useNetWorthSeries();
   const netSeries = netWorth.series;
   const displayNetSeries = useMemo(
     () => netSeries.map((point) => ({ ...point, value: convert(point.value) })),
@@ -78,33 +84,16 @@ const DashboardPage: React.FC = () => {
     return formatConverted(Number.isFinite(numericValue) ? numericValue : 0);
   };
 
-  useEffect(() => {
-    const target = balancesOverviewRef.current;
-    if (!target) {
-      setShowTimeBar(false);
-      return;
-    }
-    const observer = new IntersectionObserver(
-      (entries) => {
-        const entry = entries[0];
-        setShowTimeBar(entry.intersectionRatio < 0.5);
-      },
-      { threshold: [0, 0.5, 1] }
-    );
-    observer.observe(target);
-    return () => observer.disconnect();
-  }, []);
-
   const monthSpend = analytics.spendingTotal;
-  const predictionHorizonDays = useMemo(() => getDaysUntilEndOfMonth(), []);
+  const selectedMonthWindow = useMemo(() => getSelectedMonthWindow(period), [period]);
   const upcomingCharges = useMemo(
     () =>
       DashboardCalculator.predictUpcomingCharges(
         chargeTransactions,
-        new Date(),
-        predictionHorizonDays
+        selectedMonthWindow.start,
+        selectedMonthWindow.horizonDays
       ),
-    [chargeTransactions, predictionHorizonDays]
+    [chargeTransactions, selectedMonthWindow]
   );
   const totalUpcomingCharges = useMemo(
     () => upcomingCharges.reduce((sum, charge) => sum + charge.amount, 0),
@@ -183,14 +172,13 @@ const DashboardPage: React.FC = () => {
         title="Assets vs Liabilities"
         subtitle="Assets appear above zero, debt appears below zero, and net worth is the difference."
         stats={
-          <div ref={balancesOverviewRef}>
+          <div>
             <BalancesOverview />
           </div>
         }
       >
         <div className={cn('space-y-8')}>
           <div
-            ref={spendingOverviewRef}
             className={cn(
               'grid',
               'grid-cols-1',
@@ -669,63 +657,7 @@ const DashboardPage: React.FC = () => {
               </div>
             )}
           </Card>
-          <div
-            className={cn(
-              'fixed',
-              'left-0',
-              'right-0',
-              'z-50',
-              'flex',
-              'justify-center',
-              'transition-opacity',
-              'duration-300',
-              'ease-out',
-              showTimeBar ? 'opacity-100' : 'opacity-0 pointer-events-none'
-            )}
-            style={{ bottom: 24 }}
-          >
-            <div
-              className={cn(
-                'flex',
-                'gap-2',
-                'px-3',
-                'py-2',
-                'rounded-2xl',
-                'bg-white/80',
-                'dark:bg-slate-800/80',
-                'border',
-                'border-slate-200/70',
-                'dark:border-slate-700/70',
-                'shadow-xl',
-                'backdrop-blur-md',
-                'ring-1',
-                'ring-slate-200/60',
-                'dark:ring-slate-700/60'
-              )}
-            >
-              {[
-                { key: 'current-month', label: 'Current Month' },
-                { key: 'past-2-months', label: '2 Months' },
-                { key: 'past-3-months', label: '3 Months' },
-                { key: 'past-6-months', label: '6 Months' },
-                { key: 'past-year', label: '1 Year' },
-                { key: 'all-time', label: '5 Years' },
-              ].map((option) => (
-                <button
-                  type="button"
-                  key={option.key}
-                  onClick={() => setDateRange(option.key as DateRange)}
-                  className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all duration-200 ${
-                    dateRange === option.key
-                      ? 'bg-primary-100 dark:bg-slate-600 text-slate-900 dark:text-slate-100 shadow'
-                      : 'text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-white/60 dark:hover:bg-slate-700/60 hover:-translate-y-[1px]'
-                  }`}
-                >
-                  {option.label}
-                </button>
-              ))}
-            </div>
-          </div>
+          <MonthYearSelector value={period} onChange={onPeriodChange} />
         </div>
       </PageLayout>
     </div>

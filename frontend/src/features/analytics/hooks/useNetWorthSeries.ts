@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAccountFilter } from '../../../hooks/useAccountFilter';
 import { AnalyticsService } from '../../../services/AnalyticsService';
-import { computeDateRange, type DateRangeKey } from '../../../utils/dateRanges';
 
 export type NetWorthPoint = { date: string; value: number };
 
@@ -15,7 +14,25 @@ export type UseNetWorthSeriesResult = {
   reload: () => Promise<void>;
 };
 
-export function useNetWorthSeries(range: DateRangeKey): UseNetWorthSeriesResult {
+const formatDate = (date: Date) => {
+  const year = String(date.getFullYear()).padStart(4, '0');
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const getHistoricalNetWorthRange = () => {
+  const now = new Date();
+  const start = new Date(0);
+  start.setFullYear(now.getFullYear() - 5, now.getMonth(), now.getDate());
+  start.setHours(0, 0, 0, 0);
+  return {
+    start: formatDate(start),
+    end: formatDate(now),
+  };
+};
+
+export function useNetWorthSeries(): UseNetWorthSeriesResult {
   const [series, setSeries] = useState<NetWorthPoint[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -31,7 +48,7 @@ export function useNetWorthSeries(range: DateRangeKey): UseNetWorthSeriesResult 
   const abortRef = useRef<AbortController | null>(null);
   const hasLoadedRef = useRef(false);
 
-  const { start, end } = useMemo(() => computeDateRange(range), [range]);
+  const { start, end } = useMemo(() => getHistoricalNetWorthRange(), []);
 
   const load = useCallback(async () => {
     abortRef.current?.abort();

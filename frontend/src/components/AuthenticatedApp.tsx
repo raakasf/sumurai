@@ -8,6 +8,7 @@ import SettingsPage from '@/views/SettingsPage';
 import TransactionsPage from '@/views/TransactionsPage';
 import { AppLayout } from '../layouts/AppLayout';
 import { GradientShell } from '../ui/primitives';
+import { getCurrentMonthSelection, type MonthYearSelection } from '../utils/dateRanges';
 import { ErrorBoundary } from './ErrorBoundary';
 import Card from './ui/Card';
 
@@ -22,6 +23,7 @@ export function AuthenticatedApp({ onLogout, initialTab }: AuthenticatedAppProps
   const [tab, setTab] = useState<TabKey>(initialTab ?? 'dashboard');
   const [error, setError] = useState<string | null>(null);
   const [transactionAccountId, setTransactionAccountId] = useState<string | null>(null);
+  const [period, setPeriod] = useState<MonthYearSelection>(() => getCurrentMonthSelection());
 
   const openTransactionsForAccount = (accountId: string) => {
     setTransactionAccountId(accountId);
@@ -61,8 +63,14 @@ export function AuthenticatedApp({ onLogout, initialTab }: AuthenticatedAppProps
               exit={{ opacity: 0, y: -16 }}
               transition={{ duration: 0.28, ease: [0.25, 0.1, 0.25, 1] }}
             >
-              {tab === 'dashboard' && <DashboardPage />}
-              {tab === 'transactions' && <TransactionsPage initialAccountId={transactionAccountId} />}
+              {tab === 'dashboard' && <DashboardPage period={period} onPeriodChange={setPeriod} />}
+              {tab === 'transactions' && (
+                <TransactionsPage
+                  initialAccountId={transactionAccountId}
+                  period={period}
+                  onPeriodChange={setPeriod}
+                />
+              )}
               {tab === 'budgets' && <BudgetsPage />}
               {tab === 'accounts' && (
                 <AccountsPage onError={setError} onAccountSelect={openTransactionsForAccount} />

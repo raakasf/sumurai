@@ -6,17 +6,17 @@ import { type TransactionFilters, TransactionService } from '../../../services/T
 import type { Transaction, UserCategory } from '../../../types/api';
 import { formatCategoryName } from '../../../utils/categories';
 import {
-  computeDateRange,
-  type DateRangeKey as DateRangeSelection,
+  computeMonthRange,
+  getCurrentMonthSelection,
+  type MonthYearSelection,
 } from '../../../utils/dateRanges';
 import type { ProviderAccount } from '../../../context/AccountFilterContext';
-
-export type DateRangeKey = DateRangeSelection;
 
 export interface UseTransactionsOptions {
   initialSearch?: string;
   initialCategory?: string | null;
-  initialDateRange?: DateRangeKey;
+  period?: MonthYearSelection;
+  setPeriod?: (period: MonthYearSelection) => void;
   initialAccountId?: string | null;
   pageSize?: number;
 }
@@ -30,8 +30,8 @@ export interface UseTransactionsResult {
   setSearch: (s: string) => void;
   selectedCategory: string | null;
   setSelectedCategory: (c: string | null) => void;
-  dateRange: DateRangeKey;
-  setDateRange: (r: DateRangeKey) => void;
+  period: MonthYearSelection;
+  setPeriod: (period: MonthYearSelection) => void;
   accountOptions: ProviderAccount[];
   selectedAccountId: string | null;
   setSelectedAccountId: (accountId: string | null) => void;
@@ -54,7 +54,8 @@ export function useTransactions(options: UseTransactionsOptions = {}): UseTransa
   const {
     initialSearch = '',
     initialCategory = null,
-    initialDateRange = 'current-month',
+    period: controlledPeriod,
+    setPeriod: controlledSetPeriod,
     initialAccountId = null,
     pageSize = 10,
   } = options;
@@ -64,10 +65,15 @@ export function useTransactions(options: UseTransactionsOptions = {}): UseTransa
   const [all, setAll] = useState<Transaction[]>([]);
   const [search, setSearch] = useState(initialSearch);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(initialCategory);
-  const [dateRange, setDateRange] = useState<DateRangeKey>(initialDateRange);
+  const [uncontrolledPeriod, setUncontrolledPeriod] = useState<MonthYearSelection>(() =>
+    getCurrentMonthSelection()
+  );
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(initialAccountId);
   const [currentPage, setCurrentPage] = useState(1);
   const [userCategories, setUserCategories] = useState<UserCategory[]>([]);
+  const period = controlledPeriod ?? uncontrolledPeriod;
+  const setPeriod = controlledSetPeriod ?? setUncontrolledPeriod;
+  const monthRange = useMemo(() => computeMonthRange(period), [period]);
 
   const {
     selectedAccountIds,
@@ -106,6 +112,8 @@ export function useTransactions(options: UseTransactionsOptions = {}): UseTransa
       } else if (!isAllAccountsSelected && selectedAccountIds.length > 0) {
         filters.accountIds = selectedAccountIds;
       }
+      filters.startDate = monthRange.start;
+      filters.endDate = monthRange.end;
       const txns = await TransactionService.getTransactions(filters);
       setAll(txns);
     } catch (error: unknown) {
@@ -119,7 +127,15 @@ export function useTransactions(options: UseTransactionsOptions = {}): UseTransa
     } finally {
       setIsLoading(false);
     }
-  }, [accountsLoading, isAllAccountsSelected, selectedAccountIds, selectedAccountId, allAccountIds]);
+  }, [
+    accountsLoading,
+    isAllAccountsSelected,
+    selectedAccountIds,
+    selectedAccountId,
+    allAccountIds,
+    monthRange.start,
+    monthRange.end,
+  ]);
 
   useEffect(() => {
     load();
@@ -199,33 +215,44 @@ export function useTransactions(options: UseTransactionsOptions = {}): UseTransa
     return formatCategoryName(t.category.primary);
   }, []);
 
+  const categoryOptionItems = useMemo(() => {
+    const criteria: FilterCriteria = {
+      search: debouncedSearch.trim(),
+      dateRange: { start: monthRange.start, end: monthRange.end },
+    };
+    return TransactionFilter.filter(all, criteria);
+  }, [all, debouncedSearch, monthRange.start, monthRange.end]);
+
   const filtered = useMemo(() => {
-    const computedRange = dateRange === 'all-time' ? {} : computeDateRange(dateRange);
     const criteria: FilterCriteria = {
       search: debouncedSearch.trim(),
       category: selectedCategory || undefined,
-      dateRange:
-        computedRange.start && computedRange.end
-          ? { start: computedRange.start, end: computedRange.end }
-          : undefined,
+      dateRange: { start: monthRange.start, end: monthRange.end },
     };
     return TransactionFilter.filter(all, criteria);
-  }, [all, debouncedSearch, selectedCategory, dateRange]);
+  }, [all, debouncedSearch, selectedCategory, monthRange.start, monthRange.end]);
 
-  const categories = useMemo(() => {
+  const availableCategories = useMemo(() => {
     const names = new Set<string>();
-    for (const t of filtered) {
+    for (const t of categoryOptionItems) {
       const name = resolveCategoryLabel(t) || 'Uncategorized';
       if (name) names.add(name);
     }
     return Array.from(names).sort((a, b) => a.localeCompare(b));
-  }, [filtered, resolveCategoryLabel]);
+  }, [categoryOptionItems, resolveCategoryLabel]);
+
+  const categories = useMemo(() => {
+    if (!selectedCategory) {
+      return availableCategories;
+    }
+    return availableCategories.includes(selectedCategory) ? [selectedCategory] : [];
+  }, [availableCategories, selectedCategory]);
 
   useEffect(() => {
-    if (selectedCategory && !categories.includes(selectedCategory)) {
+    if (selectedCategory && !availableCategories.includes(selectedCategory)) {
       setSelectedCategory(null);
     }
-  }, [categories, selectedCategory]);
+  }, [availableCategories, selectedCategory]);
 
   useEffect(() => {
     if (
@@ -247,7 +274,7 @@ export function useTransactions(options: UseTransactionsOptions = {}): UseTransa
   // biome-ignore lint/correctness/useExhaustiveDependencies: specific filters should reset pagination
   useEffect(() => {
     setCurrentPage(1);
-  }, [selectedCategory, debouncedSearch, dateRange, selectedAccountIds, selectedAccountId]);
+  }, [selectedCategory, debouncedSearch, period, selectedAccountIds, selectedAccountId]);
 
   useEffect(() => {
     if (currentPage > totalPages) setCurrentPage(totalPages);
@@ -262,8 +289,8 @@ export function useTransactions(options: UseTransactionsOptions = {}): UseTransa
     setSearch,
     selectedCategory,
     setSelectedCategory,
-    dateRange,
-    setDateRange,
+    period,
+    setPeriod,
     accountOptions,
     selectedAccountId,
     setSelectedAccountId,

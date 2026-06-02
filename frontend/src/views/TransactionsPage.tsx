@@ -1,8 +1,9 @@
-import { AlertTriangle, ReceiptText, RefreshCcw, TrendingUp } from 'lucide-react';
+import { AlertTriangle, ReceiptText, RefreshCcw, ShoppingBag, TrendingUp } from 'lucide-react';
 import type React from 'react';
 import { useMemo } from 'react';
 import { cn } from '@/ui/primitives';
 import type { ProviderAccount } from '@/context/AccountFilterContext';
+import MonthYearSelector from '../components/MonthYearSelector';
 import HeroStatCard from '../components/widgets/HeroStatCard';
 import TransactionsFilters from '../features/transactions/components/TransactionsFilters';
 import TransactionsTable from '../features/transactions/components/TransactionsTable';
@@ -10,10 +11,13 @@ import { useTransactions } from '../features/transactions/hooks/useTransactions'
 import { useCurrency } from '../hooks/useCurrency';
 import { PageLayout } from '../layouts/PageLayout';
 import { formatCategoryName } from '../utils/categories';
-import { getDisplayAmount } from '../utils/transactionAmounts';
+import type { MonthYearSelection } from '../utils/dateRanges';
+import { getDisplayAmount, isSpendingTransaction } from '../utils/transactionAmounts';
 
 interface TransactionsPageProps {
   initialAccountId?: string | null;
+  period: MonthYearSelection;
+  onPeriodChange: (period: MonthYearSelection) => void;
 }
 
 const formatAccountOptionLabel = (account: ProviderAccount) => {
@@ -25,7 +29,11 @@ const formatAccountOptionTitle = (account: ProviderAccount) => {
   return `${account.institution_name} - ${account.name}${mask}`;
 };
 
-const TransactionsPage: React.FC<TransactionsPageProps> = ({ initialAccountId = null }) => {
+const TransactionsPage: React.FC<TransactionsPageProps> = ({
+  initialAccountId = null,
+  period,
+  onPeriodChange,
+}) => {
   const { format } = useCurrency();
   const {
     isLoading,
@@ -36,8 +44,8 @@ const TransactionsPage: React.FC<TransactionsPageProps> = ({ initialAccountId = 
     setSearch,
     selectedCategory,
     setSelectedCategory,
-    dateRange,
-    setDateRange,
+    period: selectedPeriod,
+    setPeriod,
     accountOptions,
     selectedAccountId,
     setSelectedAccountId,
@@ -52,7 +60,7 @@ const TransactionsPage: React.FC<TransactionsPageProps> = ({ initialAccountId = 
     createCategoryAndAssign,
     createCategoryRule,
     deleteUserCategory,
-  } = useTransactions({ pageSize: 8, initialAccountId });
+  } = useTransactions({ pageSize: 8, initialAccountId, period, setPeriod: onPeriodChange });
 
   // Pills overflow handled within HeroStatCard
 
@@ -60,6 +68,11 @@ const TransactionsPage: React.FC<TransactionsPageProps> = ({ initialAccountId = 
     const totalCount = transactions.length;
     const totalShown = transactions.reduce((sum, t) => sum + getDisplayAmount(t), 0);
     const totalVolume = transactions.reduce((sum, t) => sum + Math.abs(getDisplayAmount(t)), 0);
+    const spendingTransactions = transactions.filter(isSpendingTransaction);
+    const totalSpent = spendingTransactions.reduce(
+      (sum, t) => sum + Math.abs(getDisplayAmount(t)),
+      0
+    );
 
     const avgTransaction = totalCount > 0 ? totalVolume / totalCount : 0;
 
@@ -108,6 +121,8 @@ const TransactionsPage: React.FC<TransactionsPageProps> = ({ initialAccountId = 
     return {
       totalCount,
       totalShown,
+      totalSpent,
+      spendingCount: spendingTransactions.length,
       avgTransaction,
       largestTransaction,
       recurringCount,
@@ -126,7 +141,7 @@ const TransactionsPage: React.FC<TransactionsPageProps> = ({ initialAccountId = 
         subtitle="Search and filter transactions across all connected accounts."
         error={error}
         stats={
-          <div className={cn('grid', 'gap-3', 'sm:grid-cols-2', 'lg:grid-cols-4')}>
+          <div className={cn('grid', 'gap-3', 'sm:grid-cols-2', 'lg:grid-cols-5')}>
             <HeroStatCard
               index={1}
               title="Total shown"
@@ -138,6 +153,17 @@ const TransactionsPage: React.FC<TransactionsPageProps> = ({ initialAccountId = 
 
             <HeroStatCard
               index={2}
+              title="Total spent"
+              icon={<ShoppingBag className={cn('h-4', 'w-4')} />}
+              value={format(stats.totalSpent)}
+              subtext={`${stats.spendingCount} ${
+                stats.spendingCount === 1 ? 'spend item' : 'spend items'
+              }`}
+              accent="rose"
+            />
+
+            <HeroStatCard
+              index={3}
               title="Average size"
               icon={<TrendingUp className={cn('h-4', 'w-4')} />}
               value={format(stats.avgTransaction)}
@@ -145,7 +171,7 @@ const TransactionsPage: React.FC<TransactionsPageProps> = ({ initialAccountId = 
             />
 
             <HeroStatCard
-              index={3}
+              index={4}
               title="Largest size"
               icon={<AlertTriangle className={cn('h-4', 'w-4')} />}
               value={
@@ -167,7 +193,7 @@ const TransactionsPage: React.FC<TransactionsPageProps> = ({ initialAccountId = 
             />
 
             <HeroStatCard
-              index={4}
+              index={5}
               title="Recurring"
               icon={<RefreshCcw className={cn('h-4', 'w-4')} />}
               value={stats.recurringCount}
@@ -244,8 +270,6 @@ const TransactionsPage: React.FC<TransactionsPageProps> = ({ initialAccountId = 
                     categories={categories}
                     selectedCategory={selectedCategory}
                     onSelectCategory={setSelectedCategory}
-                    dateRange={dateRange}
-                    onSelectDateRange={setDateRange}
                     showSearch={false}
                     showCategories
                   />
@@ -257,8 +281,6 @@ const TransactionsPage: React.FC<TransactionsPageProps> = ({ initialAccountId = 
                     categories={categories}
                     selectedCategory={selectedCategory}
                     onSelectCategory={setSelectedCategory}
-                    dateRange={dateRange}
-                    onSelectDateRange={setDateRange}
                     showSearch
                     showCategories={false}
                   />
@@ -410,30 +432,7 @@ const TransactionsPage: React.FC<TransactionsPageProps> = ({ initialAccountId = 
             )}
           </div>
         </div>
-        <div
-          className={cn(
-            'fixed',
-            'left-0',
-            'right-0',
-            'z-50',
-            'flex',
-            'justify-center'
-          )}
-          style={{ bottom: 24 }}
-        >
-          <TransactionsFilters
-            search={search}
-            onSearch={setSearch}
-            categories={categories}
-            selectedCategory={selectedCategory}
-            onSelectCategory={setSelectedCategory}
-            dateRange={dateRange}
-            onSelectDateRange={setDateRange}
-            showSearch={false}
-            showCategories={false}
-            showDateRange
-          />
-        </div>
+        <MonthYearSelector value={selectedPeriod} onChange={setPeriod} />
       </PageLayout>
     </div>
   );

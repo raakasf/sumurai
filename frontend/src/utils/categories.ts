@@ -19,6 +19,8 @@ export function isSpendingExcludedCategory(category: string | undefined | null):
     'creditcardbills',
     'creditcardpayment',
     'creditcardpayments',
+    'investment',
+    'investments',
     'transferin',
     'transferout',
   ].includes(key);
