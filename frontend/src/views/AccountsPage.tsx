@@ -1,11 +1,22 @@
 import { AnimatePresence } from 'framer-motion';
-import { Building2, Clock, CreditCard, Home, Pencil, Plus, RefreshCw, Trash2, X } from 'lucide-react';
+import {
+  Building2,
+  ChevronDown,
+  Clock,
+  CreditCard,
+  Home,
+  Landmark,
+  Pencil,
+  Plus,
+  RefreshCw,
+  Trash2,
+  X,
+} from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Button, cn, GlassCard, Input } from '@/ui/primitives';
 import { getProviderCardConfig } from '@/utils/providerCards';
 import { Toast } from '../components/Toast';
 import HeroStatCard from '../components/widgets/HeroStatCard';
-import ConnectButton from '../features/plaid/components/ConnectButton';
 import ConnectionsList from '../features/plaid/components/ConnectionsList';
 import { usePlaidLinkFlow } from '../features/plaid/hooks/usePlaidLinkFlow';
 import {
@@ -124,6 +135,8 @@ const emptyManualPropertyForm: ManualPropertyFormState = {
   balance_current: '',
 };
 
+const connectProviders: FinancialProvider[] = ['plaid', 'teller'];
+
 interface AccountsPageProps {
   onError?: (message: string | null) => void;
   onAccountSelect?: (accountId: string) => void;
@@ -151,6 +164,9 @@ const AccountsPage = ({ onError, onAccountSelect }: AccountsPageProps) => {
   const [manualRateLoading, setManualRateLoading] = useState(false);
   const [manualRateError, setManualRateError] = useState<string | null>(null);
   const [manualRateDate, setManualRateDate] = useState<string | null>(null);
+  const [connectMenuOpen, setConnectMenuOpen] = useState(false);
+  const connectMenuRef = useRef<HTMLDivElement | null>(null);
+  const pendingConnectProviderRef = useRef<FinancialProvider | null>(null);
   const autoSyncAttemptedRef = useRef(false);
 
   const loadManualInvestments = useCallback(async () => {
@@ -184,6 +200,8 @@ const AccountsPage = ({ onError, onAccountSelect }: AccountsPageProps) => {
     onError,
     enabled: selectedProvider === 'teller',
   });
+  const plaidConnect = plaidFlow.connect;
+  const tellerConnect = tellerFlow.connect;
 
   const flow = selectedProvider === 'teller' ? tellerFlow : plaidFlow;
 
@@ -213,6 +231,58 @@ const AccountsPage = ({ onError, onAccountSelect }: AccountsPageProps) => {
       }
     },
     [onError, providerInfo]
+  );
+
+  useEffect(() => {
+    if (!connectMenuOpen) return;
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!connectMenuRef.current?.contains(event.target as Node)) {
+        setConnectMenuOpen(false);
+      }
+    };
+
+    document.addEventListener('pointerdown', handlePointerDown);
+    return () => document.removeEventListener('pointerdown', handlePointerDown);
+  }, [connectMenuOpen]);
+
+  useEffect(() => {
+    const pendingProvider = pendingConnectProviderRef.current;
+    if (!pendingProvider || selectedProvider !== pendingProvider || selectingProvider !== null) {
+      return;
+    }
+
+    pendingConnectProviderRef.current = null;
+    const nextConnect = pendingProvider === 'teller' ? tellerConnect : plaidConnect;
+    void nextConnect().catch((err) => {
+      console.warn(`Failed to launch ${pendingProvider} connect`, err);
+    });
+  }, [plaidConnect, selectedProvider, selectingProvider, tellerConnect]);
+
+  const handleConnectProvider = useCallback(
+    async (provider: FinancialProvider) => {
+      setConnectMenuOpen(false);
+      if (provider === 'teller' && !providerInfo.tellerApplicationId) {
+        onError?.('Missing Teller application ID');
+        return;
+      }
+
+      if (selectedProvider === provider) {
+        await (provider === 'teller' ? tellerConnect() : plaidConnect());
+        return;
+      }
+
+      pendingConnectProviderRef.current = provider;
+      await handleProviderSelect(provider);
+    },
+    [
+      handleProviderSelect,
+      onError,
+      plaidConnect,
+      providerInfo.tellerApplicationId,
+      selectedProvider,
+      tellerConnect,
+    ]
   );
 
   const resetManualForm = useCallback(() => {
@@ -485,6 +555,7 @@ const AccountsPage = ({ onError, onAccountSelect }: AccountsPageProps) => {
   useEffect(() => {
     if (
       autoSyncAttemptedRef.current ||
+      selectedProvider !== 'plaid' ||
       flowLoading ||
       syncingAll ||
       summary.connectedInstitutions === 0
@@ -496,7 +567,7 @@ const AccountsPage = ({ onError, onAccountSelect }: AccountsPageProps) => {
     void syncAll().catch((err) => {
       console.warn('Auto sync on account refresh failed', err);
     });
-  }, [flowLoading, summary.connectedInstitutions, syncAll, syncingAll]);
+  }, [flowLoading, selectedProvider, summary.connectedInstitutions, syncAll, syncingAll]);
 
   if (providerLoading) {
     return (
@@ -739,10 +810,9 @@ const AccountsPage = ({ onError, onAccountSelect }: AccountsPageProps) => {
       ? 'Plaid keeps credentials read-only and disconnectable anytime.'
       : 'Teller connections respect your API keys and can be rotated from your Teller dashboard.';
 
-  const connectDisabled =
-    flowLoading ||
-    selectingProvider !== null ||
-    (selectedProvider === 'teller' && !providerInfo.tellerApplicationId);
+  const primaryConnectLabel =
+    selectedProvider === 'teller' ? 'Launch Teller Connect' : 'Launch Plaid Link';
+  const connectDisabled = flowLoading || selectingProvider !== null;
 
   const hasConnections = summary.institutions > 0;
   const lastSyncValue = syncingAll
@@ -758,6 +828,10 @@ const AccountsPage = ({ onError, onAccountSelect }: AccountsPageProps) => {
 
   const syncButtonClasses =
     'inline-flex items-center gap-2 rounded-full border border-white/60 bg-white/85 px-5 py-2 text-sm font-semibold text-[#0f172a] shadow-[0_18px_48px_-32px_rgba(15,23,42,0.45)] transition-all duration-200 hover:-translate-y-[1px] hover:border-[#93c5fd] hover:text-[#0f172a] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0ea5e9] focus-visible:ring-offset-2 focus-visible:ring-offset-white disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0 disabled:hover:shadow-none dark:border-[#334155] dark:bg-[#1e293b]/90 dark:text-[#cbd5e1] dark:hover:border-[#38bdf8] dark:hover:text-white dark:focus-visible:ring-offset-slate-900';
+  const connectButtonClasses =
+    'inline-flex items-center gap-2 rounded-full bg-gradient-to-r from-[#0ea5e9] via-[#38bdf8] to-[#a78bfa] px-5 py-2 text-sm font-semibold whitespace-nowrap text-white shadow-[0_22px_60px_-32px_rgba(14,165,233,0.78)] transition-all duration-200 hover:-translate-y-[1px] hover:shadow-[0_28px_70px_-35px_rgba(14,165,233,0.85)] focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 focus-visible:ring-offset-2 focus-visible:ring-offset-white active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0 disabled:hover:shadow-none dark:shadow-[0_22px_60px_-32px_rgba(56,189,248,0.65)] dark:focus-visible:ring-offset-slate-900';
+  const menuItemClasses =
+    'flex w-full items-center gap-3 px-4 py-3 text-left text-sm font-semibold text-slate-700 transition-colors duration-150 hover:bg-sky-50 hover:text-slate-950 focus:bg-sky-50 focus:text-slate-950 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 dark:text-slate-200 dark:hover:bg-sky-500/10 dark:hover:text-white dark:focus:bg-sky-500/10 dark:focus:text-white';
 
   const pendingInstitutions = Math.max(0, summary.institutions - summary.connectedInstitutions);
 
@@ -774,9 +848,88 @@ const AccountsPage = ({ onError, onAccountSelect }: AccountsPageProps) => {
           {syncingAll ? 'Syncing...' : 'Sync all'}
         </button>
       )}
-      <ConnectButton onClick={connect} disabled={connectDisabled}>
-        {selectedProvider === 'teller' ? 'Launch Teller Connect' : 'Add account'}
-      </ConnectButton>
+      <div ref={connectMenuRef} className={cn('relative')}>
+        <button
+          type="button"
+          onClick={() => setConnectMenuOpen((open) => !open)}
+          disabled={connectDisabled}
+          className={connectButtonClasses}
+          aria-haspopup="menu"
+          aria-expanded={connectMenuOpen}
+        >
+          <Plus className={cn('h-4', 'w-4')} />
+          <span>{primaryConnectLabel}</span>
+          <ChevronDown
+            className={cn(
+              'h-4',
+              'w-4',
+              'transition-transform',
+              connectMenuOpen && 'rotate-180'
+            )}
+          />
+        </button>
+        {connectMenuOpen && (
+          <div
+            role="menu"
+            className={cn(
+              'absolute',
+              'right-0',
+              'z-30',
+              'mt-2',
+              'w-64',
+              'overflow-hidden',
+              'rounded-2xl',
+              'border',
+              'border-white/60',
+              'bg-white/95',
+              'py-1',
+              'shadow-[0_24px_70px_-35px_rgba(15,23,42,0.5)]',
+              'backdrop-blur-xl',
+              'dark:border-white/10',
+              'dark:bg-[#111827]/95',
+              'dark:shadow-[0_24px_70px_-35px_rgba(2,6,23,0.8)]'
+            )}
+          >
+            {connectProviders.map((provider) => {
+              const details = getProviderCardConfig(provider);
+              const isTellerMissingConfig = provider === 'teller' && !providerInfo.tellerApplicationId;
+              return (
+                <button
+                  key={provider}
+                  type="button"
+                  role="menuitem"
+                  onClick={() => handleConnectProvider(provider)}
+                  disabled={selectingProvider !== null || isTellerMissingConfig}
+                  className={menuItemClasses}
+                  title={isTellerMissingConfig ? 'Missing Teller application ID' : undefined}
+                >
+                  {provider === 'teller' ? (
+                    <Landmark className={cn('h-4', 'w-4', 'text-sky-500')} />
+                  ) : (
+                    <Building2 className={cn('h-4', 'w-4', 'text-sky-500')} />
+                  )}
+                  <span className={cn('flex', 'min-w-0', 'flex-col')}>
+                    <span className={cn('truncate')}>
+                      {provider === 'teller' ? 'Launch Teller Connect' : 'Launch Plaid Link'}
+                    </span>
+                    <span
+                      className={cn(
+                        'truncate',
+                        'text-xs',
+                        'font-medium',
+                        'text-slate-500',
+                        'dark:text-slate-400'
+                      )}
+                    >
+                      {selectingProvider === provider ? 'Switching provider...' : details.title}
+                    </span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
     </>
   );
 
@@ -1219,7 +1372,7 @@ const AccountsPage = ({ onError, onAccountSelect }: AccountsPageProps) => {
 
         <ConnectionsList
           banks={banks}
-          onConnect={connect}
+          onConnect={() => (selectedProvider ? handleConnectProvider(selectedProvider) : connect())}
           onSync={syncOne}
           onDisconnect={disconnect}
           onAccountSelect={onAccountSelect}

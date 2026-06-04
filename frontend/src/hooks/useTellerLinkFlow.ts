@@ -31,6 +31,38 @@ interface LoadResult {
   connectionIds: string[];
 }
 
+const tellerSyncCooldownMs = 15 * 60 * 1000;
+const tellerSyncDelayMs = 4000;
+
+const wait = (ms: number): Promise<void> => new Promise((resolve) => window.setTimeout(resolve, ms));
+
+function isRecentlySynced(lastSyncAt: string | null | undefined): boolean {
+  if (!lastSyncAt) return false;
+
+  const lastSyncTime = Date.parse(lastSyncAt);
+  return !Number.isNaN(lastSyncTime) && Date.now() - lastSyncTime < tellerSyncCooldownMs;
+}
+
+async function syncTellerConnectionsSequentially(connectionIds: string[]): Promise<number> {
+  let syncedCount = 0;
+
+  for (const [index, connectionId] of connectionIds.entries()) {
+    if (index > 0) {
+      await wait(tellerSyncDelayMs);
+    }
+
+    try {
+      await TellerService.syncTransactions(connectionId);
+      syncedCount += 1;
+    } catch (error) {
+      console.warn('Failed to sync Teller connection', connectionId, error);
+      break;
+    }
+  }
+
+  return syncedCount;
+}
+
 export function useTellerLinkFlow(options: UseTellerLinkFlowOptions): UseTellerLinkFlowResult {
   const { applicationId, environment = 'development', onError, enabled = true } = options;
 
@@ -41,7 +73,6 @@ export function useTellerLinkFlow(options: UseTellerLinkFlowOptions): UseTellerL
   const [syncingAll, setSyncingAll] = useState(false);
   const retryTimeoutRef = useRef<number | null>(null);
   const retryAttemptsRef = useRef(0);
-  const hasTriggeredFollowupSyncRef = useRef(false);
 
   const handleError = useCallback(
     (message: string) => {
@@ -207,21 +238,12 @@ export function useTellerLinkFlow(options: UseTellerLinkFlowOptions): UseTellerL
   }, [clearError, enabled, handleError]);
 
   const loadConnectionsWithRetry = useCallback(async () => {
-    const { hasPopulatedBalances, connectionIds } = await loadConnections();
+    const { hasPopulatedBalances } = await loadConnections();
     if (retryTimeoutRef.current) {
       window.clearTimeout(retryTimeoutRef.current);
     }
-    if (!hasPopulatedBalances && connectionIds.length > 0 && !hasTriggeredFollowupSyncRef.current) {
-      hasTriggeredFollowupSyncRef.current = true;
-      try {
-        await Promise.all(connectionIds.map((id) => TellerService.syncTransactions(id)));
-      } catch (err) {
-        console.warn('Follow-up Teller sync failed', err);
-      }
-    }
     if (hasPopulatedBalances || retryAttemptsRef.current >= 5) {
       retryAttemptsRef.current = 0;
-      hasTriggeredFollowupSyncRef.current = false;
       retryTimeoutRef.current = null;
       return;
     }
@@ -257,7 +279,7 @@ export function useTellerLinkFlow(options: UseTellerLinkFlowOptions): UseTellerL
       handleError('Missing Teller application ID');
       return;
     }
-    loadConnections();
+    void loadConnections();
   }, [applicationId, enabled, loadConnections, handleError, clearError]);
 
   const connect = useCallback(async () => {
@@ -271,10 +293,8 @@ export function useTellerLinkFlow(options: UseTellerLinkFlowOptions): UseTellerL
       return;
     }
     if (!ready) {
-      handleError('Teller Connect is not ready yet');
-      return;
+      setToast('Preparing Teller Connect...');
     }
-
     open();
   }, [applicationId, clearError, handleError, open, ready, enabled]);
 
@@ -306,17 +326,28 @@ export function useTellerLinkFlow(options: UseTellerLinkFlowOptions): UseTellerL
     setSyncingAll(true);
     try {
       const ids = connections
+        .filter((connection) => !isRecentlySynced(connection.lastSyncAt))
         .map((connection) => connection.connectionId)
         .filter((id): id is string => Boolean(id));
 
       if (ids.length === 0) {
-        setToast('No Teller connections to sync');
+        setToast(
+          connections.length > 0
+            ? 'Teller connections were synced recently'
+            : 'No Teller connections to sync'
+        );
         return;
       }
 
-      await Promise.all(ids.map((id) => TellerService.syncTransactions(id)));
+      const syncedCount = await syncTellerConnectionsSequentially(ids);
       await loadConnections();
-      setToast('Sync started for all Teller connections');
+      if (syncedCount === ids.length) {
+        setToast('Sync started for all Teller connections');
+      } else if (syncedCount > 0) {
+        setToast('Some Teller connections synced; retry later for the rest');
+      } else {
+        handleError('Failed to sync Teller connections');
+      }
     } catch (err) {
       console.warn('Failed to sync Teller connections', err);
       handleError('Failed to sync Teller connections');

@@ -59,6 +59,7 @@ fn create_test_transaction_with_account(
         account_name: "Test Account".to_string(),
         account_type: "depository".to_string(),
         account_mask: Some("1234".to_string()),
+        provider: Some("plaid".to_string()),
         custom_category: custom_category.map(str::to_string),
         rule_category: None,
     }

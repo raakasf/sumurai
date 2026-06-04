@@ -19,7 +19,6 @@ pub struct RealPlaidClient {
 impl RealPlaidClient {
     pub fn new(client_id: String, secret: String, environment: String) -> Self {
         let base_url = match environment.to_lowercase().as_str() {
-            "development" => "https://development.plaid.com",
             "production" => "https://production.plaid.com",
             _ => "https://sandbox.plaid.com",
         };

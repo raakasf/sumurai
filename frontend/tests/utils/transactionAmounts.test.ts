@@ -1,25 +1,45 @@
-import { getDisplayAmount } from '@/utils/transactionAmounts';
+import { describe, expect, it } from '@jest/globals';
 import type { Transaction } from '@/types/api';
+import { getDisplayAmount, isSpendingTransaction } from '@/utils/transactionAmounts';
 
 const transaction = (overrides: Partial<Transaction>): Transaction => ({
-  id: 'txn-1',
-  date: '2026-05-03',
-  name: 'Test',
-  amount: 0,
-  category: { primary: 'OTHER' },
-  account_name: 'Account',
-  account_type: 'depository',
+  id: 'txn_1',
+  account_id: 'acc_1',
+  date: '2026-06-03',
+  name: 'Best Buy',
+  merchant: 'Best Buy',
+  amount: 42.99,
+  category: { primary: 'GENERAL_MERCHANDISE' },
+  account_name: 'Best Buy Credit Card',
+  account_type: 'credit',
+  provider: 'plaid',
   ...overrides,
 });
 
-describe('transaction amount utilities', () => {
-  it('keeps credit card amounts signed as displayed even when backend returns strings', () => {
-    expect(getDisplayAmount(transaction({ account_type: 'credit', amount: '-35.00' as unknown as number }))).toBe(-35);
-    expect(getDisplayAmount(transaction({ account_type: 'credit', amount: '12.50' as unknown as number }))).toBe(12.5);
+describe('transactionAmounts', () => {
+  it('renders positive Plaid credit-card purchases as spending', () => {
+    const purchase = transaction({ amount: 42.99, account_type: 'credit', provider: 'plaid' });
+
+    expect(getDisplayAmount(purchase)).toBe(-42.99);
+    expect(isSpendingTransaction(purchase)).toBe(true);
   });
 
-  it('flips depository amounts to match the transaction table display', () => {
-    expect(getDisplayAmount(transaction({ account_type: 'depository', amount: '42.25' as unknown as number }))).toBe(-42.25);
-    expect(getDisplayAmount(transaction({ account_type: 'depository', amount: '-1500.00' as unknown as number }))).toBe(1500);
+  it('renders negative Teller credit-card purchases as spending', () => {
+    const purchase = transaction({
+      amount: -25,
+      account_name: 'Prime Visa',
+      account_type: 'credit',
+      provider: 'teller',
+    });
+
+    expect(getDisplayAmount(purchase)).toBe(-25);
+    expect(isSpendingTransaction(purchase)).toBe(true);
+  });
+
+  it('renders negative stored Plaid credits as income', () => {
+    const payment = transaction({ amount: -25, account_type: 'credit', provider: 'plaid' });
+
+    expect(getDisplayAmount(payment)).toBe(25);
+    expect(isSpendingTransaction(payment)).toBe(false);
   });
 });

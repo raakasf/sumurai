@@ -188,6 +188,7 @@ export function useTellerConnect(options: UseTellerConnectOptions): UseTellerCon
   const onConnectedRef = useRef<UseTellerConnectOptions['onConnected']>(onConnected);
   const onExitRef = useRef<UseTellerConnectOptions['onExit']>(onExit);
   const onErrorRef = useRef<UseTellerConnectOptions['onError']>(onError);
+  const pendingOpenRef = useRef(false);
 
   useEffect(() => {
     onConnectedRef.current = onConnected;
@@ -227,12 +228,11 @@ export function useTellerConnect(options: UseTellerConnectOptions): UseTellerCon
           selectAccount: 'multiple',
           onSuccess: async (enrollment) => {
             try {
-              const result = await gateway.storeEnrollment({
+              await gateway.storeEnrollment({
                 access_token: enrollment.accessToken,
                 enrollment_id: enrollment.enrollment.id,
                 institution_name: enrollment.enrollment.institution.name,
               });
-              await gateway.syncTransactions(result.connection_id);
               await onConnectedRef.current?.();
             } catch (err) {
               console.warn('Failed to persist Teller enrollment', err);
@@ -247,6 +247,10 @@ export function useTellerConnect(options: UseTellerConnectOptions): UseTellerCon
 
         createdInstance = tellerInstance;
         setInstance(tellerInstance);
+        if (pendingOpenRef.current) {
+          pendingOpenRef.current = false;
+          tellerInstance.open();
+        }
       } catch (err) {
         console.warn('Failed to initialize Teller Connect', err);
         if (isActive) {
@@ -267,7 +271,11 @@ export function useTellerConnect(options: UseTellerConnectOptions): UseTellerCon
   }, [applicationId, environment, gateway]);
 
   const open = useCallback(() => {
-    instance?.open();
+    if (instance) {
+      instance.open();
+      return;
+    }
+    pendingOpenRef.current = true;
   }, [instance]);
 
   return {

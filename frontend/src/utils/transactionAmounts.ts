@@ -7,10 +7,13 @@ export const getNumericAmount = (transaction: Transaction): number => {
 };
 
 export const getDisplayAmount = (transaction: Transaction): number => {
+  const amount = getNumericAmount(transaction);
   const accountType = transaction.account_type?.toLowerCase() ?? '';
   const isCreditAccount = accountType === 'credit' || accountType === 'credit card';
-  const amount = getNumericAmount(transaction);
-  return isCreditAccount ? amount : -amount;
+  if (transaction.provider === 'teller' && isCreditAccount) {
+    return amount;
+  }
+  return -amount;
 };
 
 const SPENDING_EXCLUDED_MERCHANT_PREFIXES = ['md dir ach contrib'];

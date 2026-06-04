@@ -1,5 +1,4 @@
 import { ChevronDown, RefreshCw } from 'lucide-react';
-import { useRef } from 'react';
 import { type DisplayCurrency, SUPPORTED_DISPLAY_CURRENCIES } from '@/context/CurrencyContext';
 import { useCurrency } from '@/hooks/useCurrency';
 import { cn } from '@/ui/primitives';
@@ -20,17 +19,6 @@ const CURRENCY_SYMBOLS: Record<DisplayCurrency, string> = {
 
 export function CurrencySelector({ scrolled }: CurrencySelectorProps) {
   const { currency, loading, error, rate, rateDate, setCurrency, refreshRate } = useCurrency();
-  const selectRef = useRef<HTMLSelectElement>(null);
-
-  const openCurrencyOptions = () => {
-    const select = selectRef.current;
-    if (!select) return;
-
-    select.focus();
-    if ('showPicker' in select) {
-      select.showPicker();
-    }
-  };
 
   const title =
     currency === 'USD'
@@ -90,21 +78,36 @@ export function CurrencySelector({ scrolled }: CurrencySelectorProps) {
       >
         {CURRENCY_SYMBOLS[currency]}
       </span>
+      <span className={cn('pointer-events-none', 'font-semibold')} aria-hidden="true">
+        {currency}
+      </span>
+      <ChevronDown
+        className={cn(
+          'pointer-events-none',
+          'absolute',
+          'right-1.5',
+          'h-4',
+          'w-4',
+          'text-slate-500',
+          'dark:text-slate-300'
+        )}
+        aria-hidden="true"
+      />
       <select
-        ref={selectRef}
         value={currency}
         onChange={(event) => setCurrency(event.target.value as DisplayCurrency)}
         aria-label="Display currency"
+        title={title}
         className={cn(
+          'absolute',
+          'inset-0',
+          'h-full',
+          'w-full',
+          'cursor-pointer',
           'appearance-none',
-          'rounded-lg',
-          'border-0',
-          'bg-transparent',
-          'p-0',
-          'font-semibold',
-          'text-inherit',
+          'opacity-0',
           'focus:outline-none',
-          scrolled ? 'text-xs' : 'text-sm'
+          'disabled:cursor-not-allowed'
         )}
       >
         {SUPPORTED_DISPLAY_CURRENCIES.map((option) => (
@@ -113,39 +116,6 @@ export function CurrencySelector({ scrolled }: CurrencySelectorProps) {
           </option>
         ))}
       </select>
-      <button
-        type="button"
-        onClick={openCurrencyOptions}
-        className={cn(
-          'absolute',
-          'right-0.5',
-          'inline-flex',
-          'h-7',
-          'w-7',
-          'items-center',
-          'justify-center',
-          'rounded-lg',
-          'text-slate-500',
-          'transition-colors',
-          'hover:bg-slate-200',
-          'hover:text-slate-900',
-          'focus:outline-none',
-          'focus-visible:ring-2',
-          'focus-visible:ring-sky-400/80',
-          'dark:text-slate-300',
-          'dark:hover:bg-slate-600',
-          'dark:hover:text-white'
-        )}
-        aria-label="Open currency options"
-        title="Open currency options"
-      >
-        <ChevronDown
-        className={cn(
-          'h-4',
-          'w-4'
-        )}
-      />
-      </button>
       {loading && (
         <RefreshCw
           aria-label="Refreshing currency rate"
@@ -154,6 +124,7 @@ export function CurrencySelector({ scrolled }: CurrencySelectorProps) {
             '-right-6',
             'h-3.5',
             'w-3.5',
+            'z-10',
             'animate-spin',
             'text-slate-500',
             'dark:text-slate-300'
@@ -167,6 +138,7 @@ export function CurrencySelector({ scrolled }: CurrencySelectorProps) {
           className={cn(
             'absolute',
             '-right-7',
+            'z-10',
             'rounded-md',
             'px-1',
             'text-xs',

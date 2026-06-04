@@ -24,6 +24,7 @@ export interface Transaction {
   account_name: string;
   account_type: string;
   account_mask?: string;
+  provider?: FinancialProvider;
   running_balance?: number;
   location?: TransactionLocation;
   custom_category?: string;
