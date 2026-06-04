@@ -1,16 +1,21 @@
+/**
+ * Loads and pages transaction lists.
+ */
+
+import { useQuery } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { type FilterCriteria, TransactionFilter } from '../../../domain/TransactionFilter';
 import { useAccountFilter } from '../../../hooks/useAccountFilter';
-import { CategoryService } from '../../../services/CategoryService';
-import { type TransactionFilters, TransactionService } from '../../../services/TransactionService';
-import type { Transaction, UserCategory } from '../../../types/api';
-import { formatCategoryName } from '../../../utils/categories';
+import { TransactionService } from '../../../services/TransactionService';
+import type { PaginatedTransactionsResponse, Transaction } from '../../../types/api';
+import { accountIdsCacheKey } from '../../../utils/cacheKeys';
 import {
-  computeMonthRange,
-  getCurrentMonthSelection,
-  type MonthYearSelection,
-} from '../../../utils/dateRanges';
-import type { ProviderAccount } from '../../../context/AccountFilterContext';
+  getSessionTransactionsPage,
+  setSessionTransactionsPage,
+} from '../../../utils/sessionPreferences';
+import { useTransactionCategories } from './useTransactionCategories';
+import type { TransactionFilterControl } from './useTransactionFilterState';
+
+export type DateRangeKey = string | undefined;
 
 export interface UseTransactionsOptions {
   initialSearch?: string;
@@ -19,10 +24,12 @@ export interface UseTransactionsOptions {
   setPeriod?: (period: MonthYearSelection) => void;
   initialAccountId?: string | null;
   pageSize?: number;
+  filterControl?: TransactionFilterControl;
 }
 
 export interface UseTransactionsResult {
   isLoading: boolean;
+  loading: boolean;
   error: string | null;
   transactions: Transaction[];
   categories: string[];
@@ -30,50 +37,38 @@ export interface UseTransactionsResult {
   setSearch: (s: string) => void;
   selectedCategory: string | null;
   setSelectedCategory: (c: string | null) => void;
-  period: MonthYearSelection;
-  setPeriod: (period: MonthYearSelection) => void;
-  accountOptions: ProviderAccount[];
-  selectedAccountId: string | null;
-  setSelectedAccountId: (accountId: string | null) => void;
-  // pagination
+  dateRange: DateRangeKey;
+  setDateRange: (r: DateRangeKey) => void;
   currentPage: number;
   setCurrentPage: (p: number) => void;
   pageItems: Transaction[];
   totalItems: number;
+  total: number;
   totalPages: number;
-  // category management
-  userCategories: UserCategory[];
-  updateTransactionCategory: (transactionId: string, categoryName: string) => Promise<void>;
-  resetTransactionCategory: (transactionId: string) => Promise<void>;
-  createCategoryAndAssign: (transactionId: string, name: string) => Promise<void>;
-  createCategoryRule: (transactionId: string, pattern: string, categoryName: string) => Promise<void>;
-  deleteUserCategory: (categoryId: string) => Promise<void>;
+  tableAnimationKey: string;
 }
 
 export function useTransactions(options: UseTransactionsOptions = {}): UseTransactionsResult {
   const {
     initialSearch = '',
     initialCategory = null,
-    period: controlledPeriod,
-    setPeriod: controlledSetPeriod,
-    initialAccountId = null,
+    initialDateRange,
     pageSize = 10,
+    filterControl,
   } = options;
 
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [all, setAll] = useState<Transaction[]>([]);
-  const [search, setSearch] = useState(initialSearch);
-  const [selectedCategory, setSelectedCategory] = useState<string | null>(initialCategory);
-  const [uncontrolledPeriod, setUncontrolledPeriod] = useState<MonthYearSelection>(() =>
-    getCurrentMonthSelection()
+  const [internalSearch, setSearchState] = useState(initialSearch);
+  const [internalSelectedCategory, setSelectedCategoryState] = useState<string | null>(
+    initialCategory
   );
-  const [selectedAccountId, setSelectedAccountId] = useState<string | null>(initialAccountId);
-  const [currentPage, setCurrentPage] = useState(1);
-  const [userCategories, setUserCategories] = useState<UserCategory[]>([]);
-  const period = controlledPeriod ?? uncontrolledPeriod;
-  const setPeriod = controlledSetPeriod ?? setUncontrolledPeriod;
-  const monthRange = useMemo(() => computeMonthRange(period), [period]);
+  const search = filterControl?.search ?? internalSearch;
+  const selectedCategory = filterControl?.selectedCategory ?? internalSelectedCategory;
+  const [dateRange, setDateRangeState] = useState<DateRangeKey>(initialDateRange);
+  const [currentPage, setCurrentPageState] = useState(() => getSessionTransactionsPage() ?? 1);
+  const setCurrentPage = useCallback((page: number) => {
+    setCurrentPageState(page);
+    setSessionTransactionsPage(page);
+  }, []);
 
   const {
     selectedAccountIds,
@@ -83,207 +78,154 @@ export function useTransactions(options: UseTransactionsOptions = {}): UseTransa
     loading: accountsLoading,
   } = useAccountFilter();
 
-  const accountOptions = useMemo(
-    () =>
-      Object.values(accountsByBank)
-        .flat()
-        .filter((account) => account.provider_account_id || account.provider_connection_id)
-        .sort((a, b) => {
-          const bankCompare = a.institution_name.localeCompare(b.institution_name);
-          return bankCompare !== 0 ? bankCompare : a.name.localeCompare(b.name);
-        }),
-    [accountsByBank]
-  );
-
-  const load = useCallback(async () => {
-    if (accountsLoading) {
-      return;
-    }
-    setIsLoading(true);
-    setError(null);
-    try {
-      const filters: TransactionFilters = {};
-      if (allAccountIds.length > 0 && selectedAccountIds.length === 0) {
-        setAll([]);
-        return;
-      }
-      if (selectedAccountId) {
-        filters.accountIds = [selectedAccountId];
-      } else if (!isAllAccountsSelected && selectedAccountIds.length > 0) {
-        filters.accountIds = selectedAccountIds;
-      }
-      filters.startDate = monthRange.start;
-      filters.endDate = monthRange.end;
-      const txns = await TransactionService.getTransactions(filters);
-      setAll(txns);
-    } catch (error: unknown) {
-      const status = getStatus(error);
-      const msg =
-        status === 401
-          ? 'You are not authenticated. Please log in again.'
-          : 'Failed to load transactions.';
-      setError(msg);
-      setAll([]);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [
-    accountsLoading,
-    isAllAccountsSelected,
-    selectedAccountIds,
-    selectedAccountId,
-    allAccountIds,
-    monthRange.start,
-    monthRange.end,
-  ]);
-
-  useEffect(() => {
-    load();
-  }, [load]);
-
-  useEffect(() => {
-    CategoryService.getCategories()
-      .then(setUserCategories)
-      .catch(() => {});
-  }, []);
-
-  useEffect(() => {
-    setCurrentPage(1);
-  }, []);
-
-  const updateTransactionCategory = useCallback(
-    async (transactionId: string, categoryName: string) => {
-      await CategoryService.setTransactionCategory(transactionId, categoryName);
-      setAll((prev) =>
-        prev.map((t) =>
-          t.id === transactionId
-            ? { ...t, custom_category: categoryName, category: { ...t.category, primary: categoryName } }
-            : t
-        )
-      );
-    },
-    []
-  );
-
-  const resetTransactionCategory = useCallback(async (transactionId: string) => {
-    await CategoryService.removeTransactionCategory(transactionId);
-    // Reload to get original provider category
-    await load();
-  }, [load]);
-
-  const createCategoryAndAssign = useCallback(
-    async (transactionId: string, name: string) => {
-      const created = await CategoryService.createCategory(name);
-      setUserCategories((prev) => [...prev, created].sort((a, b) => a.name.localeCompare(b.name)));
-      await CategoryService.setTransactionCategory(transactionId, name);
-      setAll((prev) =>
-        prev.map((t) =>
-          t.id === transactionId
-            ? { ...t, custom_category: name, category: { ...t.category, primary: name } }
-            : t
-        )
-      );
-    },
-    []
-  );
-
-  const createCategoryRule = useCallback(
-    async (transactionId: string, pattern: string, categoryName: string) => {
-      await CategoryService.createRule(pattern, categoryName);
-      // Reload so glob matching is re-applied server-side for all transactions
-      await load();
-    },
-    [load]
-  );
-
-  const deleteUserCategory = useCallback(
-    async (categoryId: string) => {
-      await CategoryService.deleteCategory(categoryId);
-      setUserCategories((prev) => prev.filter((c) => c.id !== categoryId));
-      // Reload transactions — backend clears overrides that used this category
-      await load();
-    },
-    [load]
-  );
-
+  const lastFilterKeyRef = useRef<string | null>(null);
+  const accountsReady =
+    !accountsLoading && (allAccountIds.length === 0 || selectedAccountIds.length > 0);
   const debouncedSearch = useDebounce(search, 300);
 
-  const resolveCategoryLabel = useCallback((t: Transaction) => {
-    if (!t.category) {
-      return 'Uncategorized';
-    }
-    return formatCategoryName(t.category.primary);
-  }, []);
+  const searchKey = debouncedSearch.trim().toLowerCase();
+  const accountKey = selectedAccountIds.join(',');
+  const filterKey = useMemo(() => {
+    return [
+      searchKey,
+      selectedCategory ?? '',
+      dateRange ?? '',
+      accountKey,
+      allAccountIds.join(','),
+      String(pageSize),
+      isAllAccountsSelected ? 'all' : 'subset',
+    ].join('|');
+  }, [
+    accountKey,
+    allAccountIds,
+    dateRange,
+    isAllAccountsSelected,
+    pageSize,
+    searchKey,
+    selectedCategory,
+  ]);
 
-  const categoryOptionItems = useMemo(() => {
-    const criteria: FilterCriteria = {
-      search: debouncedSearch.trim(),
-      dateRange: { start: monthRange.start, end: monthRange.end },
-    };
-    return TransactionFilter.filter(all, criteria);
-  }, [all, debouncedSearch, monthRange.start, monthRange.end]);
+  const cacheKey = accountIdsCacheKey(allAccountIds, selectedAccountIds, isAllAccountsSelected);
 
-  const filtered = useMemo(() => {
-    const criteria: FilterCriteria = {
-      search: debouncedSearch.trim(),
-      category: selectedCategory || undefined,
-      dateRange: { start: monthRange.start, end: monthRange.end },
-    };
-    return TransactionFilter.filter(all, criteria);
-  }, [all, debouncedSearch, selectedCategory, monthRange.start, monthRange.end]);
+  const query = useQuery({
+    queryKey: [
+      'transactions',
+      'list',
+      dateRange ?? '',
+      cacheKey,
+      searchKey,
+      selectedCategory ?? '',
+      currentPage,
+      pageSize,
+    ],
+    queryFn: async (): Promise<PaginatedTransactionsResponse> => {
+      if (allAccountIds.length > 0 && selectedAccountIds.length === 0) {
+        return { transactions: [], total: 0, page: 1, page_size: pageSize };
+      }
 
-  const availableCategories = useMemo(() => {
-    const names = new Set<string>();
-    for (const t of categoryOptionItems) {
-      const name = resolveCategoryLabel(t) || 'Uncategorized';
-      if (name) names.add(name);
-    }
-    return Array.from(names).sort((a, b) => a.localeCompare(b));
-  }, [categoryOptionItems, resolveCategoryLabel]);
+      const result = (await TransactionService.getTransactions({
+        page: currentPage,
+        page_size: pageSize,
+        search: searchKey || undefined,
+        categoryPrimary: selectedCategory ?? undefined,
+        accountIds: isAllAccountsSelected
+          ? undefined
+          : selectedAccountIds.length > 0
+            ? selectedAccountIds
+            : undefined,
+      })) as unknown as PaginatedTransactionsResponse;
 
-  const categories = useMemo(() => {
-    if (!selectedCategory) {
-      return availableCategories;
-    }
-    return availableCategories.includes(selectedCategory) ? [selectedCategory] : [];
-  }, [availableCategories, selectedCategory]);
+      return result;
+    },
+    enabled: !accountsLoading,
+    staleTime: 60 * 1000,
+    gcTime: 60 * 1000,
+  });
+
+  const { categories } = useTransactionCategories();
 
   useEffect(() => {
-    if (selectedCategory && !availableCategories.includes(selectedCategory)) {
-      setSelectedCategory(null);
+    if (!accountsReady) {
+      return;
     }
-  }, [availableCategories, selectedCategory]);
+
+    if (lastFilterKeyRef.current === null) {
+      lastFilterKeyRef.current = filterKey;
+      return;
+    }
+
+    if (lastFilterKeyRef.current !== filterKey) {
+      lastFilterKeyRef.current = filterKey;
+      if (currentPage !== 1) {
+        setCurrentPage(1);
+      }
+    }
+  }, [accountsReady, currentPage, filterKey, setCurrentPage]);
+
+  const paginated = query.data;
+  const transactions = paginated?.transactions ?? [];
+  const totalItems = paginated?.total ?? 0;
 
   useEffect(() => {
-    if (
-      selectedAccountId &&
-      accountOptions.length > 0 &&
-      !accountOptions.some((account) => account.id === selectedAccountId)
-    ) {
-      setSelectedAccountId(null);
+    const serverPage = paginated?.page;
+    if (serverPage != null && serverPage !== currentPage) {
+      setCurrentPage(serverPage);
     }
-  }, [accountOptions, selectedAccountId]);
+  }, [paginated?.page, currentPage, setCurrentPage]);
 
-  const totalItems = filtered.length;
+  const errorMessage = useMemo(() => {
+    const err = query.error;
+    if (!err) {
+      return null;
+    }
+    const status = getStatus(err);
+    return status === 401
+      ? 'You are not authenticated. Please log in again.'
+      : 'Failed to load transactions.';
+  }, [query.error]);
+
+  const isLoading =
+    !accountsLoading && query.fetchStatus === 'fetching' && query.data === undefined;
+
+  const setSearch = useCallback(
+    (value: string) => {
+      if (filterControl) {
+        filterControl.setSearch(value);
+      } else {
+        setSearchState(value);
+      }
+      setCurrentPage(1);
+    },
+    [filterControl, setCurrentPage]
+  );
+
+  const setSelectedCategory = useCallback(
+    (value: string | null) => {
+      if (filterControl) {
+        filterControl.setSelectedCategory(value);
+      } else {
+        setSelectedCategoryState(value);
+      }
+      setCurrentPage(1);
+    },
+    [filterControl, setCurrentPage]
+  );
+
+  const setDateRange = useCallback(
+    (value: DateRangeKey) => {
+      setDateRangeState(value);
+      setCurrentPage(1);
+    },
+    [setCurrentPage]
+  );
+
   const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
-  const start = (currentPage - 1) * pageSize;
-  const pageItems = useMemo(() => {
-    return filtered.slice(start, start + pageSize);
-  }, [filtered, start, pageSize]);
-
-  // biome-ignore lint/correctness/useExhaustiveDependencies: specific filters should reset pagination
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [selectedCategory, debouncedSearch, period, selectedAccountIds, selectedAccountId]);
-
-  useEffect(() => {
-    if (currentPage > totalPages) setCurrentPage(totalPages);
-  }, [currentPage, totalPages]);
 
   return {
     isLoading,
-    error,
-    transactions: filtered,
+    loading: isLoading,
+    error: errorMessage,
+    transactions,
     categories,
     search,
     setSearch,
@@ -296,15 +238,11 @@ export function useTransactions(options: UseTransactionsOptions = {}): UseTransa
     setSelectedAccountId,
     currentPage,
     setCurrentPage,
-    pageItems,
+    pageItems: transactions,
     totalItems,
+    total: totalItems,
     totalPages,
-    userCategories,
-    updateTransactionCategory,
-    resetTransactionCategory,
-    createCategoryAndAssign,
-    createCategoryRule,
-    deleteUserCategory,
+    tableAnimationKey: `${currentPage}|${filterKey}`,
   };
 }
 

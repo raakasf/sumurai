@@ -1,6 +1,13 @@
 # Sumurai UI Primitives
 
-This directory contains reusable UI primitives that implement Sumurai's glassmorphism design system with support for light and dark modes.
+This directory contains the reusable UI primitives that implement Sumurai's glassmorphism design system with support for light and dark modes.
+
+Start here when editing UI:
+- `.agents/skills/sumurai-frontend-design-system/SKILL.md` for the UI policy.
+- `.agents/skills/sumurai-frontend-design-system/examples.md` for good and bad composition patterns.
+- `.agents/skills/sumurai-design-token-pipeline/references/design-md-standard.md` for `DESIGN.md` format and designmd commands.
+- `frontend/src/ui/recipes.ts` for shared class atoms.
+- `frontend/src/ui/tokens.ts` for runtime JS values.
 
 ## Overview
 
@@ -9,6 +16,27 @@ All primitives use:
 - **Tailwind CSS** for styling utilities
 - **clsx** for conditional class composition
 - Consistent theme mode support via `dark:` variants
+
+## Control Scale
+
+The shared control scale lives in [`frontend/src/ui/recipes.ts`](../recipes.ts) as `control`.
+
+| Size | Height | Glyph | Padding | Label |
+|------|--------|-------|---------|-------|
+| `sm` | 36px mobile, 32px tablet, 28px desktop | 16px mobile/tablet, 14px desktop | 12px mobile, 10px tablet/desktop | `font.captionStrong` |
+| `md` | 44px mobile, 36px tablet, 32px desktop | 20px mobile, 18px tablet, 16px desktop | 16px mobile, 14px tablet, 12px desktop | `font.bodyStrong` |
+| `lg` | 52px mobile, 44px tablet, 40px desktop | 24px mobile, 22px tablet, 20px desktop | 20px mobile, 18px tablet, 16px desktop | `font.bodyStrong` |
+
+### Chrome bar (sole exception)
+
+Floating pill chrome (title bar tabs, bottom contextual sliders, account filter icon trigger) uses `chromeBar` in [`frontend/src/ui/recipes.ts`](../recipes.ts): fixed `h-12` shell and `h-6 w-6` glyphs. It does not follow the responsive `control` scale.
+
+Rules:
+1. Always pick a control `size` (`sm`, `md`, or `lg`) for buttons, inputs, selects, and icon buttons. Never hand-style heights, glyph sizes, or label typography.
+2. Pair label and glyph automatically by setting `size` on the primitive; do not override `text-*` or icon `h-*` classes downstream. Inside `chromeBar` pills only, use `chromeBar.glyph` and `chromeBar.glyphWell`.
+3. Default to `md`. Use `sm` only for dense toolbars and tables. Use `lg` for prominent footer fields and hero CTAs.
+
+The `md` control size is anchored to the iOS 44pt minimum touch target, which drives the 44px mobile height.
 
 ## Available Primitives
 
@@ -116,12 +144,15 @@ interface GlassCardProps extends React.HTMLAttributes<HTMLDivElement> {
 **Example:**
 ```tsx
 import { GlassCard } from '@/ui/primitives'
+import { font as uiTypographyRecipes, text as uiTextRecipes } from '@/ui/recipes'
 
 function ProfileCard() {
   return (
     <GlassCard variant="accent" padding="lg" rounded="xl">
-      <h2 className="text-xl font-bold">User Profile</h2>
-      <p className="mt-2 text-slate-600 dark:text-slate-300">
+      <h2 className={uiTypographyRecipes.cardTitle + ' ' + uiTextRecipes.primary}>
+        User Profile
+      </h2>
+      <p className={uiTypographyRecipes.body + ' mt-2 ' + uiTextRecipes.body}>
         Profile details here...
       </p>
     </GlassCard>
@@ -139,7 +170,7 @@ function ProfileCard() {
 
 ### Modal
 
-Accessible overlay container with backdrop handling and framer-motion transitions.
+Accessible overlay container with backdrop handling.
 
 **Use Cases:**
 - Confirmation dialogs
@@ -151,6 +182,7 @@ Accessible overlay container with backdrop handling and framer-motion transition
 | Prop | Options | Description |
 |------|---------|-------------|
 | `size` | `sm` \| `md` \| `lg` | Sets max width for the dialog content |
+| `presentation` | `centered` \| `drawer` | `centered` blurs the backdrop; `drawer` anchors to the bottom without backdrop blur |
 
 **Props:**
 ```typescript
@@ -159,6 +191,7 @@ interface ModalProps extends React.HTMLAttributes<HTMLDivElement> {
   onClose?: () => void
   labelledBy?: string
   description?: string
+  presentation?: 'centered' | 'drawer'
   preventCloseOnBackdrop?: boolean
   backdropClassName?: string
   containerClassName?: string
@@ -169,13 +202,16 @@ interface ModalProps extends React.HTMLAttributes<HTMLDivElement> {
 **Example:**
 ```tsx
 import { Modal, GlassCard, Button } from '@/ui/primitives'
+import { font as uiTypographyRecipes, text as uiTextRecipes } from '@/ui/recipes'
 
 function ConfirmDisconnect({ open, onClose, onConfirm }: Props) {
   return (
     <Modal isOpen={open} onClose={onClose} size="md">
       <GlassCard variant="accent" rounded="xl" padding="lg">
-        <h2 className="text-lg font-semibold">Disconnect bank?</h2>
-        <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
+        <h2 className={uiTypographyRecipes.cardTitle + ' ' + uiTextRecipes.primary}>
+          Disconnect bank?
+        </h2>
+        <p className={uiTypographyRecipes.body + ' mt-2 ' + uiTextRecipes.body}>
           This will remove all related accounts.
         </p>
         <div className="mt-6 flex justify-end gap-3">
@@ -212,7 +248,6 @@ Interactive button with multiple visual styles.
 | `primary` | Sky-violet gradient with shadow | Primary CTAs, submit buttons |
 | `secondary` | White/slate with border | Secondary actions, cancel buttons |
 | `ghost` | Subtle glassmorphism | Tertiary actions, less emphasis |
-| `icon` | Circular icon container | Icon-only buttons (menus, close) |
 | `tab` | Tab navigation inactive state | Tab bars |
 | `tabActive` | Tab navigation active state | Selected tab |
 | `danger` | Red tones for destructive actions | Delete, disconnect actions |
@@ -221,19 +256,18 @@ Interactive button with multiple visual styles.
 
 **Sizes:**
 
-| Size | Padding | Text Size | Border Radius | Use Case |
-|------|---------|-----------|---------------|----------|
-| `xs` | 2.5/1 | xs | xl | Tight spaces, tags |
-| `sm` | 3/1.5 | sm | xl | Inline actions |
-| `md` | 4/2 | sm | full | Standard buttons |
-| `lg` | 5/2.5 | base | full | Primary CTAs |
-| `icon` | - | - | full (10x10) | Icon buttons |
+| Size | Height | Glyph | Padding | Label | Use Case |
+|------|--------|-------|---------|-------|----------|
+| `sm` | 36px mobile, 32px tablet, 28px desktop | 16px mobile, 16px tablet, 14px desktop | 12px mobile, 10px tablet/desktop | captionStrong | Dense controls |
+| `md` | 44px mobile, 36px tablet, 32px desktop | 20px mobile, 18px tablet, 16px desktop | 16px mobile, 14px tablet, 12px desktop | bodyStrong | Standard buttons |
+| `lg` | 52px mobile, 44px tablet, 40px desktop | 24px mobile, 22px tablet, 20px desktop | 20px mobile, 18px tablet, 16px desktop | bodyStrong | Prominent CTAs |
 
 **Props:**
 ```typescript
 interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
-  variant?: 'primary' | 'secondary' | 'ghost' | 'icon' | 'tab' | 'tabActive' | 'danger' | 'success' | 'connect'
-  size?: 'xs' | 'sm' | 'md' | 'lg' | 'icon'
+  variant?: 'primary' | 'secondary' | 'ghost' | 'tab' | 'tabActive' | 'danger' | 'success' | 'connect'
+  size?: 'sm' | 'md' | 'lg' | 'titleBarExpanded'
+  shape?: 'default' | 'square'
   loading?: boolean  // Shows loading state (disables interaction)
   children?: React.ReactNode
 }
@@ -330,6 +364,59 @@ function LoginForm() {
 - Focus ring with offset
 - Disabled state with cursor-not-allowed
 - Theme-aware backgrounds and text colors
+
+---
+
+### Select
+
+Form select field that shares the same visual control system as `Input` but keeps native select semantics explicit.
+
+**Use Cases:**
+- Category selection
+- Filter controls
+- Dropdowns that should match the shared form-control shell
+
+**Variants:**
+
+| Variant | Border Color | Focus Ring | Use Case |
+|---------|--------------|------------|----------|
+| `default` | Black/white subtle | Sky-400 | Standard dropdowns |
+| `invalid` | Red-300/600 | Red-400 | Validation errors |
+| `glass` | White/transparent | Sky-400 | Overlay forms |
+
+**Sizes:**
+
+| Size | Padding | Text Size | Border Radius |
+|------|---------|-----------|---------------|
+| `sm` | 1.5 | xs | lg |
+| `md` | 2.5 | sm | xl |
+| `lg` | 3 | base | xl |
+
+**Props:**
+```typescript
+interface SelectProps extends Omit<React.SelectHTMLAttributes<HTMLSelectElement>, 'size'> {
+  variant?: 'default' | 'invalid' | 'glass'
+  selectSize?: 'sm' | 'md' | 'lg'
+}
+```
+
+**Example:**
+```tsx
+import { Select } from '@/ui/primitives'
+
+function CategorySelect() {
+  return (
+    <Select variant="glass" selectSize="md" value={category} onChange={handleChange}>
+      <option value="groceries">Groceries</option>
+    </Select>
+  )
+}
+```
+
+**Visual Characteristics:**
+- Shares the same control shell as `Input`
+- Preserves native select semantics
+- Stays aligned with the shared token system
 
 ---
 
@@ -708,9 +795,10 @@ See `__tests__/` directory for examples.
 
 ## Related Documentation
 
-- [STYLING_GUIDE.md](../../docs/STYLING_GUIDE.md) - When to use primitives vs inline classes
-- [sumurai-ui-guidelines.md](../../../docs/sumurai-ui-guidelines.md) - Design system fundamentals
-- [CONTRIBUTING.md](../../docs/CONTRIBUTING.md) - Contribution guidelines
+- [DESIGN.md](../../../../DESIGN.md) - Design system fundamentals
+- [DESIGN.md standard](../../../../.agents/skills/sumurai-design-token-pipeline/references/design-md-standard.md) - upstream format, section order, and designmd CLI
+- [UI skill](../../../../.agents/skills/sumurai-frontend-design-system/SKILL.md) - the authoritative UI policy and examples
+- [AGENTS.md](../../../../AGENTS.md) - repository-wide guidance
 
 ---
 

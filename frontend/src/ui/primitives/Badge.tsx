@@ -1,33 +1,57 @@
 import { cva, type VariantProps } from 'class-variance-authority';
 import type React from 'react';
-import { cn, transitionClasses } from './utils';
+import {
+  effect as semanticEffects,
+  status as semanticStatus,
+  surface as semanticSurfaces,
+  text as semanticTextRecipes,
+  radius as uiRadiusRecipes,
+  font as uiTypographyRecipes,
+} from '@/ui/recipes';
+import { cn } from './utils';
 
-const badgeVariants = cva(
-  ['inline-flex items-center justify-center', 'font-semibold uppercase', transitionClasses],
-  {
-    variants: {
-      variant: {
-        default: [
-          'bg-white/70 text-slate-600',
-          'shadow-[0_12px_32px_-22px_rgba(15,23,42,0.45)]',
-          'dark:bg-[#1e293b]/70 dark:text-slate-200',
-        ],
-        primary: ['bg-[#93c5fd]/20 text-[#0ea5e9]', 'dark:bg-[#38bdf8]/20 dark:text-[#38bdf8]'],
-        feature: ['bg-[#f8fafc] ring-1 ring-inset', 'dark:bg-[#1e293b]'],
-      },
-      size: {
-        xs: 'px-2 py-0.5 text-[10px] tracking-[0.2em] rounded-md',
-        sm: 'px-2.5 py-1 text-[11px] tracking-[0.24em] rounded-lg',
-        md: 'px-3 py-1 text-xs tracking-[0.24em] rounded-full',
-        lg: 'px-3.5 py-1.5 text-xs tracking-[0.3em] rounded-full',
-      },
+export const badgeRecipes = {
+  base: [
+    'inline-flex items-center justify-center',
+    uiTypographyRecipes.badge,
+    'transition-all duration-200 ease-out',
+  ],
+  default: [
+    ...semanticSurfaces.mutedChip,
+    semanticTextRecipes.muted,
+    ...semanticEffects.glassShadow,
+    'dark:text-slate-200',
+  ],
+  primary: [...semanticStatus.info.surface, ...semanticStatus.info.text],
+  feature: [...semanticSurfaces.insetWell, 'ring-1 ring-inset'],
+} as const;
+
+export const badgeSizeStyles = {
+  xs: `px-2 py-0.5 ${uiRadiusRecipes.standard}`,
+  sm: `px-2.5 py-1 ${uiRadiusRecipes.standard}`,
+  md: 'px-3 py-1 rounded-full',
+  lg: 'px-3.5 py-1.5 rounded-full',
+} as const;
+
+const badgeVariants = cva([...badgeRecipes.base], {
+  variants: {
+    variant: {
+      default: [...badgeRecipes.default],
+      primary: [...badgeRecipes.primary],
+      feature: [...badgeRecipes.feature],
     },
-    defaultVariants: {
-      variant: 'default',
-      size: 'md',
+    size: {
+      xs: badgeSizeStyles.xs,
+      sm: badgeSizeStyles.sm,
+      md: badgeSizeStyles.md,
+      lg: badgeSizeStyles.lg,
     },
-  }
-);
+  },
+  defaultVariants: {
+    variant: 'default',
+    size: 'md',
+  },
+});
 
 export interface BadgeProps
   extends React.HTMLAttributes<HTMLSpanElement>,

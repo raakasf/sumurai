@@ -1,356 +1,224 @@
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import React from 'react';
 import { AppTitleBar } from '@/ui/primitives/AppTitleBar';
+import { chromeBar, control } from '@/ui/recipes';
+
+jest.mock('framer-motion', () => {
+  const R = require('react');
+  return {
+    motion: {
+      div: ({ layoutId, transition, children, 'data-testid': testId, ...props }: any) =>
+        R.createElement('div', { 'data-testid': testId, ...props }, children),
+    },
+  };
+});
+
+jest.mock('next/image', () => ({
+  __esModule: true,
+  default: ({ alt, width, height, ...props }: { alt: string; width: number; height: number }) =>
+    React.createElement('img', {
+      alt,
+      'data-width': width,
+      'data-height': height,
+      ...props,
+    }),
+}));
 
 describe('AppTitleBar', () => {
-  describe('unauthenticated state', () => {
-    it('renders logo', () => {
-      render(
-        <AppTitleBar
-          state="unauthenticated"
-          scrolled={false}
-          themeMode="light"
-          onThemeToggle={() => {}}
-        />
-      );
-      expect(screen.getByText('Sumurai')).toBeInTheDocument();
-    });
+  const baseProps = {
+    state: 'authenticated' as const,
+    scrolled: false,
+    currentTab: 'dashboard' as const,
+    onTabChange: jest.fn(),
+  };
 
-    it('renders theme toggle button', () => {
-      render(
-        <AppTitleBar
-          state="unauthenticated"
-          scrolled={false}
-          themeMode="light"
-          onThemeToggle={() => {}}
-        />
-      );
-      expect(screen.getByLabelText('Toggle theme')).toBeInTheDocument();
-    });
+  it('shows the online indicator when connected', () => {
+    render(<AppTitleBar {...baseProps} isOnline />);
 
-    it('does not render logout button', () => {
-      render(
-        <AppTitleBar
-          state="unauthenticated"
-          scrolled={false}
-          themeMode="light"
-          onThemeToggle={() => {}}
-        />
-      );
-      expect(screen.queryByText('Logout')).not.toBeInTheDocument();
-    });
-
-    it('does not render tabs', () => {
-      render(
-        <AppTitleBar
-          state="unauthenticated"
-          scrolled={false}
-          themeMode="light"
-          onThemeToggle={() => {}}
-        />
-      );
-      expect(screen.queryByRole('navigation')).not.toBeInTheDocument();
-    });
-
-    it('calls onThemeToggle when theme button clicked', async () => {
-      const onThemeToggle = jest.fn();
-      const user = userEvent.setup();
-      render(
-        <AppTitleBar
-          state="unauthenticated"
-          scrolled={false}
-          themeMode="light"
-          onThemeToggle={onThemeToggle}
-        />
-      );
-      await user.click(screen.getByLabelText('Toggle theme'));
-      expect(onThemeToggle).toHaveBeenCalled();
-    });
+    const indicator = screen.getByTitle('Online');
+    expect(indicator).toBeInTheDocument();
+    expect(indicator.querySelector('svg')).not.toBeNull();
   });
 
-  describe('onboarding state', () => {
-    it('renders logo', () => {
-      render(
-        <AppTitleBar
-          state="onboarding"
-          scrolled={false}
-          themeMode="light"
-          onThemeToggle={() => {}}
-          onLogout={() => {}}
-        />
-      );
-      expect(screen.getByText('Sumurai')).toBeInTheDocument();
-    });
+  it('shows the offline indicator when disconnected', () => {
+    render(<AppTitleBar {...baseProps} isOnline={false} />);
 
-    it('renders theme toggle button', () => {
-      render(
-        <AppTitleBar
-          state="onboarding"
-          scrolled={false}
-          themeMode="light"
-          onThemeToggle={() => {}}
-          onLogout={() => {}}
-        />
-      );
-      expect(screen.getByLabelText('Toggle theme')).toBeInTheDocument();
-    });
-
-    it('renders logout button', () => {
-      render(
-        <AppTitleBar
-          state="onboarding"
-          scrolled={false}
-          themeMode="light"
-          onThemeToggle={() => {}}
-          onLogout={() => {}}
-        />
-      );
-      expect(screen.getByText('Logout')).toBeInTheDocument();
-    });
-
-    it('does not render tabs', () => {
-      render(
-        <AppTitleBar
-          state="onboarding"
-          scrolled={false}
-          themeMode="light"
-          onThemeToggle={() => {}}
-          onLogout={() => {}}
-        />
-      );
-      expect(screen.queryByRole('navigation')).not.toBeInTheDocument();
-    });
-
-    it('calls onLogout when logout button clicked', async () => {
-      const onLogout = jest.fn();
-      const user = userEvent.setup();
-      render(
-        <AppTitleBar
-          state="onboarding"
-          scrolled={false}
-          themeMode="light"
-          onThemeToggle={() => {}}
-          onLogout={onLogout}
-        />
-      );
-      await user.click(screen.getByText('Logout'));
-      expect(onLogout).toHaveBeenCalled();
-    });
+    const indicator = screen.getByTitle('Offline');
+    expect(indicator).toBeInTheDocument();
+    expect(indicator.querySelector('svg')).not.toBeNull();
   });
 
-  describe('authenticated state', () => {
-    it('renders logo', () => {
-      render(
-        <AppTitleBar
-          state="authenticated"
-          scrolled={false}
-          themeMode="light"
-          onThemeToggle={() => {}}
-          onLogout={() => {}}
-          currentTab="dashboard"
-          onTabChange={() => {}}
-        />
-      );
-      expect(screen.getByText('Sumurai')).toBeInTheDocument();
-    });
+  it('keeps the title bar chrome fixed when scrolled changes', () => {
+    const { rerender } = render(<AppTitleBar {...baseProps} isOnline scrolled={false} />);
 
-    it('renders all tabs', () => {
-      render(
-        <AppTitleBar
-          state="authenticated"
-          scrolled={false}
-          themeMode="light"
-          onThemeToggle={() => {}}
-          onLogout={() => {}}
-          currentTab="dashboard"
-          onTabChange={() => {}}
-        />
-      );
-      expect(screen.getByText('Dashboard')).toBeInTheDocument();
-      expect(screen.getByText('Transactions')).toBeInTheDocument();
-      expect(screen.getByText('Budgets')).toBeInTheDocument();
-      expect(screen.getByText('Accounts')).toBeInTheDocument();
-    });
+    const initialState = {
+      headerClassName: screen.getByRole('banner').className,
+      logoWidth: screen.getByAltText('Sumurai Logo').getAttribute('data-width'),
+      logoHeight: screen.getByAltText('Sumurai Logo').getAttribute('data-height'),
+    };
 
-    it('renders theme toggle button', () => {
-      render(
-        <AppTitleBar
-          state="authenticated"
-          scrolled={false}
-          themeMode="light"
-          onThemeToggle={() => {}}
-          onLogout={() => {}}
-          currentTab="dashboard"
-          onTabChange={() => {}}
-        />
-      );
-      expect(screen.getByLabelText('Toggle theme')).toBeInTheDocument();
-    });
+    rerender(<AppTitleBar {...baseProps} isOnline scrolled={true} />);
 
-    it('renders logout button', () => {
-      render(
-        <AppTitleBar
-          state="authenticated"
-          scrolled={false}
-          themeMode="light"
-          onThemeToggle={() => {}}
-          onLogout={() => {}}
-          currentTab="dashboard"
-          onTabChange={() => {}}
-        />
-      );
-      expect(screen.getByText('Logout')).toBeInTheDocument();
-    });
-
-    it('renders account filter node when provided', () => {
-      render(
-        <AppTitleBar
-          state="authenticated"
-          scrolled={false}
-          themeMode="light"
-          onThemeToggle={() => {}}
-          onLogout={() => {}}
-          currentTab="dashboard"
-          onTabChange={() => {}}
-          accountFilterNode={<div>Account Filter</div>}
-        />
-      );
-      expect(screen.getByText('Account Filter')).toBeInTheDocument();
-    });
-
-    it('calls onTabChange when tab clicked', async () => {
-      const onTabChange = jest.fn();
-      const user = userEvent.setup();
-      render(
-        <AppTitleBar
-          state="authenticated"
-          scrolled={false}
-          themeMode="light"
-          onThemeToggle={() => {}}
-          onLogout={() => {}}
-          currentTab="dashboard"
-          onTabChange={onTabChange}
-        />
-      );
-      await user.click(screen.getByText('Transactions'));
-      expect(onTabChange).toHaveBeenCalledWith('transactions');
-    });
-
-    it('highlights active tab', () => {
-      const { container } = render(
-        <AppTitleBar
-          state="authenticated"
-          scrolled={false}
-          themeMode="light"
-          onThemeToggle={() => {}}
-          onLogout={() => {}}
-          currentTab="dashboard"
-          onTabChange={() => {}}
-        />
-      );
-      const buttons = container.querySelectorAll('button');
-      const dashboardButton = Array.from(buttons).find((b) => b.textContent === 'Dashboard');
-      expect(dashboardButton?.className).toContain(
-        'bg-[linear-gradient(115deg,#38bdf8_0%,#22d3ee_46%,#a855f7_100%)]'
-      );
-    });
+    expect({
+      headerClassName: screen.getByRole('banner').className,
+      logoWidth: screen.getByAltText('Sumurai Logo').getAttribute('data-width'),
+      logoHeight: screen.getByAltText('Sumurai Logo').getAttribute('data-height'),
+    }).toEqual(initialState);
   });
 
-  describe('scroll state variants', () => {
-    it('renders h-16 when not scrolled', () => {
-      const { container } = render(
-        <AppTitleBar
-          state="unauthenticated"
-          scrolled={false}
-          themeMode="light"
-          onThemeToggle={() => {}}
-        />
-      );
-      const header = container.querySelector('header');
-      expect(header?.className).toContain('h-16');
-    });
+  it('does not render the theme toggle in the title bar', () => {
+    render(<AppTitleBar {...baseProps} isOnline />);
 
-    it('renders h-14 when scrolled', () => {
-      const { container } = render(
-        <AppTitleBar
-          state="unauthenticated"
-          scrolled={true}
-          themeMode="light"
-          onThemeToggle={() => {}}
-        />
-      );
-      const header = container.querySelector('header');
-      expect(header?.className).toContain('h-14');
-    });
+    expect(screen.queryByRole('button', { name: 'Toggle theme' })).not.toBeInTheDocument();
   });
 
-  describe('theme mode', () => {
-    it('renders with light mode styles', () => {
-      const { container } = render(
-        <AppTitleBar
-          state="unauthenticated"
-          scrolled={false}
-          themeMode="light"
-          onThemeToggle={() => {}}
-        />
-      );
-      const header = container.querySelector('header');
-      expect(header?.className).toContain('bg-white/80');
-    });
+  it('renders primary tab navigation in the title bar for tablet and desktop', () => {
+    render(<AppTitleBar {...baseProps} isOnline onLogout={jest.fn()} />);
 
-    it('renders with dark mode styles', () => {
-      const { container } = render(
-        <AppTitleBar
-          state="unauthenticated"
-          scrolled={false}
-          themeMode="dark"
-          onThemeToggle={() => {}}
-        />
-      );
-      const header = container.querySelector('header');
-      expect(header?.className).toContain('dark:bg-slate-800/80');
-    });
+    const primaryNav = screen.getByRole('navigation', { name: 'Primary' });
+    expect(primaryNav).toBeInTheDocument();
+    expect(primaryNav.className).toContain('hidden');
+    expect(primaryNav.className).toContain('md:flex');
   });
 
-  describe('snapshots', () => {
-    it('matches snapshot for unauthenticated state', () => {
-      const { container } = render(
-        <AppTitleBar
-          state="unauthenticated"
-          scrolled={false}
-          themeMode="light"
-          onThemeToggle={() => {}}
-        />
-      );
-      expect(container.firstChild).toMatchSnapshot();
+  it('anchors the action cluster to the right on tablet and desktop', () => {
+    render(<AppTitleBar {...baseProps} isOnline onLogout={jest.fn()} />);
+
+    const actions = screen.getByTitle('Online').closest('div');
+    expect(actions?.className).toContain('md:col-start-3');
+    expect(actions?.className).toContain('md:justify-self-end');
+  });
+
+  it('uses a single-row title bar grid on tablet and desktop', () => {
+    render(<AppTitleBar {...baseProps} isOnline onLogout={jest.fn()} />);
+
+    const grid = screen.getByRole('banner').querySelector('.grid');
+    expect(grid?.className).toContain('grid-rows-1');
+    expect(grid?.className).not.toContain('grid-rows-[auto_auto]');
+    expect(grid?.className).not.toContain('gap-y-2');
+  });
+
+  it('sizes the logo to fill the title bar chrome on each breakpoint', () => {
+    render(<AppTitleBar {...baseProps} isOnline onLogout={jest.fn()} />);
+
+    const logoFrame = screen.getByAltText('Sumurai Logo').parentElement;
+    expect(logoFrame?.className).toContain('h-12');
+    expect(logoFrame?.className).toContain('w-12');
+    expect(logoFrame?.className).not.toContain('lg:h-8');
+  });
+
+  it('uses context pill tabs for the desktop tab switcher', () => {
+    render(<AppTitleBar {...baseProps} isOnline onLogout={jest.fn()} />);
+
+    const primaryNav = screen.getByRole('navigation', { name: 'Primary' });
+    const settingsTab = screen.getByRole('button', { name: 'Dashboard' });
+    expect(settingsTab.className).toContain('rounded-lg');
+    expect(settingsTab.className).not.toContain('flex-1');
+
+    const pillContainer = primaryNav.firstElementChild;
+    expect(pillContainer?.className).toContain('h-12');
+    expect(pillContainer?.className).toContain('md:py-2');
+    expect(pillContainer?.className).not.toContain('lg:h-8');
+  });
+
+  it('uses stronger body text for the primary tab labels', () => {
+    render(<AppTitleBar {...baseProps} isOnline onLogout={jest.fn()} />);
+
+    const primaryNav = screen.getByRole('navigation', { name: 'Primary' });
+    expect(primaryNav.querySelector('.font-body-strong')).not.toBeNull();
+  });
+
+  it('uses md control sizing for the settings and logout actions', () => {
+    render(<AppTitleBar {...baseProps} isOnline onLogout={jest.fn()} />);
+
+    const settingsButton = screen.getByRole('button', { name: 'Settings' });
+    expect(settingsButton.className).toContain(control.square.md);
+    expect(settingsButton.querySelector('span')?.className).toContain(control.glyph.md);
+
+    const logoutButton = screen.getByRole('button', { name: 'Logout' });
+    expect(logoutButton.className).toContain(control.square.md);
+    expect(logoutButton.querySelector('span')?.className).toContain(control.glyph.md);
+  });
+
+  it('renders settings and logout actions for authenticated users', async () => {
+    const onTabChange = jest.fn();
+    const user = userEvent.setup();
+
+    render(<AppTitleBar {...baseProps} isOnline onLogout={jest.fn()} onTabChange={onTabChange} />);
+
+    expect(screen.getByRole('button', { name: 'Settings' })).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Logout' })).toHaveLength(1);
+
+    await user.click(screen.getByRole('button', { name: 'Settings' }));
+    expect(onTabChange).toHaveBeenCalledWith('settings');
+  });
+
+  it('navigates to dashboard when the logo is clicked', async () => {
+    const onTabChange = jest.fn();
+    const user = userEvent.setup();
+
+    render(
+      <AppTitleBar
+        {...baseProps}
+        isOnline
+        currentTab="settings"
+        onTabChange={onTabChange}
+        onLogout={jest.fn()}
+      />
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Go to dashboard' }));
+    expect(onTabChange).toHaveBeenCalledWith('dashboard');
+  });
+
+  describe('mobile layout', () => {
+    const mobileProps = {
+      state: 'authenticated' as const,
+      scrolled: false,
+      currentTab: 'dashboard' as const,
+      onTabChange: jest.fn(),
+      isOnline: true,
+      onLogout: jest.fn(),
+    };
+
+    it('header has safe-area-inset-top padding for notch/camera cutout', () => {
+      render(<AppTitleBar {...mobileProps} />);
+      expect(screen.getByRole('banner').className).toContain('pt-[env(safe-area-inset-top)]');
     });
 
-    it('matches snapshot for onboarding state', () => {
-      const { container } = render(
-        <AppTitleBar
-          state="onboarding"
-          scrolled={false}
-          themeMode="light"
-          onThemeToggle={() => {}}
-          onLogout={() => {}}
-        />
-      );
-      expect(container.firstChild).toMatchSnapshot();
+    it('online connectivity icon is always present (no responsive hiding)', () => {
+      render(<AppTitleBar {...mobileProps} />);
+      const indicator = screen.getByTitle('Online');
+      expect(indicator).toBeInTheDocument();
+      expect(indicator.className).not.toContain('hidden');
     });
 
-    it('matches snapshot for authenticated state', () => {
-      const { container } = render(
-        <AppTitleBar
-          state="authenticated"
-          scrolled={false}
-          themeMode="light"
-          onThemeToggle={() => {}}
-          onLogout={() => {}}
-          currentTab="dashboard"
-          onTabChange={() => {}}
-        />
-      );
-      expect(container.firstChild).toMatchSnapshot();
+    it('sizes the connectivity indicator to match action icon buttons', () => {
+      render(<AppTitleBar {...mobileProps} />);
+
+      const indicator = screen.getByTitle('Online');
+      expect(indicator.className).toContain(control.square.md);
+      expect(indicator.querySelector('span')?.className).toContain(control.glyph.md);
+
+      const settingsButton = screen.getByRole('button', { name: 'Settings' });
+      expect(settingsButton.className).toContain(control.square.md);
+      expect(settingsButton.querySelector('span')?.className).toContain(control.glyph.md);
+    });
+
+    it('uses a single-row title bar grid on mobile', () => {
+      render(<AppTitleBar {...mobileProps} />);
+
+      const grid = screen.getByRole('banner').querySelector('.grid');
+      expect(grid?.className).toContain('grid-rows-1');
+      expect(grid?.className).toContain('content-center');
+    });
+
+    it('renders a single md-sized logout action', () => {
+      render(<AppTitleBar {...mobileProps} />);
+
+      const logoutButton = screen.getByRole('button', { name: 'Logout' });
+      expect(logoutButton.className).toContain(control.square.md);
     });
   });
 });

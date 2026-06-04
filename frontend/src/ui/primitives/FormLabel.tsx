@@ -1,12 +1,13 @@
 import { cva, type VariantProps } from 'class-variance-authority';
 import type React from 'react';
+import { text as uiTextRecipes, font as uiTypographyRecipes } from '@/ui/recipes';
 import { cn } from './utils';
 
-const labelVariants = cva(['block text-xs font-semibold uppercase tracking-[0.18em]'], {
+const labelVariants = cva(['block', uiTypographyRecipes.label], {
   variants: {
     tone: {
-      default: 'text-slate-700 dark:text-slate-200',
-      subtle: 'text-slate-500 dark:text-slate-400',
+      default: uiTextRecipes.label,
+      subtle: uiTextRecipes.subtle,
     },
   },
   defaultVariants: {

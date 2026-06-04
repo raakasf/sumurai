@@ -1,7 +1,11 @@
-import { useCallback, useEffect, useState } from 'react';
+/**
+ * Loads and caches Plaid connection metadata.
+ */
+
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useCallback } from 'react';
 import { AccountNormalizer, type BackendAccount } from '../domain/AccountNormalizer';
 import { PlaidService } from '../services/PlaidService';
-import type { ProviderConnectionStatus } from '../types/api';
 
 type NormalizedAccount = {
   id: string;
@@ -58,98 +62,106 @@ const normalizeAccounts = (backendAccounts: BackendAccount[]): NormalizedAccount
   return AccountNormalizer.normalize(backendAccounts);
 };
 
+const buildFallbackConnections = (backendAccounts: BackendAccount[]): PlaidConnection[] => {
+  const normalizedAccounts = normalizeAccounts(backendAccounts);
+  const groups = new Map<
+    string,
+    Array<{ backend: BackendAccount; normalized: NormalizedAccount }>
+  >();
+
+  backendAccounts.forEach((backendAccount, index) => {
+    const normalizedAccount = normalizedAccounts[index];
+    const groupKey =
+      normalizedAccount.connectionKey ??
+      backendAccount.institution_name ??
+      String(backendAccount.id);
+    const group = groups.get(groupKey) ?? [];
+    group.push({ backend: backendAccount, normalized: normalizedAccount });
+    groups.set(groupKey, group);
+  });
+
+  return Array.from(groups.entries()).map(([groupKey, entries]) => {
+    const accounts = entries.map(({ normalized }) => {
+      const { connectionKey: _ignore, ...rest } = normalized;
+      return rest;
+    });
+
+    return {
+      id: groupKey,
+      connectionId: groupKey,
+      institutionName: entries[0]?.backend.institution_name || 'Unknown Bank',
+      lastSyncAt: null,
+      transactionCount: entries.reduce(
+        (sum, entry) => sum + (entry.normalized.transactions ?? 0),
+        0
+      ),
+      accountCount: entries.length,
+      syncInProgress: false,
+      isConnected: true,
+      accounts,
+    };
+  });
+};
+
 export const usePlaidConnections = (
   options: { enabled?: boolean } = {}
 ): UsePlaidConnectionsReturn => {
   const enabled = options.enabled ?? true;
-  const [state, setState] = useState<PlaidConnectionsState>({
-    connections: [],
-    loading: true,
-    error: null,
-  });
-
-  const fetchConnections = useCallback(async (): Promise<PlaidConnection[]> => {
-    if (!enabled) {
-      setState((prev) => ({ ...prev, connections: [], loading: false, error: null }));
-      return [];
-    }
-    try {
-      setState((prev) => ({ ...prev, loading: true, error: null }));
-
-      // Fetch all connections for this user (backend now returns array)
-      const status = await PlaidService.getStatus();
-      const statusArray: ProviderConnectionStatus[] = Array.isArray(status.connections)
-        ? status.connections
-        : [];
-
-      // Fetch accounts once for all connections
-      let allAccounts: NormalizedAccount[] = [];
-
-      if (Array.isArray(statusArray) && statusArray.length > 0) {
-        try {
-          const backendAccounts = await PlaidService.getAccounts();
-          allAccounts = normalizeAccounts(backendAccounts as BackendAccount[]);
-        } catch (accountError) {
-          console.warn('Failed to fetch accounts:', accountError);
-        }
-      }
-
-      // Map backend status array to PlaidConnection objects, filtering out disconnected ones
-      const connections: PlaidConnection[] =
-        statusArray.length > 0
-          ? statusArray
-              .filter((connStatus) => connStatus.is_connected)
-              .map((connStatus) => {
-                const connectionId = connStatus.connection_id
-                  ? String(connStatus.connection_id)
-                  : null;
-                let matchingAccounts: NormalizedAccount[];
-
-                if (connectionId) {
-                  matchingAccounts = allAccounts.filter(
-                    (acc) => acc.connectionKey === connectionId
-                  );
-                  if (matchingAccounts.length === 0) {
-                    matchingAccounts = allAccounts.filter((acc) => acc.connectionKey === null);
-                  }
-                } else {
-                  matchingAccounts = allAccounts.slice();
-                }
-
-                const connectionAccounts = matchingAccounts.map(
-                  ({ connectionKey: _ignore, ...rest }) => rest
-                );
-                return {
-                  id: connStatus.connection_id || 'unknown',
-                  connectionId: connStatus.connection_id || 'unknown',
-                  institutionName: connStatus.institution_name || 'Unknown Bank',
-                  lastSyncAt: connStatus.last_sync_at,
-                  transactionCount: connStatus.transaction_count || 0,
-                  accountCount: connStatus.account_count || 0,
-                  syncInProgress: connStatus.sync_in_progress || false,
-                  isConnected: connStatus.is_connected,
-                  accounts: connectionAccounts,
-                };
-              })
+  const queryClient = useQueryClient();
+  const query = useQuery<PlaidConnection[], Error>({
+    queryKey: ['plaid', 'connections'],
+    queryFn: async () => {
+      const [statusResult, accountsResult] = await Promise.allSettled([
+        PlaidService.getStatus(),
+        PlaidService.getAccounts(),
+      ]);
+      const statusArray =
+        statusResult.status === 'fulfilled' && Array.isArray(statusResult.value.connections)
+          ? statusResult.value.connections
           : [];
+      const backendAccounts =
+        accountsResult.status === 'fulfilled' && Array.isArray(accountsResult.value)
+          ? (accountsResult.value as BackendAccount[])
+          : [];
+      const allAccounts = normalizeAccounts(backendAccounts);
 
-      setState((prev) => ({
-        ...prev,
-        connections,
-        loading: false,
-        error: null,
-      }));
-      return connections;
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : 'Failed to load connections';
-      setState((prev) => ({
-        ...prev,
-        loading: false,
-        error: message,
-      }));
-      return [];
-    }
-  }, [enabled]);
+      const statusConnections: PlaidConnection[] = statusArray
+        .filter((connStatus) => connStatus.is_connected)
+        .map((connStatus) => {
+          const connectionId = connStatus.connection_id ? String(connStatus.connection_id) : null;
+          let matchingAccounts: NormalizedAccount[];
+
+          if (connectionId) {
+            matchingAccounts = allAccounts.filter((acc) => acc.connectionKey === connectionId);
+            if (matchingAccounts.length === 0) {
+              matchingAccounts = allAccounts.filter((acc) => acc.connectionKey === null);
+            }
+          } else {
+            matchingAccounts = allAccounts.slice();
+          }
+
+          const connectionAccounts = matchingAccounts.map(
+            ({ connectionKey: _ignore, ...rest }) => rest
+          );
+          return {
+            id: connStatus.connection_id || 'unknown',
+            connectionId: connStatus.connection_id || 'unknown',
+            institutionName: connStatus.institution_name || 'Unknown Bank',
+            lastSyncAt: connStatus.last_sync_at,
+            transactionCount: connStatus.transaction_count || 0,
+            accountCount: connStatus.account_count || 0,
+            syncInProgress: connStatus.sync_in_progress || false,
+            isConnected: connStatus.is_connected,
+            accounts: connectionAccounts,
+          };
+        });
+      return statusConnections.length > 0
+        ? statusConnections
+        : buildFallbackConnections(backendAccounts);
+    },
+    enabled,
+    staleTime: 5 * 60 * 1000,
+  });
 
   const addConnection = useCallback(
     async (institutionName: string, connectionId: string): Promise<void> => {
@@ -192,21 +204,22 @@ export const usePlaidConnections = (
         accounts: accounts,
       };
 
-      setState((prev) => ({
-        ...prev,
-        connections: [...prev.connections, newConnection],
-        error: null,
-      }));
+      queryClient.setQueryData<PlaidConnection[]>(['plaid', 'connections'], (current = []) => [
+        ...current,
+        newConnection,
+      ]);
     },
-    []
+    [queryClient]
   );
 
-  const removeConnection = useCallback((connectionId: string): void => {
-    setState((prev) => ({
-      ...prev,
-      connections: prev.connections.filter((conn) => conn.connectionId !== connectionId),
-    }));
-  }, []);
+  const removeConnection = useCallback(
+    (connectionId: string): void => {
+      queryClient.setQueryData<PlaidConnection[]>(['plaid', 'connections'], (current = []) =>
+        current.filter((conn) => conn.connectionId !== connectionId)
+      );
+    },
+    [queryClient]
+  );
 
   const updateConnectionSyncInfo = useCallback(
     (
@@ -215,9 +228,8 @@ export const usePlaidConnections = (
       accountCount: number,
       lastSyncAt: string
     ): void => {
-      setState((prev) => ({
-        ...prev,
-        connections: prev.connections.map((conn) =>
+      queryClient.setQueryData<PlaidConnection[]>(['plaid', 'connections'], (current = []) =>
+        current.map((conn) =>
           conn.connectionId === connectionId
             ? {
                 ...conn,
@@ -227,41 +239,39 @@ export const usePlaidConnections = (
                 syncInProgress: false,
               }
             : conn
-        ),
-      }));
+        )
+      );
     },
-    []
+    [queryClient]
   );
 
   const setConnectionSyncInProgress = useCallback(
     (connectionId: string, inProgress: boolean): void => {
-      setState((prev) => ({
-        ...prev,
-        connections: prev.connections.map((conn) =>
+      queryClient.setQueryData<PlaidConnection[]>(['plaid', 'connections'], (current = []) =>
+        current.map((conn) =>
           conn.connectionId === connectionId ? { ...conn, syncInProgress: inProgress } : conn
-        ),
-      }));
+        )
+      );
     },
-    []
+    [queryClient]
   );
 
   const refresh = useCallback(async (): Promise<PlaidConnection[]> => {
-    return await fetchConnections();
-  }, [fetchConnections]);
+    const result = await query.refetch();
+    return result.data ?? [];
+  }, [query]);
 
   const getConnection = useCallback(
     (connectionId: string): PlaidConnection | undefined => {
-      return state.connections.find((conn) => conn.connectionId === connectionId);
+      return (query.data ?? []).find((conn) => conn.connectionId === connectionId);
     },
-    [state.connections]
+    [query.data]
   );
 
-  useEffect(() => {
-    fetchConnections();
-  }, [fetchConnections]);
-
   return {
-    ...state,
+    connections: query.data ?? [],
+    loading: enabled ? query.isPending : false,
+    error: query.error?.message ?? null,
     addConnection,
     removeConnection,
     updateConnectionSyncInfo,

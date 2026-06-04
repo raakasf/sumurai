@@ -1,12 +1,27 @@
+//! Aggregated analytics queries for dashboards.
+
 use crate::models::analytics::{
-    BalanceCategory, CategoryMonthlySpending, CategorySpending, DailySpending, MonthlySpending,
-    TopMerchant,
+    BalanceCategory, CashFlowPoint, CategorySpending, DailySpending, MonthlyCashFlowAggregate,
+    MonthlySpending, TopMerchant,
 };
-use crate::models::transaction::{Transaction, TransactionWithAccount};
+use crate::models::transaction::Transaction;
+use crate::services::repository_service::{
+    DatabaseRepository, EXCLUDED_ANALYTICS_CATEGORY_PRIMARIES,
+};
+use anyhow::Result;
 use chrono::Datelike;
 use rust_decimal::Decimal;
+use uuid::Uuid;
 
 pub struct AnalyticsService;
+
+fn truncate_to_latest_months<T>(result: &mut Vec<T>, months: u32) {
+    let keep = months as usize;
+    if result.len() > keep {
+        let drop_count = result.len() - keep;
+        result.drain(0..drop_count);
+    }
+}
 
 #[allow(dead_code)]
 impl AnalyticsService {
@@ -66,6 +81,37 @@ impl AnalyticsService {
 
     pub fn new() -> Self {
         Self
+    }
+
+    pub async fn load_spending_transactions(
+        &self,
+        repository: &dyn DatabaseRepository,
+        user_id: &Uuid,
+        start_date: Option<chrono::NaiveDate>,
+        end_date: Option<chrono::NaiveDate>,
+    ) -> Result<Vec<Transaction>> {
+        match (start_date, end_date) {
+            (Some(start_date), Some(end_date)) => {
+                repository
+                    .get_spending_transactions_by_date_range_for_user(user_id, start_date, end_date)
+                    .await
+            }
+            _ => repository.get_spending_transactions_for_user(user_id).await,
+        }
+    }
+
+    pub fn current_month_date_range(&self) -> (chrono::NaiveDate, chrono::NaiveDate) {
+        let now = chrono::Utc::now().naive_utc().date();
+        Self::get_month_range_static(now.year(), now.month())
+    }
+
+    pub fn month_date_range(
+        &self,
+        year: i32,
+        month: u32,
+    ) -> Option<(chrono::NaiveDate, chrono::NaiveDate)> {
+        chrono::NaiveDate::from_ymd_opt(year, month, 1)
+            .map(|_| Self::get_month_range_static(year, month))
     }
 
     fn get_previous_month_info(year: i32, month: u32) -> (i32, u32) {
@@ -257,11 +303,11 @@ impl AnalyticsService {
         let mut category_map = std::collections::HashMap::new();
 
         for transaction in transactions {
-            if !Self::is_spending_transaction(transaction) {
+            if transaction.amount >= Decimal::ZERO {
                 continue;
             }
             let category_name = Self::get_category_name(transaction);
-            *category_map.entry(category_name).or_insert(Decimal::ZERO) += transaction.amount;
+            *category_map.entry(category_name).or_insert(Decimal::ZERO) += -transaction.amount;
         }
 
         category_map
@@ -320,7 +366,7 @@ impl AnalyticsService {
         let mut monthly_totals = std::collections::HashMap::new();
 
         for transaction in transactions {
-            if !Self::is_spending_transaction(transaction) {
+            if transaction.amount >= Decimal::ZERO {
                 continue;
             }
             let month_key = format!(
@@ -328,7 +374,7 @@ impl AnalyticsService {
                 transaction.date.year(),
                 transaction.date.month()
             );
-            *monthly_totals.entry(month_key).or_insert(Decimal::ZERO) += transaction.amount;
+            *monthly_totals.entry(month_key).or_insert(Decimal::ZERO) += -transaction.amount;
         }
 
         let mut result: Vec<MonthlySpending> = monthly_totals
@@ -337,10 +383,79 @@ impl AnalyticsService {
             .collect();
 
         result.sort_by(|a, b| a.month.cmp(&b.month));
+        truncate_to_latest_months(&mut result, months);
 
-        if result.len() > months as usize {
-            result.truncate(months as usize);
+        result
+    }
+
+    pub fn calculate_cash_flow(
+        &self,
+        transactions: &[Transaction],
+        months: u32,
+    ) -> Vec<CashFlowPoint> {
+        use chrono::Datelike;
+
+        #[derive(Default)]
+        struct MonthlyCashFlow {
+            income: Decimal,
+            expenses: Decimal,
         }
+
+        let mut monthly_flows = std::collections::HashMap::new();
+
+        for transaction in transactions {
+            let month_key = format!(
+                "{}-{:02}",
+                transaction.date.year(),
+                transaction.date.month()
+            );
+            let flow = monthly_flows
+                .entry(month_key)
+                .or_insert(MonthlyCashFlow::default());
+
+            if transaction.amount > Decimal::ZERO && transaction.category_primary != "TRANSFER_IN" {
+                flow.income += transaction.amount;
+            } else if transaction.amount < Decimal::ZERO
+                && !EXCLUDED_ANALYTICS_CATEGORY_PRIMARIES
+                    .contains(&transaction.category_primary.as_str())
+            {
+                flow.expenses += -transaction.amount;
+            }
+        }
+
+        let aggregates = monthly_flows
+            .into_iter()
+            .map(|(month, flow)| MonthlyCashFlowAggregate {
+                month,
+                income: flow.income,
+                expenses: flow.expenses,
+            })
+            .collect::<Vec<_>>();
+
+        self.cash_flow_from_monthly_aggregates(&aggregates, months)
+    }
+
+    pub fn cash_flow_from_monthly_aggregates(
+        &self,
+        aggregates: &[MonthlyCashFlowAggregate],
+        months: u32,
+    ) -> Vec<CashFlowPoint> {
+        let mut result: Vec<CashFlowPoint> = aggregates
+            .iter()
+            .map(|aggregate| {
+                let income = Self::round_amount(aggregate.income);
+                let expenses = Self::round_amount(aggregate.expenses);
+                CashFlowPoint {
+                    month: aggregate.month.clone(),
+                    income,
+                    expenses,
+                    net: Self::round_amount(income - expenses),
+                }
+            })
+            .collect();
+
+        result.sort_by(|a, b| a.month.cmp(&b.month));
+        truncate_to_latest_months(&mut result, months);
 
         result
     }
@@ -435,7 +550,7 @@ impl AnalyticsService {
         let mut merchant_map: HashMap<String, (Decimal, u32)> = HashMap::new();
 
         for transaction in transactions {
-            if !Self::is_spending_transaction(transaction) {
+            if transaction.amount >= Decimal::ZERO {
                 continue;
             }
             let merchant_name = transaction
@@ -446,14 +561,14 @@ impl AnalyticsService {
             let entry = merchant_map
                 .entry(merchant_name)
                 .or_insert((Decimal::ZERO, 0));
-            entry.0 += transaction.amount;
+            entry.0 += -transaction.amount;
             entry.1 += 1;
         }
 
         let total_spend: Decimal = transactions
             .iter()
-            .filter(|t| Self::is_spending_transaction(t))
-            .map(|t| t.amount)
+            .filter(|t| t.amount < Decimal::ZERO)
+            .map(|t| -t.amount)
             .sum();
 
         let mut merchants: Vec<TopMerchant> = merchant_map
@@ -474,7 +589,7 @@ impl AnalyticsService {
             })
             .collect();
 
-        merchants.sort_by(|a, b| b.amount.cmp(&a.amount));
+        merchants.sort_by_key(|merchant| std::cmp::Reverse(merchant.amount));
 
         merchants.truncate(limit);
 
@@ -569,9 +684,8 @@ impl AnalyticsService {
         let (start, end) = self.get_month_range(now.year(), now.month());
         transactions
             .iter()
-            .filter(|t| t.date >= start && t.date <= end)
-            .filter(|t| Self::is_spending_transaction(t))
-            .map(|t| t.amount)
+            .filter(|t| t.date >= start && t.date <= end && t.amount < Decimal::ZERO)
+            .map(|t| -t.amount)
             .sum()
     }
 
@@ -588,10 +702,9 @@ impl AnalyticsService {
             .day();
         let mut totals = vec![Decimal::ZERO; days_in_month as usize];
         for t in transactions {
-            if t.date.year() == year && t.date.month() == month && Self::is_spending_transaction(t)
-            {
+            if t.date.year() == year && t.date.month() == month && t.amount < Decimal::ZERO {
                 let idx = (t.date.day() - 1) as usize;
-                totals[idx] += t.amount;
+                totals[idx] += -t.amount;
             }
         }
         let mut cumulative = Decimal::ZERO;

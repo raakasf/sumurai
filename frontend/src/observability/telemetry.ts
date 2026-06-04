@@ -6,7 +6,6 @@ import { resourceFromAttributes } from '@opentelemetry/resources';
 import { BatchSpanProcessor } from '@opentelemetry/sdk-trace-base';
 import { WebTracerProvider } from '@opentelemetry/sdk-trace-web';
 import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from '@opentelemetry/semantic-conventions';
-import { AuthService } from '../services/authService';
 import {
   FilteringSpanProcessor,
   HttpRouteSpanProcessor,
@@ -17,19 +16,36 @@ import { preventSensitiveSpans, sanitizeSpanAttributes } from './sanitization';
 let tracerProvider: WebTracerProvider | null = null;
 let tracer: Tracer | null = null;
 
+export const IGNORE_OTEL_SELF_EXPORT_URLS = [
+  /\/api\/v1\/public\/telemetry/,
+  /\/api\/v1\/private\/telemetry/,
+] as const;
+
+export const PUBLIC_BROWSER_OTLP_EXPORT_PATH = '/api/v1/public/telemetry';
+
 function getConfig() {
-  const env = process.env;
+  const env = typeof process !== 'undefined' ? process.env : ({} as NodeJS.ProcessEnv);
   return {
     enabled: env.NEXT_PUBLIC_OTEL_ENABLED === 'true',
     serviceName: env.NEXT_PUBLIC_OTEL_SERVICE_NAME || 'sumurai-frontend',
     serviceVersion: env.NEXT_PUBLIC_OTEL_SERVICE_VERSION || '1.0.0',
-    endpoint: env.NEXT_PUBLIC_OTEL_EXPORTER_OTLP_ENDPOINT || 'http://localhost:5341/ingest/otlp',
-    seqApiKey: env.NEXT_PUBLIC_OTEL_SEQ_API_KEY || '',
     captureBodies: env.NEXT_PUBLIC_OTEL_CAPTURE_BODIES === 'true',
-    sanitizeHeaders: env.NEXT_PUBLIC_OTEL_SANITIZE_HEADERS !== 'false',
-    sanitizeUrls: env.NEXT_PUBLIC_OTEL_SANITIZE_URLS !== 'false',
     blockSensitiveEndpoints: env.NEXT_PUBLIC_OTEL_BLOCK_SENSITIVE_ENDPOINTS !== 'false',
   };
+}
+
+export function resolveBrowserOtlpExportUrl(endpoint: string): string {
+  const trimmed = endpoint.trim().replace(/\/+$/, '');
+  const base = trimmed || PUBLIC_BROWSER_OTLP_EXPORT_PATH;
+  if (/^https?:\/\//i.test(base)) {
+    return base;
+  }
+  const origin =
+    typeof globalThis.location?.origin === 'string'
+      ? globalThis.location.origin
+      : 'http://localhost';
+  const pathRef = base.startsWith('/') ? base : `/${base}`;
+  return new URL(pathRef, origin).href;
 }
 
 function getSpanAttributes(span: Span): Record<string, unknown> {
@@ -72,24 +88,6 @@ function getSpanUrl(span: Span): string | undefined {
   return undefined;
 }
 
-function setEncryptedTokenAttribute(span: Span): void {
-  const hash = AuthService.getEncryptedTokenHashSync();
-  if (hash) {
-    span.setAttribute('encrypted_token', hash);
-    return;
-  }
-
-  void AuthService.ensureEncryptedTokenHash()
-    .then((result) => {
-      if (result) {
-        span.setAttribute('encrypted_token', result);
-      }
-    })
-    .catch(() => {
-      // Swallow errors to avoid interfering with telemetry pipeline
-    });
-}
-
 export async function initTelemetry(): Promise<Tracer | null> {
   const config = getConfig();
 
@@ -108,12 +106,7 @@ export async function initTelemetry(): Promise<Tracer | null> {
   });
 
   const exporter = new OTLPTraceExporter({
-    url: `${config.endpoint}/v1/traces`,
-    headers: config.seqApiKey
-      ? {
-          'X-Seq-ApiKey': config.seqApiKey,
-        }
-      : {},
+    url: resolveBrowserOtlpExportUrl(PUBLIC_BROWSER_OTLP_EXPORT_PATH),
   });
 
   const batchSpanProcessor = new BatchSpanProcessor(exporter);
@@ -133,6 +126,8 @@ export async function initTelemetry(): Promise<Tracer | null> {
 
   trace.setGlobalTracerProvider(tracerProvider);
 
+  const ignoreInstrumentationUrls = [...IGNORE_OTEL_SELF_EXPORT_URLS];
+
   try {
     registerInstrumentations({
       instrumentations: [
@@ -142,18 +137,17 @@ export async function initTelemetry(): Promise<Tracer | null> {
             propagateTraceHeaderCorsUrls: [/.+/],
             clearTimingResources: true,
             ignoreNetworkEvents: true,
+            ignoreUrls: ignoreInstrumentationUrls,
             applyCustomAttributesOnSpan: (span: Span, request: Request, response: Response) => {
               setHttpSpanName(span, request.method, request.url);
-              setEncryptedTokenAttribute(span);
-              if (config.sanitizeHeaders || config.sanitizeUrls) {
-                sanitizeSpanAttributes(span, request, response);
-              }
+              sanitizeSpanAttributes(span, request, response);
             },
           },
           '@opentelemetry/instrumentation-xml-http-request': {
             enabled: true,
             propagateTraceHeaderCorsUrls: [/.+/],
             ignoreNetworkEvents: true,
+            ignoreUrls: ignoreInstrumentationUrls,
             applyCustomAttributesOnSpan: (span: Span) => {
               const attributes = getSpanAttributes(span);
               setHttpSpanName(
@@ -163,10 +157,7 @@ export async function initTelemetry(): Promise<Tracer | null> {
                   : undefined,
                 getSpanUrl(span)
               );
-              setEncryptedTokenAttribute(span);
-              if (config.sanitizeHeaders || config.sanitizeUrls) {
-                sanitizeSpanAttributes(span);
-              }
+              sanitizeSpanAttributes(span);
             },
           },
           '@opentelemetry/instrumentation-user-interaction': {
@@ -182,13 +173,9 @@ export async function initTelemetry(): Promise<Tracer | null> {
         }),
       ],
     });
-  } catch {
-    // Auto-instrumentations may not be available in test environments
-  }
+  } catch {}
 
   tracer = trace.getTracer(config.serviceName, config.serviceVersion);
-
-  void AuthService.ensureEncryptedTokenHash();
 
   return tracer;
 }

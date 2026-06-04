@@ -1,31 +1,49 @@
-import {
-  CircleDollarSign,
-  CreditCard,
-  HandCoins,
-  LineChart,
-  PiggyBank,
-  RefreshCcw,
-  Home,
-} from 'lucide-react';
-import { useMemo, useState } from 'react';
-import {
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Legend,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts';
-import type { Props as DefaultLegendContentProps } from 'recharts/types/component/DefaultLegendContent';
+import { CircleDollarSign, Landmark, RefreshCcw } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Bar, BarChart, CartesianGrid, Cell, ReferenceLine, XAxis, YAxis } from 'recharts';
 import { useTheme } from '../context/ThemeContext';
-import { useCurrency } from '../hooks/useCurrency';
+import { ACCOUNT_GROUP_LABELS } from '../domain/accountCategories';
+import { BalancesChartXAxisTick } from '../features/analytics/components/BalancesChartXAxisTick';
+import { BalancesChartYAxisTick } from '../features/analytics/components/BalancesChartYAxisTick';
+import {
+  ChartTooltipFadeHost,
+  ChartTooltipShell,
+} from '../features/analytics/components/ChartGlassTooltip';
+import { useChartContainerSize } from '../features/analytics/hooks/useChartContainerSize';
+import { useDebouncedChartRecalc } from '../features/analytics/hooks/useDebouncedChartRecalc';
+import {
+  balancesYTickCount,
+  formatBalancesAxisValue,
+  safeBalanceAmount,
+  sortBanksAlphabetically,
+  symmetricZeroAxisTicks,
+} from '../features/analytics/utils/balancesChartAxis';
+import {
+  INSTITUTION_LABEL_AXIS_GAP,
+  INSTITUTION_LABEL_LINE_HEIGHT,
+  institutionLabelLineCount,
+  maxCharsPerInstitutionSlot,
+} from '../features/analytics/utils/wrapInstitutionLabel';
 import { useBalancesOverview } from '../hooks/useBalancesOverview';
-import { formatRatio } from '../services/AnalyticsService';
-import { Alert, Button, cn, GlassCard } from '../ui/primitives';
-import { Amount } from './Amount';
+import { Alert, Button, cn, EmptyState } from '../ui/primitives';
+import {
+  control,
+  surface as semanticSurfaces,
+  border as uiBorderRecipes,
+  radius as uiRadiusRecipes,
+  status as uiStatusRecipes,
+  text as uiTextRecipes,
+  font as uiTypographyRecipes,
+} from '../ui/recipes';
+import { AccountGroupIcon } from './AccountGroupIcon';
+import { Amount, fmtUSD } from './Amount';
 import HeroStatCard from './widgets/HeroStatCard';
+
+const dashboardSummaryShellLoading = [
+  `h-16 ${uiRadiusRecipes.standard} border`,
+  ...uiBorderRecipes.subtle,
+  ...semanticSurfaces.mutedChip,
+] as const;
 
 type BankBarDatum = {
   bank: string;
@@ -36,147 +54,175 @@ type BankBarDatum = {
   loan: number | null;
 };
 
-function AssetsDebtPill({ ratio }: { ratio: number | string | null }) {
-  const label = formatRatio(ratio);
-  return (
-    <span
-      className={cn(
-        'inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-semibold',
-        'border-slate-200 bg-white/70 text-slate-600',
-        'dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-200'
-      )}
-    >
-      Assets / Debt: {label}
-    </span>
-  );
-}
-
-type BalancesLegendProps = DefaultLegendContentProps & {
-  ratio: number | string | null;
-};
-
-function BalancesLegend({ payload, ratio }: BalancesLegendProps) {
-  if (!payload?.length) {
-    return null;
-  }
-
-  return (
-    <div
-      className={cn(
-        'flex w-full flex-wrap items-center justify-between gap-3',
-        'text-xs text-slate-600',
-        'dark:text-slate-300'
-      )}
-    >
-      <div className="flex flex-wrap items-center gap-3">
-        {payload.map((entry) => {
-          const label =
-            typeof entry.value === 'string'
-              ? entry.value
-              : entry.value != null
-                ? String(entry.value)
-                : entry.dataKey != null
-                  ? String(entry.dataKey)
-                  : '';
-          return (
-            <span key={`${entry.dataKey ?? label}`} className="flex items-center gap-2">
-              <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: entry.color }} />
-              <span className="font-medium">{label}</span>
-            </span>
-          );
-        })}
-      </div>
-      {ratio != null && (
-        <div className="flex w-full flex-wrap justify-end gap-2 sm:w-auto">
-          <AssetsDebtPill ratio={ratio} />
-        </div>
-      )}
-    </div>
-  );
-}
-
 export function BalancesOverview() {
   const { loading, refreshing, error, data, refresh } = useBalancesOverview();
   const { colors } = useTheme();
   const { convert, format, formatConverted } = useCurrency();
 
   const banks = data?.banks || [];
+  const debouncedBanks = useDebouncedChartRecalc(banks);
   const overall = data?.overall;
 
-  const fmtAxis = (n: number) => {
-    const sign = n < 0 ? '-' : '';
-    const absolute = Math.abs(n);
-    if (absolute >= 1e12) return `${sign}${Math.round(absolute / 1e12)}T`;
-    if (absolute >= 1e9) {
-      const rounded = Math.round(absolute / 1e9);
-      if (rounded >= 1000) return `${sign}1T`;
-      return `${sign}${rounded}B`;
-    }
-    if (absolute >= 1e6) {
-      const rounded = Math.round(absolute / 1e6);
-      if (rounded >= 1000) return `${sign}1B`;
-      return `${sign}${rounded}M`;
-    }
-    if (absolute >= 1e4) {
-      const rounded = Math.round(absolute / 1e3);
-      if (rounded >= 1000) return `${sign}1M`;
-      return `${sign}${rounded}k`;
-    }
-    return `${sign}${new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(absolute)}`;
-  };
+  const { ref: chartSizeRef, width: chartContainerWidth } = useChartContainerSize();
+  const chartInnerHeight = Math.max(220, Math.round(chartContainerWidth * 0.35));
+  const yTickCount = balancesYTickCount(chartInnerHeight);
 
-  const maxPositive = banks.length
-    ? Math.max(0, ...banks.map((b) => (b.cash || 0) + (b.investments || 0) + (b.property || 0)))
-    : 0;
-  const maxNegativeAbs = banks.length
-    ? Math.max(0, ...banks.map((b) => Math.abs((b.credit || 0) + (b.loan || 0))))
-    : 0;
-  const maxAbs = Math.max(maxPositive, maxNegativeAbs);
-  const maxLabelLen = Math.max(fmtAxis(maxAbs).length, fmtAxis(-maxAbs).length);
-  let yTickFontSize = 12;
-  if (maxLabelLen >= 14) yTickFontSize = 11;
-  if (maxLabelLen >= 16) yTickFontSize = 10;
-  if (maxLabelLen >= 18) yTickFontSize = 9;
-  const approxCharWidth = yTickFontSize * 0.62;
-  const yAxisWidth = Math.min(120, Math.ceil(maxLabelLen * approxCharWidth) + 12);
+  const chartLayout = useMemo(() => {
+    const bankPositiveTotals = debouncedBanks.map(
+      (b) => safeBalanceAmount(b.cash) + safeBalanceAmount(b.investments)
+    );
+    const bankNegativeTotals = debouncedBanks.map((b) =>
+      Math.abs(safeBalanceAmount(b.credit) + safeBalanceAmount(b.loan))
+    );
+    const maxPositive = bankPositiveTotals.length ? Math.max(0, ...bankPositiveTotals) : 0;
+    const maxNegativeAbs = bankNegativeTotals.length ? Math.max(0, ...bankNegativeTotals) : 0;
+    const maxExtent = Math.max(maxPositive, maxNegativeAbs);
+    const { ticks: yAxisTicks, domain: yAxisDomain } = symmetricZeroAxisTicks(
+      maxExtent,
+      yTickCount
+    );
+    const axisMax = yAxisDomain[1];
+    const maxLabelLen = Math.max(
+      formatBalancesAxisValue(axisMax).length,
+      formatBalancesAxisValue(-axisMax).length
+    );
+    let yTickFontSize = 12;
+    if (maxLabelLen >= 14) yTickFontSize = 11;
+    if (maxLabelLen >= 16) yTickFontSize = 10;
+    if (maxLabelLen >= 18) yTickFontSize = 9;
+    const approxCharWidth = yTickFontSize * 0.62;
+    const yAxisWidth = Math.min(120, Math.ceil(maxLabelLen * approxCharWidth) + 12);
+    const maxCharsPerLine = maxCharsPerInstitutionSlot(debouncedBanks.length);
+    const maxLabelLines =
+      debouncedBanks.length > 0
+        ? Math.max(
+            1,
+            ...debouncedBanks.map((bank) =>
+              institutionLabelLineCount(bank.bankName, maxCharsPerLine)
+            )
+          )
+        : 1;
+    const xAxisHeight =
+      maxLabelLines * INSTITUTION_LABEL_LINE_HEIGHT + INSTITUTION_LABEL_AXIS_GAP + 8;
+    return { yTickFontSize, yAxisWidth, yAxisTicks, maxCharsPerLine, xAxisHeight, yAxisDomain };
+  }, [debouncedBanks, yTickCount]);
 
   const chartData = useMemo<BankBarDatum[]>(
     () =>
-      (data?.banks || []).map((b) => ({
+      sortBanksAlphabetically(debouncedBanks).map((b) => ({
         bank: b.bankName,
-        cash: b.cash == null ? null : convert(b.cash),
-        investments: b.investments == null ? null : convert(b.investments),
-        property: b.property == null ? null : convert(b.property),
-        credit: b.credit == null ? null : convert(b.credit),
-        loan: b.loan == null ? null : convert(b.loan),
+        cash: safeBalanceAmount(b.cash),
+        investments: safeBalanceAmount(b.investments),
+        credit: safeBalanceAmount(b.credit),
+        loan: safeBalanceAmount(b.loan),
       })),
-    [convert, data?.banks]
+    [debouncedBanks]
   );
 
-  const [hoverInfo, setHoverInfo] = useState<{
-    bank: string;
-    cash?: number | null;
-    investments?: number | null;
-    property?: number | null;
-    credit?: number | null;
-    loan?: number | null;
-  } | null>(null);
+  const [hoverIndex, setHoverIndex] = useState<number | null>(null);
+  const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
+  const [isTouchPrimary, setIsTouchPrimary] = useState(
+    () =>
+      typeof window !== 'undefined' &&
+      window.matchMedia('(hover: none) and (pointer: coarse)').matches
+  );
+  const chartContainerRef = useRef<HTMLDivElement>(null);
+  const totalChartHeight = chartInnerHeight + chartLayout.xAxisHeight;
+  const hoverClearTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const handleBarHover = (entry?: { payload?: BankBarDatum | null }) => {
-    const payload = entry?.payload;
-    if (!payload) {
-      setHoverInfo(null);
+  useEffect(() => {
+    const mediaQuery = window.matchMedia('(hover: none) and (pointer: coarse)');
+    const syncTouchPrimary = () => setIsTouchPrimary(mediaQuery.matches);
+    syncTouchPrimary();
+    mediaQuery.addEventListener('change', syncTouchPrimary);
+    return () => mediaQuery.removeEventListener('change', syncTouchPrimary);
+  }, []);
+
+  useEffect(() => {
+    if (!isTouchPrimary || selectedIndex === null) {
       return;
     }
-    setHoverInfo({
+    const handlePointerDown = (event: PointerEvent) => {
+      const chartEl = chartContainerRef.current;
+      if (chartEl && event.target instanceof Node && chartEl.contains(event.target)) {
+        return;
+      }
+      setSelectedIndex(null);
+    };
+    document.addEventListener('pointerdown', handlePointerDown);
+    return () => document.removeEventListener('pointerdown', handlePointerDown);
+  }, [isTouchPrimary, selectedIndex]);
+
+  const highlightIndex = isTouchPrimary ? selectedIndex : (hoverIndex ?? selectedIndex);
+  const menuIndex = isTouchPrimary ? selectedIndex : hoverIndex;
+
+  const hoverInfo = useMemo(() => {
+    if (menuIndex == null || !chartData[menuIndex]) {
+      return null;
+    }
+    const payload = chartData[menuIndex];
+    return {
       bank: payload.bank,
       cash: payload.cash,
       investments: payload.investments,
       property: payload.property,
       credit: payload.credit,
       loan: payload.loan,
-    });
+    };
+  }, [chartData, menuIndex]);
+
+  const cancelHoverClear = useCallback(() => {
+    if (hoverClearTimeoutRef.current) {
+      clearTimeout(hoverClearTimeoutRef.current);
+      hoverClearTimeoutRef.current = null;
+    }
+  }, []);
+
+  const institutionCellProps = (index: number) => {
+    const isActive = highlightIndex === index;
+    return {
+      fillOpacity: highlightIndex === null || isActive ? 1 : 0.35,
+      style: { cursor: 'pointer' } as const,
+    };
   };
+
+  const handleBarMouseEnter = useCallback(
+    (_: unknown, index: number) => {
+      if (isTouchPrimary) {
+        return;
+      }
+      cancelHoverClear();
+      setHoverIndex(index);
+    },
+    [cancelHoverClear, isTouchPrimary]
+  );
+
+  const handleBarMouseLeave = useCallback(() => {
+    if (isTouchPrimary) {
+      return;
+    }
+    cancelHoverClear();
+    hoverClearTimeoutRef.current = setTimeout(() => {
+      setHoverIndex(null);
+      hoverClearTimeoutRef.current = null;
+    }, 50);
+  }, [cancelHoverClear, isTouchPrimary]);
+
+  const handleChartMouseLeave = useCallback(() => {
+    cancelHoverClear();
+    setHoverIndex(null);
+  }, [cancelHoverClear]);
+
+  const handleBarClick = useCallback(
+    (_: unknown, index: number) => {
+      if (!chartData[index]) {
+        return;
+      }
+      setHoverIndex(null);
+      setSelectedIndex((prev) => (prev === index ? null : index));
+    },
+    [chartData]
+  );
 
   const overviewCards = useMemo(
     () => [
@@ -184,7 +230,7 @@ export function BalancesOverview() {
         key: 'net',
         title: 'Net',
         accent: 'violet' as const,
-        icon: <CircleDollarSign className={cn('h-4', 'w-4')} />,
+        icon: <CircleDollarSign />,
         value: (
           <span data-testid="overall-net">
             <Amount
@@ -196,65 +242,45 @@ export function BalancesOverview() {
       },
       {
         key: 'cash',
-        title: 'Cash',
+        title: ACCOUNT_GROUP_LABELS.cash,
         accent: 'emerald' as const,
-        icon: <PiggyBank className={cn('h-4', 'w-4')} />,
+        icon: <AccountGroupIcon group="cash" />,
         value: (
-          <span
-            data-testid="overall-cash"
-            className={cn('text-emerald-500', 'dark:text-emerald-300')}
-          >
-            {format(overall?.cash ?? 0)}
+          <span data-testid="overall-cash" className={cn(uiStatusRecipes.success.text)}>
+            {fmtUSD(overall?.cash ?? 0)}
           </span>
         ),
       },
       {
         key: 'investments',
-        title: 'Investments',
+        title: ACCOUNT_GROUP_LABELS.investments,
         accent: 'sky' as const,
-        icon: <LineChart className={cn('h-4', 'w-4')} />,
+        icon: <AccountGroupIcon group="investments" />,
         value: (
-          <span
-            data-testid="overall-investments"
-            className={cn('text-sky-500', 'dark:text-sky-300')}
-          >
-            {format(overall?.investments ?? 0)}
-          </span>
-        ),
-      },
-      {
-        key: 'property',
-        title: 'Property',
-        accent: 'emerald' as const,
-        icon: <Home className={cn('h-4', 'w-4')} />,
-        value: (
-          <span
-            data-testid="overall-property"
-            className={cn('text-teal-500', 'dark:text-teal-300')}
-          >
-            {format(overall?.property ?? 0)}
+          <span data-testid="overall-investments" className={cn(uiStatusRecipes.info.text)}>
+            {fmtUSD(overall?.investments ?? 0)}
           </span>
         ),
       },
       {
         key: 'credit',
-        title: 'Credit',
+        title: ACCOUNT_GROUP_LABELS.credit,
         accent: 'rose' as const,
-        icon: <CreditCard className={cn('h-4', 'w-4')} />,
+        icon: <AccountGroupIcon group="credit" />,
         value: (
-          <span data-testid="overall-credit" className={cn('text-rose-500', 'dark:text-rose-300')}>
-            {format(overall?.credit ?? 0)}
+          <span data-testid="overall-credit" className={cn(uiStatusRecipes.danger.text)}>
+            {fmtUSD(overall?.credit ?? 0)}
           </span>
         ),
       },
       {
         key: 'loan',
-        title: 'Loan',
+        title: ACCOUNT_GROUP_LABELS.loans,
         accent: 'amber' as const,
-        icon: <HandCoins className={cn('h-4', 'w-4')} />,
+        icon: <AccountGroupIcon group="loans" />,
         value: (
-          <span data-testid="overall-loan" className={cn('text-amber-600', 'dark:text-amber-400')}>
-            {format(overall?.loan ?? 0)}
+          <span data-testid="overall-loan" className={cn(uiStatusRecipes.warning.text)}>
+            {fmtUSD(overall?.loan ?? 0)}
           </span>
         ),
       },
@@ -271,44 +297,26 @@ export function BalancesOverview() {
   );
 
   return (
-    <div className="space-y-6">
-      <div
-        className={cn(
-          'flex',
-          'flex-wrap',
-          'items-center',
-          'justify-start',
-          'gap-3',
-          'sm:justify-end'
-        )}
-      >
-        {!loading && refreshing && (
+    <div className="space-y-4">
+      {!loading && refreshing ? (
+        <div className={cn('flex', 'items-center', 'justify-end')}>
           <RefreshCcw
             aria-label="Refreshing balances"
-            className={cn(
-              'h-4',
-              'w-4',
-              'text-slate-500',
-              'dark:text-slate-400',
-              refreshing && 'animate-spin'
-            )}
+            className={cn(control.glyph.md, uiTextRecipes.subtle, 'animate-spin')}
           />
-        )}
-      </div>
+        </div>
+      ) : null}
 
       {loading && (
         <div
           data-testid="balances-loading"
-          className={cn('grid', 'gap-3', 'sm:grid-cols-2', 'lg:grid-cols-6')}
+          className={cn('grid', 'grid-cols-2', 'gap-3', '[&>*]:min-w-0', 'lg:grid-cols-5')}
         >
           {[1, 2, 3, 4, 5, 6].map((id) => {
             return (
               <div
                 key={id}
-                className={cn(
-                  'h-16 rounded-xl border bg-slate-100/60',
-                  'border-slate-200/60 dark:border-slate-700/60 dark:bg-slate-900/40'
-                )}
+                className={cn(dashboardSummaryShellLoading, id === 1 && 'col-span-2 lg:col-span-1')}
               />
             );
           })}
@@ -329,217 +337,222 @@ export function BalancesOverview() {
         </Alert>
       )}
 
-      <div
-        className={cn(
-          'grid',
-          'gap-3',
-          '[grid-template-columns:repeat(auto-fit,minmax(180px,1fr))]'
-        )}
-      >
-        {overviewCards.map((card) => (
-          <HeroStatCard
-            key={card.key}
-            title={card.title}
-            value={card.value}
-            icon={card.icon}
-            accent={card.accent}
-            className="h-full"
-            minHeightClassName="min-h-0"
-          />
-        ))}
-      </div>
-
-      <div
-        className={cn(
-          'flex',
-          'flex-wrap',
-          'items-end',
-          'justify-between',
-          'gap-3',
-          'pt-2',
-          'text-sm'
-        )}
-      >
-        <div>
-          <h3 className={cn('font-semibold', 'text-slate-900', 'dark:text-slate-100')}>
-            Assets and debt by institution
-          </h3>
-          <p className={cn('text-xs', 'text-slate-600', 'dark:text-slate-400')}>
-            Assets stack upward; credit, mortgages, and loans stack downward.
-          </p>
+      <div className={cn('space-y-5')}>
+        <div className={cn('grid', 'grid-cols-2', 'gap-3', '[&>*]:min-w-0', 'lg:grid-cols-5')}>
+          {overviewCards.map((card) => (
+            <HeroStatCard
+              key={card.key}
+              title={card.title}
+              value={card.value}
+              icon={card.icon}
+              accent={card.accent}
+              className={cn('h-full', card.key === 'net' && 'col-span-2 lg:col-span-1')}
+              minHeightClassName="min-h-0"
+              layout={card.key === 'net' ? 'row' : 'row-tablet'}
+            />
+          ))}
         </div>
-      </div>
 
-      <div className={cn('relative', 'h-12')}>
-        {hoverInfo && (
+        <div
+          ref={chartContainerRef}
+          className={cn(
+            'relative',
+            'mt-4',
+            'w-full',
+            'min-w-0',
+            'overflow-visible',
+            'outline-none',
+            '[&_.recharts-wrapper]:outline-none',
+            '[&_.recharts-surface]:outline-none',
+            '[&_.recharts-wrapper:focus]:outline-none',
+            '[&_.recharts-wrapper:focus-visible]:outline-none',
+            '[&_.recharts-surface:focus]:outline-none',
+            '[&_.recharts-surface:focus-visible]:outline-none',
+            '[&_.recharts-tooltip-cursor]:hidden'
+          )}
+        >
           <div
-            className={cn(
+            ref={chartSizeRef}
+            className={cn('w-full', 'min-w-0')}
+            style={{ height: 1 }}
+            aria-hidden
+          />
+          <ChartTooltipFadeHost
+            active={hoverInfo}
+            presence={{ showDelayMs: 60, hideDelayMs: 80, fadeDurationMs: 200 }}
+            wrapperClassName={cn(
               'pointer-events-none',
               'absolute',
-              'inset-0',
-              'grid',
-              'place-items-center'
+              'bottom-full',
+              'left-0',
+              'right-0',
+              'z-10',
+              'mb-4',
+              '-translate-y-1',
+              'flex',
+              'justify-center',
+              'px-2'
             )}
           >
-            <GlassCard
-              variant="accent"
-              rounded="lg"
-              padding="sm"
-              withInnerEffects={false}
-              className={cn(
-                'flex flex-wrap items-center gap-3 text-xs',
-                'text-slate-700 dark:text-slate-200'
-              )}
+            {(info) => (
+              <ChartTooltipShell
+                className={cn(
+                  'flex flex-col gap-2',
+                  uiTypographyRecipes.caption,
+                  uiTextRecipes.body
+                )}
+              >
+                <p className={cn(uiTypographyRecipes.captionStrong, uiTextRecipes.primary)}>
+                  {info.bank}
+                </p>
+                <div className={cn('grid grid-cols-2 gap-x-4 gap-y-2')}>
+                  <span className={cn('flex items-center gap-1', uiStatusRecipes.success.text)}>
+                    <span className={cn('h-2 w-2 shrink-0 rounded-full bg-emerald-500')} />
+                    {ACCOUNT_GROUP_LABELS.cash}: {fmtUSD(info.cash ?? 0)}
+                  </span>
+                  <span className={cn('flex items-center gap-1', uiStatusRecipes.info.text)}>
+                    <span className={cn('h-2 w-2 shrink-0 rounded-full bg-cyan-500')} />
+                    {ACCOUNT_GROUP_LABELS.investments}: {fmtUSD(info.investments ?? 0)}
+                  </span>
+                  <span className={cn('flex items-center gap-1', uiStatusRecipes.danger.text)}>
+                    <span className={cn('h-2 w-2 shrink-0 rounded-full bg-rose-500')} />
+                    {ACCOUNT_GROUP_LABELS.credit}: {fmtUSD(info.credit ?? 0)}
+                  </span>
+                  <span className={cn('flex items-center gap-1', uiStatusRecipes.warning.text)}>
+                    <span className={cn('h-2 w-2 shrink-0 rounded-full bg-amber-500')} />
+                    {ACCOUNT_GROUP_LABELS.loans}: {fmtUSD(info.loan ?? 0)}
+                  </span>
+                </div>
+              </ChartTooltipShell>
+            )}
+          </ChartTooltipFadeHost>
+          {chartContainerWidth > 0 && chartData.length === 0 && (
+            <div
+              className={cn('w-full', 'min-w-0', 'flex', 'items-center', 'justify-center')}
+              style={{ height: totalChartHeight }}
+              data-testid="balances-chart-empty"
             >
-              <span className="font-semibold">{hoverInfo.bank}</span>
-              <span
-                className={cn(
-                  'flex',
-                  'items-center',
-                  'gap-1',
-                  'text-emerald-600',
-                  'dark:text-emerald-300'
-                )}
+              <EmptyState
+                icon={Landmark}
+                title="No balances to survey"
+                description="Link your ally accounts to see your full financial picture."
+              />
+            </div>
+          )}
+          {chartContainerWidth > 0 && chartData.length > 0 && (
+            <div
+              className={cn('w-full', 'min-w-0')}
+              style={{ height: totalChartHeight }}
+              data-testid="balances-chart-plot"
+            >
+              <BarChart
+                width={chartContainerWidth}
+                height={totalChartHeight}
+                data={chartData}
+                stackOffset="sign"
+                accessibilityLayer={false}
+                margin={{
+                  top: 8,
+                  right: 16,
+                  left: 0,
+                  bottom: chartLayout.xAxisHeight,
+                }}
+                onMouseDown={(_state, event) => event.preventDefault()}
+                onMouseLeave={handleChartMouseLeave}
               >
-                <span className={cn('h-2', 'w-2', 'rounded-full', 'bg-emerald-500')} />
-                Cash: {formatConverted(hoverInfo.cash ?? 0)}
-              </span>
-              <span
-                className={cn(
-                  'flex',
-                  'items-center',
-                  'gap-1',
-                  'text-cyan-600',
-                  'dark:text-cyan-300'
-                )}
-              >
-                <span className={cn('h-2', 'w-2', 'rounded-full', 'bg-cyan-500')} />
-                Investments: {formatConverted(hoverInfo.investments ?? 0)}
-              </span>
-              <span
-                className={cn(
-                  'flex',
-                  'items-center',
-                  'gap-1',
-                  'text-teal-600',
-                  'dark:text-teal-300'
-                )}
-              >
-                <span className={cn('h-2', 'w-2', 'rounded-full', 'bg-teal-500')} />
-                Property: {formatConverted(hoverInfo.property ?? 0)}
-              </span>
-              <span
-                className={cn(
-                  'flex',
-                  'items-center',
-                  'gap-1',
-                  'text-rose-600',
-                  'dark:text-rose-300'
-                )}
-              >
-                <span className={cn('h-2', 'w-2', 'rounded-full', 'bg-rose-500')} />
-                Credit: {formatConverted(hoverInfo.credit ?? 0)}
-              </span>
-              <span
-                className={cn(
-                  'flex',
-                  'items-center',
-                  'gap-1',
-                  'text-amber-600',
-                  'dark:text-amber-300'
-                )}
-              >
-                <span className={cn('h-2', 'w-2', 'rounded-full', 'bg-amber-500')} />
-                Loan: {formatConverted(hoverInfo.loan ?? 0)}
-              </span>
-            </GlassCard>
-          </div>
-        )}
-      </div>
-
-      <div className={cn('h-64', 'w-full', 'min-w-0')}>
-        <ResponsiveContainer width="100%" height="100%">
-          <BarChart
-            data={chartData}
-            stackOffset="sign"
-            margin={{ top: 8, right: 16, left: 16, bottom: 24 }}
-            onMouseLeave={() => setHoverInfo(null)}
-          >
-            <CartesianGrid strokeDasharray="3 3" stroke="#94a3b833" />
-            <XAxis dataKey="bank" tick={{ fill: '#94a3b8', fontSize: 12 }} />
-            <YAxis
-              tickFormatter={(value) => fmtAxis(value as number)}
-              tick={{ fill: '#94a3b8', fontSize: yTickFontSize }}
-              width={yAxisWidth}
-              tickMargin={6}
-            />
-            <Tooltip
-              wrapperStyle={{ display: 'none' }}
-              cursor={
-                hoverInfo
-                  ? { fill: 'transparent', stroke: '#38bdf8', strokeWidth: 2, radius: 4 }
-                  : false
-              }
-            />
-            <Legend
-              verticalAlign="bottom"
-              height={40}
-              iconSize={10}
-              wrapperStyle={{ paddingTop: 8 }}
-              content={(legendProps) => (
-                <BalancesLegend
-                  {...legendProps}
-                  ratio={data?.overall?.ratio ?? null}
+                <CartesianGrid strokeDasharray="3 3" stroke={colors.chart.grid} />
+                <XAxis
+                  dataKey="bank"
+                  interval={0}
+                  tickLine={false}
+                  axisLine={{ stroke: colors.chart.grid }}
+                  height={chartLayout.xAxisHeight}
+                  tick={(props) => (
+                    <BalancesChartXAxisTick
+                      {...props}
+                      fill={colors.chart.axis}
+                      maxCharsPerLine={chartLayout.maxCharsPerLine}
+                    />
+                  )}
                 />
-              )}
-            />
-            <Bar
-              dataKey="cash"
-              name="Cash"
-              stackId="pos"
-              fill={colors.semantic.cash}
-              legendType="circle"
-              onMouseEnter={(entry) => handleBarHover(entry)}
-              onMouseLeave={() => setHoverInfo(null)}
-            />
-            <Bar
-              dataKey="investments"
-              name="Investments"
-              stackId="pos"
-              fill={colors.semantic.investments}
-              legendType="circle"
-              onMouseEnter={(entry) => handleBarHover(entry)}
-              onMouseLeave={() => setHoverInfo(null)}
-            />
-            <Bar
-              dataKey="property"
-              name="Property"
-              stackId="pos"
-              fill={colors.semantic.property}
-              legendType="circle"
-              onMouseEnter={(entry) => handleBarHover(entry)}
-              onMouseLeave={() => setHoverInfo(null)}
-            />
-            <Bar
-              dataKey="credit"
-              name="Credit"
-              stackId="neg"
-              fill={colors.semantic.credit}
-              legendType="circle"
-              onMouseEnter={(entry) => handleBarHover(entry)}
-              onMouseLeave={() => setHoverInfo(null)}
-            />
-            <Bar
-              dataKey="loan"
-              name="Loan"
-              stackId="neg"
-              fill={colors.semantic.loan}
-              legendType="circle"
-              onMouseEnter={(entry) => handleBarHover(entry)}
-              onMouseLeave={() => setHoverInfo(null)}
-            />
-          </BarChart>
-        </ResponsiveContainer>
+                <YAxis
+                  type="number"
+                  width={chartLayout.yAxisWidth}
+                  domain={chartLayout.yAxisDomain}
+                  ticks={chartLayout.yAxisTicks}
+                  allowDecimals={false}
+                  tickLine={false}
+                  axisLine={false}
+                  tick={(props) => (
+                    <BalancesChartYAxisTick
+                      {...props}
+                      fill={colors.chart.axis}
+                      fontSize={chartLayout.yTickFontSize}
+                      formatValue={formatBalancesAxisValue}
+                    />
+                  )}
+                />
+                <ReferenceLine y={0} stroke={colors.chart.grid} strokeWidth={1} />
+                <Bar
+                  dataKey="cash"
+                  name={ACCOUNT_GROUP_LABELS.cash}
+                  stackId="balance"
+                  fill={colors.semantic.cash}
+                  legendType="circle"
+                  onMouseEnter={handleBarMouseEnter}
+                  onMouseLeave={handleBarMouseLeave}
+                  onClick={handleBarClick}
+                >
+                  {chartData.map((entry, index) => (
+                    <Cell key={`cash-${entry.bank}`} {...institutionCellProps(index)} />
+                  ))}
+                </Bar>
+                <Bar
+                  dataKey="investments"
+                  name={ACCOUNT_GROUP_LABELS.investments}
+                  stackId="balance"
+                  fill={colors.semantic.investments}
+                  legendType="circle"
+                  onMouseEnter={handleBarMouseEnter}
+                  onMouseLeave={handleBarMouseLeave}
+                  onClick={handleBarClick}
+                >
+                  {chartData.map((entry, index) => (
+                    <Cell key={`investments-${entry.bank}`} {...institutionCellProps(index)} />
+                  ))}
+                </Bar>
+                <Bar
+                  dataKey="credit"
+                  name={ACCOUNT_GROUP_LABELS.credit}
+                  stackId="balance"
+                  fill={colors.semantic.credit}
+                  legendType="circle"
+                  onMouseEnter={handleBarMouseEnter}
+                  onMouseLeave={handleBarMouseLeave}
+                  onClick={handleBarClick}
+                >
+                  {chartData.map((entry, index) => (
+                    <Cell key={`credit-${entry.bank}`} {...institutionCellProps(index)} />
+                  ))}
+                </Bar>
+                <Bar
+                  dataKey="loan"
+                  name={ACCOUNT_GROUP_LABELS.loans}
+                  stackId="balance"
+                  fill={colors.semantic.loan}
+                  legendType="circle"
+                  onMouseEnter={handleBarMouseEnter}
+                  onMouseLeave={handleBarMouseLeave}
+                  onClick={handleBarClick}
+                >
+                  {chartData.map((entry, index) => (
+                    <Cell key={`loan-${entry.bank}`} {...institutionCellProps(index)} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

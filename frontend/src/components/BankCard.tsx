@@ -1,8 +1,25 @@
 import { AnimatePresence, motion } from 'framer-motion';
-import { ChevronDown, MoreVertical, RefreshCw, Unlink } from 'lucide-react';
+import { ChevronDown, FileDown, RefreshCw, Unlink } from 'lucide-react';
 import type React from 'react';
-import { useMemo, useState } from 'react';
-import { Button, cn, GlassCard, MenuDropdown, MenuItem } from '../ui/primitives';
+import { useEffect, useRef, useState } from 'react';
+import { getSessionBankExpanded, setSessionBankExpanded } from '@/utils/sessionPreferences';
+import {
+  ACCOUNT_GROUP_LABELS,
+  type AccountGroupKey,
+  accountTypeSortOrder,
+} from '../domain/accountCategories';
+import { getConnectionStatusCaption } from '../domain/connectionStatus';
+import { cn, GlassCard, IconButton, MenuDropdown, MenuItem } from '../ui/primitives';
+import { appTitleBarRecipes } from '../ui/primitives/AppTitleBar';
+import {
+  control,
+  controlIconWell,
+  border as uiBorderRecipes,
+  status as uiStatusRecipes,
+  text as uiTextRecipes,
+  font as uiTypographyRecipes,
+} from '../ui/recipes';
+import { AccountGroupIcon } from './AccountGroupIcon';
 import { AccountRow } from './AccountRow';
 import { DisconnectModal } from './DisconnectModal';
 import { StatusPill } from './StatusPill';
@@ -19,9 +36,11 @@ interface Account {
 interface BankConnection {
   id: string;
   name: string;
-  short: string; // initials for avatar
+  short: string;
   status: 'connected' | 'needs_reauth' | 'error';
-  lastSync?: string; // ISO date string
+  lastSync?: string;
+  provider: string;
+  connectionId?: string | null;
   accounts: Account[];
 }
 
@@ -29,69 +48,48 @@ interface BankCardProps {
   bank: BankConnection;
   onSync: (id: string) => Promise<void>;
   onDisconnect: (id: string) => Promise<void>;
-  onAccountSelect?: (accountId: string) => void;
+  onExport?: (format: 'csv' | 'ofx', connectionId?: string) => Promise<void>;
+  isExporting?: boolean;
+  isOnline: boolean;
+  onImportSuccess?: (count: number, mask: string) => void;
 }
 
-const relativeTime = (iso?: string) => {
-  if (!iso) return 'Never';
-  const d = new Date(iso);
-  const diff = Date.now() - d.getTime();
-  const mins = Math.round(diff / 60000);
-  if (mins < 1) return 'just now';
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.round(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  const days = Math.round(hrs / 24);
-  return `${days}d ago`;
-};
+export const BankCard: React.FC<BankCardProps> = ({
+  bank,
+  onSync,
+  onDisconnect,
+  onExport = async () => undefined,
+  isExporting = false,
+  isOnline,
+  onImportSuccess,
+}) => {
+  const sectionBadgeClass = cn(uiTypographyRecipes.label, uiTextRecipes.muted);
+  const statusCaption = getConnectionStatusCaption(bank.status);
 
-const CardMenu: React.FC<{
-  onDisconnect: () => void;
-}> = ({ onDisconnect }) => {
-  return (
-    <MenuDropdown
-      trigger={
-        <Button variant="icon" size="icon" aria-label="more">
-          <MoreVertical className={cn('h-5', 'w-5')} />
-        </Button>
-      }
-    >
-      <MenuItem icon={<Unlink className={cn('h-4', 'w-4')} />} onClick={onDisconnect}>
-        Disconnect
-      </MenuItem>
-    </MenuDropdown>
-  );
-};
+  const [expanded, setExpanded] = useState(() => getSessionBankExpanded(bank.id));
 
-export const BankCard: React.FC<BankCardProps> = ({ bank, onSync, onDisconnect, onAccountSelect }) => {
-  const sectionBadgeClass = 'text-xs font-semibold text-slate-600 dark:text-slate-200';
-
-  const [expanded, setExpanded] = useState(true);
+  useEffect(() => {
+    setSessionBankExpanded(bank.id, expanded);
+  }, [bank.id, expanded]);
   const [loading, setLoading] = useState(false);
+  const [syncElapsed, setSyncElapsed] = useState(0);
+  const syncStartRef = useRef<number | null>(null);
   const [showDisconnectModal, setShowDisconnectModal] = useState(false);
   const [disconnectLoading, setDisconnectLoading] = useState(false);
+  const showSyncButton = bank.provider !== 'simplefin';
 
-  const Avatar = useMemo(
-    () => (
-      <GlassCard
-        variant="accent"
-        rounded="lg"
-        padding="sm"
-        withInnerEffects={false}
-        className={cn(
-          'grid',
-          'h-12',
-          'w-12',
-          'place-items-center',
-          'text-sky-500',
-          'dark:text-sky-300'
-        )}
-      >
-        <span className={cn('text-sm', 'font-semibold')}>{bank.short}</span>
-      </GlassCard>
-    ),
-    [bank.short]
-  );
+  useEffect(() => {
+    if (!loading) {
+      setSyncElapsed(0);
+      syncStartRef.current = null;
+      return;
+    }
+    syncStartRef.current = Date.now();
+    const id = setInterval(() => {
+      setSyncElapsed(Math.floor((Date.now() - (syncStartRef.current ?? Date.now())) / 1000));
+    }, 1000);
+    return () => clearInterval(id);
+  }, [loading]);
 
   const handleSync = async () => {
     setLoading(true);
@@ -114,12 +112,26 @@ export const BankCard: React.FC<BankCardProps> = ({ bank, onSync, onDisconnect, 
     setShowDisconnectModal(false);
   };
 
-  const renderGroup = (title: string, accounts: Account[]) => (
-    <div key={title} className={cn('space-y-3')}>
-      <span className={sectionBadgeClass}>{title}</span>
+  const handleExport = async (format: 'csv' | 'ofx') => {
+    await onExport(format, bank.connectionId ?? undefined);
+  };
+
+  const renderGroup = (group: AccountGroupKey, accounts: Account[]) => (
+    <div key={group} className={cn('space-y-3')}>
+      <span className={cn(sectionBadgeClass, 'inline-flex items-center gap-2')}>
+        <span className={cn(...controlIconWell.lg)}>
+          <AccountGroupIcon group={group} />
+        </span>
+        {ACCOUNT_GROUP_LABELS[group]}
+      </span>
       <div className={cn('grid', 'grid-cols-1', 'gap-3', 'md:grid-cols-2')}>
         {accounts.map((account) => (
-          <AccountRow account={account} key={account.id} onSelect={onAccountSelect} />
+          <AccountRow
+            account={account}
+            key={account.id}
+            isOnline={isOnline}
+            onImportSuccess={onImportSuccess}
+          />
         ))}
       </div>
     </div>
@@ -128,71 +140,171 @@ export const BankCard: React.FC<BankCardProps> = ({ bank, onSync, onDisconnect, 
   return (
     <GlassCard
       variant="accent"
-      rounded="xl"
-      padding="lg"
+      rounded="lg"
+      padding="none"
       withInnerEffects={false}
+      containerClassName={cn('p-4', 'md:p-5', 'lg:p-5')}
       className={cn('space-y-6')}
     >
-      <div className={cn('flex', 'flex-col', 'gap-4', 'md:flex-row', 'md:gap-6')}>
-        <div className={cn('flex-1', 'space-y-3')}>
-          <div className={cn('flex', 'items-center', 'gap-3')}>
-            {Avatar}
-            <div className={cn('min-w-0', 'flex-1', 'space-y-1')}>
-              <h3
-                className={cn(
-                  'truncate',
-                  'text-lg',
-                  'font-semibold',
-                  'text-slate-900',
-                  'dark:text-white'
+      <div
+        className={cn(
+          'grid',
+          'min-w-0',
+          'grid-cols-[minmax(0,1fr)_auto]',
+          'gap-x-3',
+          'gap-y-2',
+          statusCaption ? 'grid-rows-[auto_auto_auto]' : 'grid-rows-[auto_auto]'
+        )}
+      >
+        <div
+          className={cn(
+            'col-start-1',
+            'row-start-1',
+            'flex',
+            'min-w-0',
+            'items-center',
+            'gap-2',
+            'p-3'
+          )}
+        >
+          <StatusPill status={bank.status} className={cn('shrink-0')} />
+          <h3
+            title={bank.name}
+            className={cn(
+              'min-w-0',
+              'line-clamp-2',
+              'break-words',
+              uiTypographyRecipes.sectionTitle,
+              uiTextRecipes.primary
+            )}
+          >
+            {bank.name}
+          </h3>
+        </div>
+        <div
+          className={cn(
+            'col-start-2',
+            'row-start-1',
+            'row-span-2',
+            'flex',
+            'items-center',
+            'self-center',
+            'pr-3'
+          )}
+        >
+          <IconButton
+            type="button"
+            size="md"
+            onClick={handleDisconnectClick}
+            variant="danger"
+            aria-label="Disconnect"
+            className={cn('shrink-0')}
+          >
+            <Unlink />
+          </IconButton>
+        </div>
+        <div
+          className={cn(
+            'col-start-1',
+            'row-start-2',
+            'flex',
+            'flex-wrap',
+            'items-center',
+            'gap-2',
+            'px-3',
+            'pb-3'
+          )}
+        >
+          <IconButton
+            type="button"
+            size="md"
+            onClick={() => setExpanded((v) => !v)}
+            variant="ghost"
+            aria-label={expanded ? 'Hide accounts' : 'Show accounts'}
+            className={cn(appTitleBarRecipes.settingsIdle, 'shrink-0')}
+          >
+            <ChevronDown
+              className={cn('transition-transform', 'duration-200', expanded && 'rotate-180')}
+            />
+          </IconButton>
+          {showSyncButton ? (
+            <IconButton
+              type="button"
+              size="md"
+              onClick={handleSync}
+              disabled={loading || !isOnline}
+              variant="ghost"
+              aria-label="Sync now"
+              title={!isOnline ? 'Unavailable while offline' : undefined}
+              className={cn(appTitleBarRecipes.settingsIdle, 'shrink-0')}
+            >
+              <div className={cn('flex', 'flex-col', 'items-center', 'gap-0.5', control.glyph.md)}>
+                <RefreshCw className={cn(loading && 'animate-spin')} />
+                {loading && syncElapsed > 0 && (
+                  <span
+                    className={cn(uiTypographyRecipes.caption, uiTextRecipes.muted, 'tabular-nums')}
+                  >
+                    {syncElapsed}s
+                  </span>
                 )}
-              >
-                {bank.name}
-              </h3>
-              <div className={cn('flex', 'items-center', 'gap-2', 'text-xs')}>
-                <StatusPill status={bank.status} />
-                <span className={cn('text-slate-600', 'dark:text-slate-300')}>
-                  {(() => {
-                    const label = relativeTime(bank.lastSync);
-                    return `Last sync ${label.includes('ago') ? label : `${label} ago`}`;
-                  })()}
-                </span>
               </div>
-            </div>
-          </div>
+            </IconButton>
+          ) : null}
+          <MenuDropdown
+            trigger={
+              <IconButton
+                type="button"
+                size="md"
+                variant="ghost"
+                aria-label="Export institution data"
+                title={
+                  isExporting
+                    ? 'Exporting...'
+                    : !isOnline
+                      ? 'Unavailable while offline'
+                      : bank.connectionId == null
+                        ? 'Export unavailable'
+                        : 'Export institution data'
+                }
+                disabled={isExporting || !isOnline || bank.connectionId == null}
+                className={cn(appTitleBarRecipes.settingsIdle, 'shrink-0')}
+              >
+                <FileDown className={cn(isExporting && 'animate-pulse')} />
+              </IconButton>
+            }
+          >
+            <MenuItem onClick={() => void handleExport('csv')}>Export as CSV</MenuItem>
+            <MenuItem onClick={() => void handleExport('ofx')}>Export as OFX</MenuItem>
+          </MenuDropdown>
         </div>
-        <div className={cn('flex', 'items-center', 'gap-2')}>
-          <Button onClick={handleSync} disabled={loading} variant="secondary">
-            <RefreshCw className={cn('h-4 w-4', loading && 'animate-spin')} />
-            Sync now
-          </Button>
-          <Button onClick={() => setExpanded((v) => !v)} variant="secondary">
-            <ChevronDown className={cn('h-4 w-4', expanded && 'rotate-180')} />
-            {expanded ? 'Hide' : 'Show'}
-          </Button>
-          <CardMenu onDisconnect={handleDisconnectClick} />
-        </div>
+        {statusCaption ? (
+          <p
+            className={cn(
+              'col-span-2',
+              'row-start-3',
+              uiTypographyRecipes.caption,
+              ...(bank.status === 'needs_reauth'
+                ? uiStatusRecipes.warning.text
+                : uiStatusRecipes.danger.text)
+            )}
+          >
+            {statusCaption}
+          </p>
+        ) : null}
       </div>
-
       <AnimatePresence initial={false}>
-        {expanded && (
+        {expanded ? (
           <motion.div
             initial={{ opacity: 0, height: 0 }}
             animate={{ opacity: 1, height: 'auto' }}
             exit={{ opacity: 0, height: 0 }}
-            className={cn(
-              'space-y-6',
-              'border-t',
-              'border-white/40',
-              'pt-4',
-              'dark:border-white/10'
-            )}
+            transition={{ duration: 0.24, ease: [0.22, 0.61, 0.36, 1] }}
+            className={cn('space-y-6', 'border-t', ...uiBorderRecipes.elevatedGlass, 'pt-4')}
           >
             {(() => {
               const sortedAccounts = bank.accounts.slice().sort((a, b) => {
-                const typeOrder = { checking: 1, savings: 1, credit: 2, loan: 3, investment: 4, other: 5 };
-                const aOrder = typeOrder[a.type] || 4;
-                const bOrder = typeOrder[b.type] || 4;
+                const aOrder = accountTypeSortOrder[a.type] ?? 4;
+                const bOrder = accountTypeSortOrder[b.type] ?? 4;
 
                 if (aOrder !== bOrder) {
                   return aOrder - bOrder;
@@ -206,23 +318,21 @@ export const BankCard: React.FC<BankCardProps> = ({ bank, onSync, onDisconnect, 
               const cashAccounts = sortedAccounts.filter(
                 (a) => a.type === 'checking' || a.type === 'savings'
               );
-              const debtAccounts = sortedAccounts.filter(
-                (a) => a.type === 'credit' || a.type === 'loan'
-              );
-              const investmentAccounts = sortedAccounts.filter(
-                (a) => a.type === 'investment' || a.type === 'other'
-              );
+              const creditAccounts = sortedAccounts.filter((a) => a.type === 'credit');
+              const investmentAccounts = sortedAccounts.filter((a) => a.type === 'other');
+              const loanAccounts = sortedAccounts.filter((a) => a.type === 'loan');
 
               return (
                 <>
-                  {cashAccounts.length > 0 && renderGroup('Cash', cashAccounts)}
-                  {debtAccounts.length > 0 && renderGroup('Debt', debtAccounts)}
-                  {investmentAccounts.length > 0 && renderGroup('Investments', investmentAccounts)}
+                  {cashAccounts.length > 0 && renderGroup('cash', cashAccounts)}
+                  {creditAccounts.length > 0 && renderGroup('credit', creditAccounts)}
+                  {investmentAccounts.length > 0 && renderGroup('investments', investmentAccounts)}
+                  {loanAccounts.length > 0 && renderGroup('loans', loanAccounts)}
                 </>
               );
             })()}
           </motion.div>
-        )}
+        ) : null}
       </AnimatePresence>
 
       <DisconnectModal

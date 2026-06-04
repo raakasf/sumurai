@@ -1,10 +1,12 @@
 use crate::models::analytics::{BalanceCategory, CategorySpending};
 use crate::models::transaction::{Transaction, TransactionWithAccount};
 use crate::services::analytics_service::AnalyticsService;
+use crate::services::repository_service::MockDatabaseRepository;
 use chrono::{Datelike, NaiveDate};
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use std::collections::HashMap;
+use uuid::Uuid;
 
 fn create_test_transaction(
     amount: Decimal,
@@ -145,6 +147,9 @@ fn filter_by_period<'a>(transactions: &'a [Transaction], period: &str) -> Vec<&'
 fn group_transactions_by_category(transactions: Vec<&Transaction>) -> Vec<CategorySpending> {
     let mut category_map: HashMap<String, rust_decimal::Decimal> = HashMap::new();
     for t in transactions {
+        if t.amount >= rust_decimal::Decimal::ZERO {
+            continue;
+        }
         let key = if t.category_primary.is_empty() {
             "Uncategorized".to_string()
         } else {
@@ -152,7 +157,7 @@ fn group_transactions_by_category(transactions: Vec<&Transaction>) -> Vec<Catego
         };
         *category_map
             .entry(key)
-            .or_insert(rust_decimal::Decimal::ZERO) += t.amount;
+            .or_insert(rust_decimal::Decimal::ZERO) += -t.amount;
     }
     category_map
         .into_iter()
@@ -166,7 +171,7 @@ fn group_by_category(transactions: &[Transaction], period: &str) -> Vec<Category
 }
 
 fn limit_categories_to_ten(mut categories: Vec<CategorySpending>) -> Vec<CategorySpending> {
-    categories.sort_by(|a, b| b.value.cmp(&a.value));
+    categories.sort_by_key(|category| std::cmp::Reverse(category.value));
     if categories.len() <= 10 {
         return categories;
     }
@@ -184,8 +189,8 @@ fn calculate_current_month_spending(transactions: &[Transaction]) -> rust_decima
     let (start, end) = get_month_range(now.year(), now.month());
     transactions
         .iter()
-        .filter(|t| t.date >= start && t.date <= end)
-        .map(|t| t.amount)
+        .filter(|t| t.date >= start && t.date <= end && t.amount < rust_decimal::Decimal::ZERO)
+        .map(|t| -t.amount)
         .sum()
 }
 
@@ -202,9 +207,12 @@ fn calculate_daily_spending(
         .day();
     let mut totals = vec![rust_decimal::Decimal::ZERO; days_in_month as usize];
     for t in transactions {
-        if t.date.year() == year && t.date.month() == month {
+        if t.date.year() == year
+            && t.date.month() == month
+            && t.amount < rust_decimal::Decimal::ZERO
+        {
             let idx = (t.date.day() - 1) as usize;
-            totals[idx] += t.amount;
+            totals[idx] += -t.amount;
         }
     }
     let mut cumulative = rust_decimal::Decimal::ZERO;
@@ -218,6 +226,66 @@ fn calculate_daily_spending(
         .collect()
 }
 
+#[tokio::test]
+async fn given_date_range_when_loading_spending_transactions_then_uses_date_range_repository_call()
+{
+    let analytics = AnalyticsService::new();
+    let mut repository = MockDatabaseRepository::new();
+    let user_id = Uuid::new_v4();
+    let start_date = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
+    let end_date = NaiveDate::from_ymd_opt(2024, 1, 31).unwrap();
+    let transactions = vec![create_test_transaction(dec!(10.00), start_date, "Food")];
+
+    repository
+        .expect_get_spending_transactions_by_date_range_for_user()
+        .with(
+            mockall::predicate::eq(user_id),
+            mockall::predicate::eq(start_date),
+            mockall::predicate::eq(end_date),
+        )
+        .returning(move |_, _, _| {
+            let transactions = transactions.clone();
+            Box::pin(async move { Ok(transactions) })
+        });
+
+    let result = analytics
+        .load_spending_transactions(&repository, &user_id, Some(start_date), Some(end_date))
+        .await
+        .unwrap();
+
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].amount, dec!(10.00));
+}
+
+#[tokio::test]
+async fn given_missing_date_range_when_loading_spending_transactions_then_uses_base_repository_call(
+) {
+    let analytics = AnalyticsService::new();
+    let mut repository = MockDatabaseRepository::new();
+    let user_id = Uuid::new_v4();
+    let transactions = vec![create_test_transaction(
+        dec!(12.00),
+        NaiveDate::from_ymd_opt(2024, 2, 1).unwrap(),
+        "Food",
+    )];
+
+    repository
+        .expect_get_spending_transactions_for_user()
+        .with(mockall::predicate::eq(user_id))
+        .returning(move |_| {
+            let transactions = transactions.clone();
+            Box::pin(async move { Ok(transactions) })
+        });
+
+    let result = analytics
+        .load_spending_transactions(&repository, &user_id, None, None)
+        .await
+        .unwrap();
+
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].amount, dec!(12.00));
+}
+
 #[test]
 fn given_current_month_transactions_when_calculating_spending_then_sums_correctly() {
     let _analytics = AnalyticsService::new();
@@ -226,17 +294,17 @@ fn given_current_month_transactions_when_calculating_spending_then_sums_correctl
 
     let txns = vec![
         create_test_transaction(
-            dec!(50.00),
+            dec!(-50.00),
             NaiveDate::from_ymd_opt(y, m, 10).unwrap(),
             "Food",
         ),
         create_test_transaction(
-            dec!(25.50),
+            dec!(-25.50),
             NaiveDate::from_ymd_opt(y, m, 12).unwrap(),
             "Transport",
         ),
         create_test_transaction(
-            dec!(100.00),
+            dec!(-100.00),
             NaiveDate::from_ymd_opt(y, if m == 1 { 12 } else { m - 1 }, 15).unwrap(),
             "Food",
         ),
@@ -251,17 +319,17 @@ fn given_transactions_with_categories_when_grouping_all_time_then_sums_by_catego
     let _analytics = AnalyticsService::new();
     let txns = vec![
         create_test_transaction(
-            dec!(50.00),
+            dec!(-50.00),
             NaiveDate::from_ymd_opt(2024, 3, 10).unwrap(),
             "Food",
         ),
         create_test_transaction(
-            dec!(25.50),
+            dec!(-25.50),
             NaiveDate::from_ymd_opt(2024, 3, 12).unwrap(),
             "Food",
         ),
         create_test_transaction(
-            dec!(30.00),
+            dec!(-30.00),
             NaiveDate::from_ymd_opt(2024, 3, 5).unwrap(),
             "Transport",
         ),
@@ -280,22 +348,22 @@ fn given_transactions_in_month_when_calculating_daily_spending_then_groups_by_da
     let _analytics = AnalyticsService::new();
     let txns = vec![
         create_test_transaction(
-            dec!(25.50),
+            dec!(-25.50),
             NaiveDate::from_ymd_opt(2024, 3, 5).unwrap(),
             "Food",
         ),
         create_test_transaction(
-            dec!(30.00),
+            dec!(-30.00),
             NaiveDate::from_ymd_opt(2024, 3, 5).unwrap(),
             "Transport",
         ),
         create_test_transaction(
-            dec!(50.00),
+            dec!(-50.00),
             NaiveDate::from_ymd_opt(2024, 3, 10).unwrap(),
             "Food",
         ),
         create_test_transaction(
-            dec!(15.00),
+            dec!(-15.00),
             NaiveDate::from_ymd_opt(2024, 2, 10).unwrap(),
             "Food",
         ),
@@ -316,22 +384,22 @@ fn given_transactions_across_months_when_calculating_monthly_totals_then_groups_
     let analytics = AnalyticsService::new();
     let txns = vec![
         create_test_transaction(
-            dec!(100.00),
+            dec!(-100.00),
             NaiveDate::from_ymd_opt(2024, 1, 15).unwrap(),
             "Food",
         ),
         create_test_transaction(
-            dec!(75.50),
+            dec!(-75.50),
             NaiveDate::from_ymd_opt(2024, 2, 10).unwrap(),
             "Transport",
         ),
         create_test_transaction(
-            dec!(25.00),
+            dec!(-25.00),
             NaiveDate::from_ymd_opt(2024, 2, 20).unwrap(),
             "Food",
         ),
         create_test_transaction(
-            dec!(50.00),
+            dec!(-50.00),
             NaiveDate::from_ymd_opt(2024, 3, 5).unwrap(),
             "Food",
         ),
@@ -482,17 +550,17 @@ fn given_transactions_when_grouping_by_category_with_frontend_logic_then_handles
     let _analytics = AnalyticsService::new();
     let txns = [
         create_test_transaction(
-            dec!(50.00),
+            dec!(-50.00),
             NaiveDate::from_ymd_opt(2024, 3, 10).unwrap(),
             "Food",
         ),
         create_test_transaction(
-            dec!(25.50),
+            dec!(-25.50),
             NaiveDate::from_ymd_opt(2024, 3, 12).unwrap(),
             "Food",
         ),
         create_test_transaction(
-            dec!(30.00),
+            dec!(-30.00),
             NaiveDate::from_ymd_opt(2024, 3, 5).unwrap(),
             "",
         ),
@@ -572,27 +640,27 @@ fn given_transactions_when_grouping_by_category_with_date_range_then_filters_and
     let analytics = AnalyticsService::new();
     let txns = vec![
         create_test_transaction(
-            dec!(50.00),
+            dec!(-50.00),
             NaiveDate::from_ymd_opt(2024, 3, 5).unwrap(),
             "Food",
         ),
         create_test_transaction(
-            dec!(25.50),
+            dec!(-25.50),
             NaiveDate::from_ymd_opt(2024, 3, 12).unwrap(),
             "Food",
         ),
         create_test_transaction(
-            dec!(30.00),
+            dec!(-30.00),
             NaiveDate::from_ymd_opt(2024, 3, 15).unwrap(),
             "Transport",
         ),
         create_test_transaction(
-            dec!(100.00),
+            dec!(-100.00),
             NaiveDate::from_ymd_opt(2024, 2, 10).unwrap(),
             "Food",
         ),
         create_test_transaction(
-            dec!(75.00),
+            dec!(-75.00),
             NaiveDate::from_ymd_opt(2024, 4, 5).unwrap(),
             "Transport",
         ),
@@ -766,27 +834,27 @@ fn given_transactions_when_getting_top_merchants_with_date_range_then_filters_an
     let analytics = AnalyticsService::new();
     let txns = vec![
         create_test_transaction(
-            dec!(150.00),
+            dec!(-150.00),
             NaiveDate::from_ymd_opt(2024, 3, 5).unwrap(),
             "Food",
         ),
         create_test_transaction(
-            dec!(100.00),
+            dec!(-100.00),
             NaiveDate::from_ymd_opt(2024, 3, 12).unwrap(),
             "Food",
         ),
         create_test_transaction(
-            dec!(75.00),
+            dec!(-75.00),
             NaiveDate::from_ymd_opt(2024, 3, 15).unwrap(),
             "Transport",
         ),
         create_test_transaction(
-            dec!(200.00),
+            dec!(-200.00),
             NaiveDate::from_ymd_opt(2024, 2, 10).unwrap(),
             "Food",
         ),
         create_test_transaction(
-            dec!(50.00),
+            dec!(-50.00),
             NaiveDate::from_ymd_opt(2024, 4, 5).unwrap(),
             "Transport",
         ),
@@ -806,39 +874,173 @@ fn given_transactions_when_getting_top_merchants_with_date_range_then_filters_an
 }
 
 #[test]
-fn given_negative_spending_transactions_when_getting_top_merchants_then_uses_absolute_amounts() {
+fn given_income_and_expense_transactions_when_calculating_cash_flow_then_buckets_by_month() {
     let analytics = AnalyticsService::new();
     let txns = vec![
-        create_test_transaction_with_account(
-            dec!(-100.00),
-            NaiveDate::from_ymd_opt(2024, 3, 5).unwrap(),
-            "Home",
-            None,
+        create_test_transaction(
+            dec!(5000.00),
+            NaiveDate::from_ymd_opt(2024, 1, 15).unwrap(),
+            "INCOME",
         ),
-        create_test_transaction_with_account(
-            dec!(-25.00),
-            NaiveDate::from_ymd_opt(2024, 3, 6).unwrap(),
-            "Home",
-            None,
+        create_test_transaction(
+            dec!(-3500.00),
+            NaiveDate::from_ymd_opt(2024, 1, 20).unwrap(),
+            "Food",
         ),
-        create_test_transaction_with_account(
-            dec!(500.00),
-            NaiveDate::from_ymd_opt(2024, 3, 7).unwrap(),
-            "OTHER",
-            Some("Credit Card Bills"),
+        create_test_transaction(
+            dec!(5200.00),
+            NaiveDate::from_ymd_opt(2024, 2, 10).unwrap(),
+            "INCOME",
+        ),
+        create_test_transaction(
+            dec!(-3600.00),
+            NaiveDate::from_ymd_opt(2024, 2, 15).unwrap(),
+            "Transport",
         ),
     ];
 
-    let result = analytics.get_top_merchants_with_account_date_range(
-        &txns,
-        Some(NaiveDate::from_ymd_opt(2024, 3, 1).unwrap()),
-        Some(NaiveDate::from_ymd_opt(2024, 3, 31).unwrap()),
-        5,
-    );
+    let result = analytics.calculate_cash_flow(&txns, 3);
+    assert_eq!(result.len(), 2);
 
+    let jan = result.iter().find(|m| m.month == "2024-01").unwrap();
+    assert_eq!(jan.income, dec!(5000.00));
+    assert_eq!(jan.expenses, dec!(3500.00));
+    assert_eq!(jan.net, dec!(1500.00));
+
+    let feb = result.iter().find(|m| m.month == "2024-02").unwrap();
+    assert_eq!(feb.income, dec!(5200.00));
+    assert_eq!(feb.expenses, dec!(3600.00));
+    assert_eq!(feb.net, dec!(1600.00));
+}
+
+#[test]
+fn given_transfer_transactions_when_calculating_cash_flow_then_excludes_transfers() {
+    let analytics = AnalyticsService::new();
+    let txns = vec![
+        create_test_transaction(
+            dec!(5000.00),
+            NaiveDate::from_ymd_opt(2024, 1, 15).unwrap(),
+            "INCOME",
+        ),
+        create_test_transaction(
+            dec!(-3500.00),
+            NaiveDate::from_ymd_opt(2024, 1, 20).unwrap(),
+            "Food",
+        ),
+        create_test_transaction(
+            dec!(-1000.00),
+            NaiveDate::from_ymd_opt(2024, 1, 25).unwrap(),
+            "TRANSFER_OUT",
+        ),
+        create_test_transaction(
+            dec!(500.00),
+            NaiveDate::from_ymd_opt(2024, 1, 28).unwrap(),
+            "TRANSFER_IN",
+        ),
+    ];
+
+    let result = analytics.calculate_cash_flow(&txns, 3);
     assert_eq!(result.len(), 1);
-    assert_eq!(result[0].name, "Test Merchant");
-    assert_eq!(result[0].amount, dec!(125.00));
-    assert_eq!(result[0].count, 2);
-    assert_eq!(result[0].percentage, dec!(100.00));
+
+    let jan = result.iter().find(|m| m.month == "2024-01").unwrap();
+    assert_eq!(jan.income, dec!(5000.00));
+    assert_eq!(jan.expenses, dec!(3500.00));
+    assert_eq!(jan.net, dec!(1500.00));
+}
+
+#[test]
+fn given_loan_payment_transactions_when_calculating_cash_flow_then_excludes_loan_payments() {
+    let analytics = AnalyticsService::new();
+    let txns = vec![
+        create_test_transaction(
+            dec!(5000.00),
+            NaiveDate::from_ymd_opt(2024, 1, 15).unwrap(),
+            "INCOME",
+        ),
+        create_test_transaction(
+            dec!(-3500.00),
+            NaiveDate::from_ymd_opt(2024, 1, 20).unwrap(),
+            "Food",
+        ),
+        create_test_transaction(
+            dec!(-500.00),
+            NaiveDate::from_ymd_opt(2024, 1, 25).unwrap(),
+            "LOAN_PAYMENTS",
+        ),
+    ];
+
+    let result = analytics.calculate_cash_flow(&txns, 3);
+    assert_eq!(result.len(), 1);
+
+    let jan = result.iter().find(|m| m.month == "2024-01").unwrap();
+    assert_eq!(jan.income, dec!(5000.00));
+    assert_eq!(jan.expenses, dec!(3500.00));
+    assert_eq!(jan.net, dec!(1500.00));
+}
+
+#[test]
+fn given_multiple_months_when_calculating_cash_flow_then_truncates_to_month_limit() {
+    let analytics = AnalyticsService::new();
+    let txns = vec![
+        create_test_transaction(
+            dec!(1000.00),
+            NaiveDate::from_ymd_opt(2024, 1, 15).unwrap(),
+            "INCOME",
+        ),
+        create_test_transaction(
+            dec!(-500.00),
+            NaiveDate::from_ymd_opt(2024, 1, 20).unwrap(),
+            "Food",
+        ),
+        create_test_transaction(
+            dec!(1100.00),
+            NaiveDate::from_ymd_opt(2024, 2, 10).unwrap(),
+            "INCOME",
+        ),
+        create_test_transaction(
+            dec!(-600.00),
+            NaiveDate::from_ymd_opt(2024, 2, 15).unwrap(),
+            "Food",
+        ),
+        create_test_transaction(
+            dec!(1200.00),
+            NaiveDate::from_ymd_opt(2024, 3, 10).unwrap(),
+            "INCOME",
+        ),
+        create_test_transaction(
+            dec!(-700.00),
+            NaiveDate::from_ymd_opt(2024, 3, 15).unwrap(),
+            "Food",
+        ),
+    ];
+
+    let result = analytics.calculate_cash_flow(&txns, 2);
+    assert_eq!(result.len(), 2);
+    assert!(result[0].month == "2024-02");
+    assert!(result[1].month == "2024-03");
+}
+
+#[test]
+fn given_no_income_when_calculating_cash_flow_then_handles_zero_income() {
+    let analytics = AnalyticsService::new();
+    let txns = vec![
+        create_test_transaction(
+            dec!(-500.00),
+            NaiveDate::from_ymd_opt(2024, 1, 20).unwrap(),
+            "Food",
+        ),
+        create_test_transaction(
+            dec!(-100.00),
+            NaiveDate::from_ymd_opt(2024, 1, 25).unwrap(),
+            "Transport",
+        ),
+    ];
+
+    let result = analytics.calculate_cash_flow(&txns, 3);
+    assert_eq!(result.len(), 1);
+
+    let jan = result.iter().find(|m| m.month == "2024-01").unwrap();
+    assert_eq!(jan.income, dec!(0.00));
+    assert_eq!(jan.expenses, dec!(600.00));
+    assert_eq!(jan.net, dec!(-600.00));
 }

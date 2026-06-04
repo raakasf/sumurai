@@ -10,26 +10,28 @@ use uuid::Uuid;
 use serde_json::json;
 
 #[derive(Deserialize, ToSchema)]
-#[schema(example = json!({"email": "user@example.com", "password": "SecurePass123!"}))]
+#[schema(example = json!({"email": "user@example.com", "name": "Alex"}))]
 pub struct RegisterRequest {
     pub email: String,
-    pub password: String,
-}
-
-#[derive(Deserialize, ToSchema)]
-#[schema(example = json!({"email": "user@example.com", "password": "SecurePass123!"}))]
-pub struct LoginRequest {
-    pub email: String,
-    pub password: String,
+    pub name: String,
+    #[serde(default)]
+    pub password: Option<String>,
 }
 
 #[derive(Serialize, ToSchema)]
-#[schema(example = json!({"token": "jwt-token-value", "user_id": "11111111-2222-3333-4444-555555555555", "expires_at": "2024-01-01T12:00:00Z", "onboarding_completed": false}))]
+pub struct RegisterBeginResponse {
+    pub user_id: String,
+    pub session_id: String,
+    pub challenge: serde_json::Value,
+}
+
+#[derive(Serialize, ToSchema)]
+#[schema(example = json!({"user_id": "11111111-2222-3333-4444-555555555555", "expires_at": "2024-01-01T12:00:00Z", "onboarding_completed": false, "requires_passkey_enrollment": true}))]
 pub struct AuthResponse {
-    pub token: String,
     pub user_id: String,
     pub expires_at: String,
     pub onboarding_completed: bool,
+    pub requires_passkey_enrollment: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -104,25 +106,81 @@ where
 pub struct User {
     pub id: Uuid,
     pub email: String,
-    pub password_hash: String,
+    pub password_hash: Option<String>,
     pub provider: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub onboarding_completed: bool,
 }
 
-#[derive(Deserialize, ToSchema)]
-#[schema(example = json!({"current_password": "OldPass123!", "new_password": "NewPass456!"}))]
-pub struct ChangePasswordRequest {
-    pub current_password: String,
-    pub new_password: String,
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct WebAuthnCredential {
+    pub id: Uuid,
+    pub user_id: Uuid,
+    pub credential_id: Vec<u8>,
+    pub passkey: serde_json::Value,
+    pub name: String,
+    pub created_at: DateTime<Utc>,
+    pub last_used_at: Option<DateTime<Utc>>,
+}
+
+impl User {
+    pub fn active_provider(&self) -> Option<&str> {
+        if self.provider.is_empty() {
+            None
+        } else {
+            Some(&self.provider)
+        }
+    }
 }
 
 #[derive(Serialize, ToSchema)]
-#[schema(example = json!({"message": "Password updated successfully", "requires_reauth": true}))]
-pub struct ChangePasswordResponse {
-    pub message: String,
-    pub requires_reauth: bool,
+pub struct PasskeyRegisterBeginResponse {
+    pub session_id: String,
+    pub challenge: serde_json::Value,
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct PasskeyRegisterFinishRequest {
+    pub session_id: String,
+    pub response: serde_json::Value,
+    pub name: String,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct PasskeyItem {
+    pub id: Uuid,
+    pub name: String,
+    pub created_at: DateTime<Utc>,
+    pub last_used_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Deserialize, ToSchema)]
+#[schema(example = json!({"email": "legacy@example.com", "password": "Test1234!"}))]
+pub struct PasswordLoginRequest {
+    pub email: String,
+    pub password: String,
+}
+
+#[derive(Deserialize, ToSchema)]
+#[schema(example = json!({"email": "user@example.com"}))]
+pub struct PasskeyLoginBeginRequest {
+    pub email: String,
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct PasskeyLoginBeginResponse {
+    pub session_id: String,
+    pub challenge: serde_json::Value,
+    pub account_exists: bool,
+    pub passkey_available: bool,
+    pub password_available: bool,
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct PasskeyLoginFinishRequest {
+    pub session_id: String,
+    pub response: serde_json::Value,
 }
 
 #[derive(Serialize, ToSchema)]

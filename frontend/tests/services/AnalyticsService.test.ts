@@ -6,7 +6,15 @@ import type {
   AnalyticsTopMerchantsResponse,
 } from '@/types/api';
 
-jest.mock('@/services/ApiClient');
+jest.mock('@/services/ApiClient', () => ({
+  ApiClient: {
+    get: jest.fn(),
+    post: jest.fn(),
+    put: jest.fn(),
+    delete: jest.fn(),
+    configure: jest.fn(),
+  },
+}));
 
 describe('AnalyticsService (date-range endpoints)', () => {
   beforeEach(() => {
@@ -130,6 +138,19 @@ describe('AnalyticsService (date-range endpoints)', () => {
       expect(result).toEqual(backendTotals);
       expect(result[0].month).toBe('Dec 2023');
       expect(result[2].month).toBe('invalid-date');
+    });
+  });
+
+  describe('getCashFlow', () => {
+    it('serializes account_ids parameter when provided', async () => {
+      const accountIds = ['acc_1', 'acc_2'];
+      jest.mocked(ApiClient.get).mockResolvedValue({ series: [], currency: 'USD' });
+
+      await AnalyticsService.getCashFlow(6, accountIds);
+
+      expect(ApiClient.get).toHaveBeenCalledWith(
+        '/analytics/cash-flow?months=6&account_ids%5B%5D=acc_1&account_ids%5B%5D=acc_2'
+      );
     });
   });
 

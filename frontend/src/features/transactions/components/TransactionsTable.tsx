@@ -2,18 +2,29 @@ import { ChevronLeftIcon, ChevronRightIcon } from '@heroicons/react/24/outline';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Receipt } from 'lucide-react';
 import type React from 'react';
-import { useCurrency } from '@/hooks/useCurrency';
-import { cn, EmptyState } from '@/ui/primitives';
-import type { Transaction, UserCategory } from '../../../types/api';
-import { formatDateOnly } from '../../../utils/dateOnly';
-import { getDisplayAmount } from '../../../utils/transactionAmounts';
-import { CategoryDropdown } from './CategoryDropdown';
+import { useMemo } from 'react';
+import { useViewportBreakpoint } from '@/hooks/useViewportBreakpoint';
+import { cn, EmptyState, PaginationButton } from '@/ui/primitives';
+import {
+  border as uiBorderRecipes,
+  text as uiTextRecipes,
+  transactionsTable as uiTransactionsTableRecipes,
+  font as uiTypographyRecipes,
+} from '@/ui/recipes';
+import type { Transaction } from '../../../types/api';
+import { fmtUSD } from '../../../utils/format';
+import InlineCategoryCell from './InlineCategoryCell';
+import { TransactionsMobileList } from './TransactionsMobileList';
+import { transactionsRowRecipes } from './transactionsRowRecipes';
 
 interface Props {
   items: Transaction[];
   total: number;
   currentPage: number;
   totalPages: number;
+  pageSize: number;
+  isLoading?: boolean;
+  bodyAnimationKey?: string;
   onPrev: () => void;
   onNext: () => void;
   userCategories: UserCategory[];
@@ -24,11 +35,24 @@ interface Props {
   onCategoryDelete: (categoryId: string) => Promise<void>;
 }
 
+const tableHeader = [
+  ...uiTransactionsTableRecipes.chromeBar,
+  uiTextRecipes.body,
+  'transition-colors duration-500',
+] as const;
+
+const tableFooter = [...uiTransactionsTableRecipes.footer] as const;
+
+export { transactionsRowRecipes } from './transactionsRowRecipes';
+
 export const TransactionsTable: React.FC<Props> = ({
   items,
   total,
   currentPage,
   totalPages,
+  pageSize,
+  isLoading = false,
+  bodyAnimationKey,
   onPrev,
   onNext,
   userCategories,
@@ -38,104 +62,151 @@ export const TransactionsTable: React.FC<Props> = ({
   onCategoryRule,
   onCategoryDelete,
 }) => {
-  const { format } = useCurrency();
-
-  const pageSize = items.length > 0 ? Math.ceil(total / totalPages) : 8;
+  const { isDesktop } = useViewportBreakpoint();
+  const tbodyAnimationKey = bodyAnimationKey ?? String(currentPage);
+  const visibleItems = items.slice(0, pageSize);
   const from = total === 0 ? 0 : (currentPage - 1) * pageSize + 1;
   const to = Math.min(total, currentPage * pageSize);
+  const showEmpty = total === 0 && !isLoading;
+  const placeholderCount = Math.max(0, pageSize - visibleItems.length);
+  const placeholderRows = useMemo(
+    () =>
+      Array.from({ length: placeholderCount }, (_, position) => ({
+        id: `placeholder-${currentPage}-${position}`,
+      })),
+    [currentPage, placeholderCount]
+  );
+
+  const paginationFooter = (
+    <div className={cn('flex', 'items-center', 'justify-between', tableFooter)}>
+      <div
+        className={cn(
+          uiTypographyRecipes.caption,
+          uiTextRecipes.muted,
+          'transition-colors',
+          'duration-500'
+        )}
+      >
+        Showing {from}-{to} of {total}
+      </div>
+      <div className={cn('flex', 'items-center', 'gap-3')}>
+        <PaginationButton
+          type="button"
+          onClick={onPrev}
+          disabled={currentPage <= 1}
+          aria-label="Previous page"
+        >
+          <ChevronLeftIcon />
+        </PaginationButton>
+        <div
+          className={cn(
+            uiTypographyRecipes.caption,
+            uiTextRecipes.muted,
+            'transition-colors',
+            'duration-500'
+          )}
+        >
+          Page {currentPage} of {totalPages}
+        </div>
+        <PaginationButton
+          type="button"
+          onClick={onNext}
+          disabled={currentPage >= totalPages}
+          aria-label="Next page"
+        >
+          <ChevronRightIcon />
+        </PaginationButton>
+      </div>
+    </div>
+  );
+
   return (
     <div className="overflow-hidden">
-      {total === 0 ? (
-        <EmptyState
-          icon={Receipt}
-          title="No transactions found"
-          description="No transaction data available for the selected filters"
-        />
-      ) : (
-        <>
-          <div className="overflow-x-auto">
-            <table className={cn('min-w-full', 'text-sm', 'table-fixed')}>
-              <thead
-                className={cn(
-                  'bg-slate-200',
-                  'text-slate-700',
-                  'transition-colors',
-                  'duration-500',
-                  'dark:bg-slate-700',
-                  'dark:text-slate-300'
-                )}
-              >
-                <tr className={cn('border-b', 'border-slate-300', 'dark:border-slate-600')}>
+      <div className="relative">
+        {!isDesktop ? (
+          <div className={cn('relative')} data-no-swipe>
+            <TransactionsMobileList
+              items={items}
+              currentPage={currentPage}
+              pageSize={pageSize}
+              animationKey={tbodyAnimationKey}
+            />
+            {showEmpty ? (
+              <div className={cn('absolute inset-0 flex items-center justify-center')}>
+                <EmptyState
+                  icon={Receipt}
+                  title="No transactions found"
+                  description="No transaction data available for the selected filters"
+                />
+              </div>
+            ) : null}
+          </div>
+        ) : (
+          <div className={cn('relative overflow-x-auto')} data-no-swipe>
+            <table className={cn('min-w-full', 'table-fixed')}>
+              <thead className={cn(tableHeader)}>
+                <tr className={cn('border-b', ...uiBorderRecipes.divider)}>
                   <th
                     className={cn(
-                      'w-[15%]',
+                      'w-[18%]',
+                      'md:w-[15%]',
                       'whitespace-nowrap',
                       'px-4',
                       'py-3',
                       'text-left',
-                      'text-xs',
-                      'font-semibold',
-                      'uppercase',
-                      'tracking-[0.18em]'
+                      uiTypographyRecipes.label
                     )}
                   >
                     Date
                   </th>
                   <th
                     className={cn(
-                      'w-[30%]',
+                      'w-[34%]',
+                      'md:w-[30%]',
                       'px-4',
                       'py-3',
                       'text-left',
-                      'text-xs',
-                      'font-semibold',
-                      'uppercase',
-                      'tracking-[0.18em]'
+                      uiTypographyRecipes.label
                     )}
                   >
                     Merchant
                   </th>
                   <th
                     className={cn(
-                      'w-[15%]',
+                      'w-[18%]',
+                      'md:w-[15%]',
                       'whitespace-nowrap',
                       'px-4',
                       'py-3',
                       'text-right',
-                      'text-xs',
-                      'font-semibold',
-                      'uppercase',
-                      'tracking-[0.18em]'
+                      uiTypographyRecipes.label
                     )}
                   >
                     Amount
                   </th>
                   <th
                     className={cn(
-                      'w-[20%]',
+                      'hidden',
+                      'md:table-cell',
+                      'md:w-[20%]',
                       'whitespace-nowrap',
                       'px-4',
                       'py-3',
                       'text-left',
-                      'text-xs',
-                      'font-semibold',
-                      'uppercase',
-                      'tracking-[0.18em]'
+                      uiTypographyRecipes.label
                     )}
                   >
                     Account
                   </th>
                   <th
                     className={cn(
-                      'w-[20%]',
+                      'w-[30%]',
+                      'md:w-[20%]',
                       'whitespace-nowrap',
                       'px-4',
                       'py-3',
                       'text-left',
-                      'text-xs',
-                      'font-semibold',
-                      'uppercase',
-                      'tracking-[0.18em]'
+                      uiTypographyRecipes.label
                     )}
                   >
                     Category
@@ -144,23 +215,20 @@ export const TransactionsTable: React.FC<Props> = ({
               </thead>
               <AnimatePresence mode="wait" initial={false}>
                 <motion.tbody
-                  key={currentPage}
+                  key={tbodyAnimationKey}
                   initial={{ opacity: 0, y: 12 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: -12 }}
                   transition={{ duration: 0.24, ease: [0.22, 0.61, 0.36, 1] }}
                 >
-                  {items.map((r, i) => {
-                    const overrideType = r.custom_category ? 'explicit' : r.rule_category ? 'rule' : 'none';
-                    const displayAmount = getDisplayAmount(r);
+                  {visibleItems.map((r, i) => {
                     return (
                       <tr
                         key={r.id}
-                        className={`group relative border-b border-slate-200/70 transition-all duration-150 ease-out hover:-translate-y-[2px] hover:ring-2 hover:ring-sky-400/60 dark:border-slate-700/50 dark:hover:ring-sky-400/50 ${
-                          i % 2
-                            ? 'bg-slate-100 dark:bg-slate-700/20'
-                            : 'bg-white dark:bg-transparent'
-                        }`}
+                        className={cn(
+                          transactionsRowRecipes.shell,
+                          i % 2 ? transactionsRowRecipes.odd : transactionsRowRecipes.even
+                        )}
                       >
                         <td
                           className={cn(
@@ -169,51 +237,72 @@ export const TransactionsTable: React.FC<Props> = ({
                             'px-4',
                             'py-3',
                             'align-middle',
-                            'text-slate-900',
+                            uiTypographyRecipes.body,
+                            uiTextRecipes.primary,
                             'transition-colors',
-                            'duration-500',
-                            'dark:text-white'
+                            'duration-500'
                           )}
                         >
                           {formatDateOnly(r.date)}
                         </td>
                         <td
-                          className={cn('truncate', 'px-4', 'py-3', 'align-middle')}
+                          className={cn(
+                            transactionsRowRecipes.merchantCell,
+                            'px-4',
+                            'py-3',
+                            'align-middle'
+                          )}
                           title={r.name || r.merchant || '-'}
                         >
                           <span
                             className={cn(
                               'block',
-                              'truncate',
-                              'font-medium',
-                              'text-slate-900',
+                              transactionsRowRecipes.merchantEllipsis,
+                              uiTypographyRecipes.body,
+                              uiTextRecipes.primary,
                               'transition-colors',
-                              'duration-500',
-                              'dark:text-white'
+                              'duration-500'
                             )}
                           >
                             {r.name || r.merchant || '-'}
                           </span>
                         </td>
                         <td
-                          className={`whitespace-nowrap px-4 py-3 text-right align-middle tabular-nums font-semibold transition-colors duration-500 ${
-                            displayAmount > 0
-                              ? 'text-green-600 dark:text-green-400'
-                              : displayAmount < 0
-                                ? 'text-red-600 dark:text-red-400'
-                                : 'text-slate-600 dark:text-slate-400'
-                          }`}
+                          className={cn(
+                            'whitespace-nowrap',
+                            'px-4',
+                            'py-3',
+                            'text-right',
+                            'align-middle',
+                            'tabular-nums',
+                            uiTypographyRecipes.body,
+                            'transition-colors',
+                            'duration-500',
+                            r.amount < 0
+                              ? uiTextRecipes.danger
+                              : r.amount > 0
+                                ? uiTextRecipes.success
+                                : uiTextRecipes.muted
+                          )}
                         >
                           {format(displayAmount)}
                         </td>
-                        <td className={cn('whitespace-nowrap', 'px-4', 'py-3', 'align-middle')}>
+                        <td
+                          className={cn(
+                            'hidden',
+                            'md:table-cell',
+                            'whitespace-nowrap',
+                            'px-4',
+                            'py-3',
+                            'align-middle'
+                          )}
+                        >
                           <span
                             className={cn(
-                              'text-xs',
-                              'text-slate-600',
+                              uiTypographyRecipes.body,
+                              uiTextRecipes.muted,
                               'transition-colors',
-                              'duration-500',
-                              'dark:text-slate-400'
+                              'duration-500'
                             )}
                           >
                             {r.account_name}
@@ -221,10 +310,9 @@ export const TransactionsTable: React.FC<Props> = ({
                               <span
                                 className={cn(
                                   'ml-1',
-                                  'text-slate-400',
+                                  uiTextRecipes.subtle,
                                   'transition-colors',
-                                  'duration-500',
-                                  'dark:text-slate-500'
+                                  'duration-500'
                                 )}
                               >
                                 ••••{r.account_mask}
@@ -233,144 +321,54 @@ export const TransactionsTable: React.FC<Props> = ({
                           </span>
                         </td>
                         <td className={cn('whitespace-nowrap', 'px-4', 'py-3', 'align-middle')}>
-                          <CategoryDropdown
-                            currentCategory={r.category?.primary ?? 'OTHER'}
-                            overrideType={overrideType}
-                            merchantName={r.merchant || r.name}
-                            userCategories={userCategories}
-                            onSelect={(name) => onCategorySelect(r.id, name)}
-                            onReset={() => onCategoryReset(r.id)}
-                            onCreateAndSelect={(name) => onCategoryCreate(r.id, name)}
-                            onCreateRule={(pattern, categoryName) => onCategoryRule(r.id, pattern, categoryName)}
-                            onDeleteCategory={onCategoryDelete}
-                          />
+                          <InlineCategoryCell transaction={r} />
                         </td>
                       </tr>
                     );
                   })}
+                  {placeholderRows.map((row) => (
+                    <tr
+                      key={row.id}
+                      aria-hidden="true"
+                      tabIndex={-1}
+                      className={cn(
+                        transactionsRowRecipes.placeholder,
+                        transactionsRowRecipes.placeholderDesktopHeight,
+                        transactionsRowRecipes.even
+                      )}
+                    >
+                      <td className={cn('hidden', 'md:table-cell', 'px-4', 'py-3', 'align-middle')}>
+                        {'\u00A0'}
+                      </td>
+                      <td className={cn('px-4', 'py-3', 'align-middle')}>{'\u00A0'}</td>
+                      <td className={cn('px-4', 'py-3', 'align-middle')}>{'\u00A0'}</td>
+                      <td className={cn('px-4', 'py-3', 'align-middle')}>{'\u00A0'}</td>
+                      <td className={cn('px-4', 'py-3', 'align-middle')}>{'\u00A0'}</td>
+                    </tr>
+                  ))}
                 </motion.tbody>
               </AnimatePresence>
             </table>
-          </div>
-          <div
-            className={cn(
-              'flex',
-              'items-center',
-              'justify-between',
-              'border-t',
-              'border-slate-200/70',
-              'bg-slate-50/50',
-              'px-4',
-              'py-4',
-              'transition-colors',
-              'duration-500',
-              'dark:border-slate-700/50',
-              'dark:bg-slate-800/30'
-            )}
-          >
-            <div
-              className={cn(
-                'text-xs',
-                'text-slate-600',
-                'transition-colors',
-                'duration-500',
-                'dark:text-slate-400'
-              )}
-            >
-              Showing {from}-{to} of {total}
-            </div>
-            <div className={cn('flex', 'items-center', 'gap-3')}>
-              <button
-                type="button"
-                onClick={onPrev}
-                disabled={currentPage <= 1}
-                aria-label="Previous page"
-                className={cn(
-                  'inline-flex',
-                  'h-9',
-                  'w-9',
-                  'items-center',
-                  'justify-center',
-                  'rounded-full',
-                  'border',
-                  'border-white/50',
-                  'bg-white/70',
-                  'text-slate-600',
-                  'shadow-[0_14px_38px_-28px_rgba(15,23,42,0.55)]',
-                  'transition-all',
-                  'duration-200',
-                  'hover:-translate-y-[2px]',
-                  'hover:bg-white/90',
-                  'focus-visible:outline-none',
-                  'focus-visible:ring-2',
-                  'focus-visible:ring-sky-400/70',
-                  'focus-visible:ring-offset-2',
-                  'focus-visible:ring-offset-white',
-                  'disabled:cursor-not-allowed',
-                  'disabled:opacity-50',
-                  'disabled:hover:translate-y-0',
-                  'dark:border-white/10',
-                  'dark:bg-[#1e293b]/70',
-                  'dark:text-slate-200',
-                  'dark:hover:bg-[#1e293b]/85',
-                  'dark:focus-visible:ring-offset-[#0f172a]'
-                )}
-              >
-                <ChevronLeftIcon className={cn('h-4', 'w-4')} />
-              </button>
-              <div
-                className={cn(
-                  'text-xs',
-                  'text-slate-600',
-                  'transition-colors',
-                  'duration-500',
-                  'dark:text-slate-400'
-                )}
-              >
-                Page {currentPage} of {totalPages}
+            {showEmpty ? (
+              <div className={cn('absolute inset-0 flex items-center justify-center')}>
+                <EmptyState
+                  icon={Receipt}
+                  title="No transactions found"
+                  description="No transaction data available for the selected filters"
+                />
               </div>
-              <button
-                type="button"
-                onClick={onNext}
-                disabled={currentPage >= totalPages}
-                aria-label="Next page"
-                className={cn(
-                  'inline-flex',
-                  'h-9',
-                  'w-9',
-                  'items-center',
-                  'justify-center',
-                  'rounded-full',
-                  'border',
-                  'border-white/50',
-                  'bg-white/70',
-                  'text-slate-600',
-                  'shadow-[0_14px_38px_-28px_rgba(15,23,42,0.55)]',
-                  'transition-all',
-                  'duration-200',
-                  'hover:-translate-y-[2px]',
-                  'hover:bg-white/90',
-                  'focus-visible:outline-none',
-                  'focus-visible:ring-2',
-                  'focus-visible:ring-sky-400/70',
-                  'focus-visible:ring-offset-2',
-                  'focus-visible:ring-offset-white',
-                  'disabled:cursor-not-allowed',
-                  'disabled:opacity-50',
-                  'disabled:hover:translate-y-0',
-                  'dark:border-white/10',
-                  'dark:bg-[#1e293b]/70',
-                  'dark:text-slate-200',
-                  'dark:hover:bg-[#1e293b]/85',
-                  'dark:focus-visible:ring-offset-[#0f172a]'
-                )}
-              >
-                <ChevronRightIcon className={cn('h-4', 'w-4')} />
-              </button>
+            ) : null}
+          </div>
+        )}
+        {isLoading && (
+          <div className={cn('pointer-events-none', 'absolute', 'inset-0')}>
+            <div className={cn('sr-only')} aria-live="polite">
+              Loading transactions
             </div>
           </div>
-        </>
-      )}
+        )}
+        {paginationFooter}
+      </div>
     </div>
   );
 };

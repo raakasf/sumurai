@@ -1,21 +1,37 @@
+use anyhow::Result;
+use async_trait::async_trait;
 use chrono::{NaiveDate, Utc};
 use rust_decimal_macros::dec;
 use std::sync::Arc;
 use uuid::Uuid;
+use webauthn_authenticator_rs::prelude::WebauthnAuthenticator;
+use webauthn_authenticator_rs::softpasskey::SoftPasskey;
 
+use crate::models::auth::WebAuthnCredential;
+use crate::models::predicted_category::PredictedCategory;
 use crate::models::{auth::User, transaction::Transaction};
 use crate::providers::ProviderRegistry;
 
+use crate::providers::{
+    PlaidCredentialResolver, SimpleFinCredentialResolver, TellerCredentialResolver,
+};
 use crate::services::{
     analytics_service::AnalyticsService,
     auth_service::AuthService,
+    authorization_service::AuthorizationService,
+    auto_categorization::AutoCategorizationService,
     budget_service::BudgetService,
     cache_service::{CacheService, MockCacheService},
+    categorization::category_descriptors::SYSTEM_CATEGORY_SLUGS,
+    category_management::service::CategoryManagementService,
     connection_service::ConnectionService,
+    otel_traces_relay::OtlpTracesRelay,
     plaid_service::{PlaidService, RealPlaidClient},
     repository_service::DatabaseRepository,
     repository_service::MockDatabaseRepository,
     sync_service::SyncService,
+    sync_service_factory::SyncServiceFactory,
+    Categorizer,
 };
 
 use crate::config::MockEnvironment;
@@ -24,18 +40,110 @@ use crate::{create_app, AppState, Config, Router};
 use axum::{
     body::Body,
     http::{
-        header::{AUTHORIZATION, CONTENT_TYPE},
+        header::{CONTENT_TYPE, COOKIE},
         Method, Request,
     },
 };
 
 pub struct TestFixtures;
 
+pub(crate) fn test_passkey_for_user(user_id: Uuid) -> WebAuthnCredential {
+    let webauthn_service = crate::services::webauthn_service::WebAuthnService::new(
+        "localhost",
+        &[url::Url::parse("http://localhost:8080").unwrap()],
+    )
+    .unwrap();
+    let (challenge, reg_state) = webauthn_service
+        .begin_registration(user_id, "test@example.com", "Test User", &[])
+        .unwrap();
+    let origin = url::Url::parse("http://localhost:8080").unwrap();
+    let mut authenticator = WebauthnAuthenticator::new(SoftPasskey::new(true));
+    let credential_response = authenticator.do_registration(origin, challenge).unwrap();
+    let passkey = webauthn_service
+        .finish_registration(&reg_state, &credential_response)
+        .unwrap();
+    let credential_id = passkey.cred_id().to_vec();
+    let passkey_json = serde_json::to_value(&passkey).unwrap();
+    WebAuthnCredential {
+        id: Uuid::new_v4(),
+        user_id,
+        credential_id,
+        passkey: passkey_json,
+        name: "Test Passkey".to_string(),
+        created_at: Utc::now(),
+        last_used_at: None,
+    }
+}
+
+pub(crate) fn apply_passkey_enrollment_mock_defaults(mock_db: &mut MockDatabaseRepository) {
+    mock_db
+        .expect_get_user_by_id()
+        .times(0..)
+        .returning(|user_id| {
+            let user_id = *user_id;
+            Box::pin(async move {
+                Ok(Some(User {
+                    id: user_id,
+                    email: format!("test-{}@example.com", user_id),
+                    password_hash: None,
+                    provider: String::new(),
+                    created_at: Utc::now(),
+                    updated_at: Utc::now(),
+                    onboarding_completed: true,
+                }))
+            })
+        });
+    mock_db
+        .expect_list_webauthn_credentials_for_user()
+        .times(0..)
+        .returning(|user_id| {
+            let credential = test_passkey_for_user(*user_id);
+            Box::pin(async move { Ok(vec![credential]) })
+        });
+}
+
+struct NoopCategorizer;
+
+#[async_trait]
+impl Categorizer for NoopCategorizer {
+    async fn categorize_batch(&self, _descriptions: Vec<String>) -> Result<Vec<PredictedCategory>> {
+        Ok(Vec::new())
+    }
+}
+
+pub(crate) fn noop_categorizer() -> Arc<dyn Categorizer> {
+    Arc::new(NoopCategorizer)
+}
+
+pub(crate) fn build_credential_resolvers(
+    db_repository: Arc<dyn DatabaseRepository>,
+) -> std::collections::HashMap<String, Arc<dyn crate::providers::ProviderCredentialResolver>> {
+    let mut resolvers = std::collections::HashMap::new();
+    resolvers.insert(
+        "simplefin".to_string(),
+        Arc::new(SimpleFinCredentialResolver::new(Arc::clone(&db_repository)))
+            as Arc<dyn crate::providers::ProviderCredentialResolver>,
+    );
+    resolvers.insert(
+        "plaid".to_string(),
+        Arc::new(PlaidCredentialResolver::new(Arc::clone(&db_repository)))
+            as Arc<dyn crate::providers::ProviderCredentialResolver>,
+    );
+    resolvers.insert(
+        "teller".to_string(),
+        Arc::new(TellerCredentialResolver::new(Arc::clone(&db_repository)))
+            as Arc<dyn crate::providers::ProviderCredentialResolver>,
+    );
+    resolvers
+}
+
 impl TestFixtures {
     fn create_test_config() -> Config {
+        std::env::set_var("OTEL_TRACES_EXPORTER", "none");
         let mut test_env = MockEnvironment::new();
         test_env.set("TELLER_ENV", "test");
-        test_env.set("DEFAULT_PROVIDER", "plaid");
+        test_env.set("AUTH_COOKIE_SAME_SITE", "Lax");
+        test_env.set("APP_ORIGIN", "http://localhost:8080");
         Config::from_env_provider(&test_env).expect("Failed to create test config")
     }
 
@@ -173,7 +281,7 @@ impl TestFixtures {
             "plaid",
             Arc::clone(&plaid_provider),
         )]));
-        let sync_service = Arc::new(SyncService::new(provider_registry.clone(), "plaid"));
+        let sync_service = Arc::new(SyncService::new(provider_registry.clone()));
         let analytics_service = Arc::new(AnalyticsService::new());
 
         let mut mock_db = MockDatabaseRepository::new();
@@ -187,12 +295,22 @@ impl TestFixtures {
             .returning(|_| Box::pin(async { Ok(vec![]) }));
 
         mock_db
+            .expect_get_provider_transaction_ids_for_user()
+            .returning(|_| Box::pin(async { Ok(vec![]) }));
+
+        mock_db
+            .expect_count_transactions()
+            .returning(|_, _, _, _, _, _| Box::pin(async { Ok(0) }));
+
+        mock_db
             .expect_get_budgets_for_user()
             .returning(|_| Box::pin(async { Ok(vec![]) }));
 
         mock_db
             .expect_get_latest_account_balances_for_user()
             .returning(|_| Box::pin(async { Ok(vec![]) }));
+
+        apply_passkey_enrollment_mock_defaults(&mut mock_db);
 
         let db_repository: Arc<dyn DatabaseRepository> = Arc::new(mock_db);
 
@@ -210,6 +328,16 @@ impl TestFixtures {
             .returning(|_| Box::pin(async { Ok(None) }));
 
         mock_cache
+            .expect_get_counter()
+            .times(0..)
+            .returning(|_| Box::pin(async { Ok(None) }));
+
+        mock_cache
+            .expect_increment_counter()
+            .times(0..)
+            .returning(|_, _| Box::pin(async { Ok(1i64) }));
+
+        mock_cache
             .expect_set_with_ttl()
             .returning(|_, _, _| Box::pin(async { Ok(()) }));
 
@@ -217,32 +345,89 @@ impl TestFixtures {
             .expect_invalidate_pattern()
             .returning(|_| Box::pin(async { Ok(()) }));
 
+        mock_cache
+            .expect_get_budgets()
+            .returning(|_| Box::pin(async { Ok(None) }));
+
+        mock_cache
+            .expect_set_budgets()
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+
+        mock_cache
+            .expect_clear_budgets()
+            .returning(|_| Box::pin(async { Ok(()) }));
+
+        mock_cache
+            .expect_is_auth_ip_banned()
+            .times(0..)
+            .returning(|_| Box::pin(async { Ok(false) }));
+
+        mock_cache
+            .expect_record_auth_rate_limit_exceeded()
+            .times(0..)
+            .returning(|_| Box::pin(async { Ok(()) }));
+
         let cache_service: Arc<dyn CacheService> = Arc::new(mock_cache);
 
+        let credential_resolvers = build_credential_resolvers(db_repository.clone());
         let connection_service = Arc::new(ConnectionService::new(
             db_repository.clone(),
             cache_service.clone(),
             provider_registry.clone(),
+            noop_categorizer(),
+            credential_resolvers,
+        ));
+        let sync_service_factory = Arc::new(SyncServiceFactory::new(
+            connection_service.clone(),
+            sync_service.clone(),
         ));
 
         let auth_service = Arc::new(
             AuthService::new("test_jwt_secret_key_for_integration_testing".to_string()).unwrap(),
         );
         let budget_service = Arc::new(BudgetService::new());
+        let authorization_service = Arc::new(AuthorizationService::new());
         let config = Self::create_test_config();
+
+        let auto_categorization_service = Arc::new(AutoCategorizationService::new(
+            db_repository.clone(),
+            cache_service.clone(),
+            noop_categorizer(),
+        ));
+        let provider_sync_rate_limit_service = Arc::new(
+            crate::services::provider_sync_rate_limit_service::ProviderSyncRateLimitService::new(
+                cache_service.clone(),
+            ),
+        );
 
         let state = AppState {
             plaid_service: plaid_service_arc,
             plaid_client: plaid_client_arc,
             sync_service,
+            sync_service_factory,
             analytics_service,
             budget_service,
+            authorization_service,
             config,
             db_repository,
             cache_service,
+            provider_sync_rate_limit_service,
+            categorizer: noop_categorizer(),
             connection_service,
             auth_service,
             provider_registry,
+            otlp_traces_relay: Arc::new(OtlpTracesRelay::bogus_for_tests()),
+            category_management_service: Arc::new(CategoryManagementService::new(
+                SYSTEM_CATEGORY_SLUGS,
+            )),
+            auto_categorization_service,
+            webauthn_service: Arc::new(
+                crate::services::webauthn_service::WebAuthnService::new(
+                    "localhost",
+                    &[url::Url::parse("http://localhost:8080").unwrap()],
+                )
+                .unwrap(),
+            ),
         };
 
         Ok(create_app(state))
@@ -265,8 +450,20 @@ impl TestFixtures {
             "plaid",
             Arc::clone(&plaid_provider),
         )]));
-        let sync_service = Arc::new(SyncService::new(provider_registry.clone(), "plaid"));
+        let sync_service = Arc::new(SyncService::new(provider_registry.clone()));
         let analytics_service = Arc::new(AnalyticsService::new());
+
+        let mut mock_db = mock_db;
+
+        mock_db
+            .expect_get_provider_transaction_ids_for_user()
+            .returning(|_| Box::pin(async { Ok(vec![]) }));
+
+        mock_db
+            .expect_count_transactions()
+            .returning(|_, _, _, _, _, _| Box::pin(async { Ok(0) }));
+
+        apply_passkey_enrollment_mock_defaults(&mut mock_db);
 
         let db_repository: Arc<dyn DatabaseRepository> = Arc::new(mock_db);
 
@@ -285,6 +482,16 @@ impl TestFixtures {
             .returning(|_| Box::pin(async { Ok(None) }));
 
         mock_cache
+            .expect_get_counter()
+            .times(0..)
+            .returning(|_| Box::pin(async { Ok(None) }));
+
+        mock_cache
+            .expect_increment_counter()
+            .times(0..)
+            .returning(|_, _| Box::pin(async { Ok(1i64) }));
+
+        mock_cache
             .expect_set_with_ttl()
             .returning(|_, _, _| Box::pin(async { Ok(()) }));
 
@@ -292,12 +499,41 @@ impl TestFixtures {
             .expect_invalidate_pattern()
             .returning(|_| Box::pin(async { Ok(()) }));
 
+        mock_cache
+            .expect_get_budgets()
+            .returning(|_| Box::pin(async { Ok(None) }));
+
+        mock_cache
+            .expect_set_budgets()
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+
+        mock_cache
+            .expect_clear_budgets()
+            .returning(|_| Box::pin(async { Ok(()) }));
+
+        mock_cache
+            .expect_is_auth_ip_banned()
+            .times(0..)
+            .returning(|_| Box::pin(async { Ok(false) }));
+
+        mock_cache
+            .expect_record_auth_rate_limit_exceeded()
+            .times(0..)
+            .returning(|_| Box::pin(async { Ok(()) }));
+
         let cache_service: Arc<dyn CacheService> = Arc::new(mock_cache);
 
+        let credential_resolvers = build_credential_resolvers(db_repository.clone());
         let connection_service = Arc::new(ConnectionService::new(
             db_repository.clone(),
             cache_service.clone(),
             provider_registry.clone(),
+            noop_categorizer(),
+            credential_resolvers,
+        ));
+        let sync_service_factory = Arc::new(SyncServiceFactory::new(
+            connection_service.clone(),
+            sync_service.clone(),
         ));
 
         let auth_service = Arc::new(
@@ -305,20 +541,48 @@ impl TestFixtures {
         );
 
         let budget_service = Arc::new(BudgetService::new());
+        let authorization_service = Arc::new(AuthorizationService::new());
         let config = Self::create_test_config();
+
+        let auto_categorization_service = Arc::new(AutoCategorizationService::new(
+            db_repository.clone(),
+            cache_service.clone(),
+            noop_categorizer(),
+        ));
+        let provider_sync_rate_limit_service = Arc::new(
+            crate::services::provider_sync_rate_limit_service::ProviderSyncRateLimitService::new(
+                cache_service.clone(),
+            ),
+        );
 
         let state = AppState {
             plaid_service: plaid_service_arc,
             plaid_client: plaid_client_arc,
             sync_service,
+            sync_service_factory,
             analytics_service,
             budget_service,
+            authorization_service,
             config,
             db_repository,
             cache_service,
+            provider_sync_rate_limit_service,
+            categorizer: noop_categorizer(),
             connection_service,
             auth_service,
             provider_registry,
+            otlp_traces_relay: Arc::new(OtlpTracesRelay::bogus_for_tests()),
+            category_management_service: Arc::new(CategoryManagementService::new(
+                SYSTEM_CATEGORY_SLUGS,
+            )),
+            auto_categorization_service,
+            webauthn_service: Arc::new(
+                crate::services::webauthn_service::WebAuthnService::new(
+                    "localhost",
+                    &[url::Url::parse("http://localhost:8080").unwrap()],
+                )
+                .unwrap(),
+            ),
         };
 
         Ok(create_app(state))
@@ -327,6 +591,15 @@ impl TestFixtures {
     pub async fn create_test_app_with_db_and_cache(
         mock_db: MockDatabaseRepository,
         mock_cache: MockCacheService,
+    ) -> Result<Router, anyhow::Error> {
+        Self::create_test_app_with_db_cache_and_categorizer(mock_db, mock_cache, noop_categorizer())
+            .await
+    }
+
+    pub async fn create_test_app_with_db_cache_and_categorizer(
+        mock_db: MockDatabaseRepository,
+        mock_cache: MockCacheService,
+        categorizer: Arc<dyn Categorizer>,
     ) -> Result<Router, anyhow::Error> {
         let plaid_client = Arc::new(RealPlaidClient::new(
             "test_client_id".to_string(),
@@ -342,16 +615,35 @@ impl TestFixtures {
             "plaid",
             Arc::clone(&plaid_provider),
         )]));
-        let sync_service = Arc::new(SyncService::new(provider_registry.clone(), "plaid"));
+        let sync_service = Arc::new(SyncService::new(provider_registry.clone()));
         let analytics_service = Arc::new(AnalyticsService::new());
+
+        let mut mock_db = mock_db;
+
+        mock_db
+            .expect_get_provider_transaction_ids_for_user()
+            .returning(|_| Box::pin(async { Ok(vec![]) }));
+
+        mock_db
+            .expect_count_transactions()
+            .returning(|_, _, _, _, _, _| Box::pin(async { Ok(0) }));
+
+        apply_passkey_enrollment_mock_defaults(&mut mock_db);
 
         let db_repository: Arc<dyn DatabaseRepository> = Arc::new(mock_db);
         let cache_service: Arc<dyn CacheService> = Arc::new(mock_cache);
 
+        let credential_resolvers = build_credential_resolvers(db_repository.clone());
         let connection_service = Arc::new(ConnectionService::new(
             db_repository.clone(),
             cache_service.clone(),
             provider_registry.clone(),
+            categorizer.clone(),
+            credential_resolvers,
+        ));
+        let sync_service_factory = Arc::new(SyncServiceFactory::new(
+            connection_service.clone(),
+            sync_service.clone(),
         ));
 
         let auth_service = Arc::new(
@@ -359,20 +651,48 @@ impl TestFixtures {
         );
 
         let budget_service = Arc::new(BudgetService::new());
+        let authorization_service = Arc::new(AuthorizationService::new());
         let config = Self::create_test_config();
+
+        let auto_categorization_service = Arc::new(AutoCategorizationService::new(
+            db_repository.clone(),
+            cache_service.clone(),
+            categorizer.clone(),
+        ));
+        let provider_sync_rate_limit_service = Arc::new(
+            crate::services::provider_sync_rate_limit_service::ProviderSyncRateLimitService::new(
+                cache_service.clone(),
+            ),
+        );
 
         let state = AppState {
             plaid_service: plaid_service_arc,
             plaid_client: plaid_client_arc,
             sync_service,
+            sync_service_factory,
             analytics_service,
             budget_service,
+            authorization_service,
             config,
             db_repository,
             cache_service,
+            provider_sync_rate_limit_service,
+            categorizer,
             connection_service,
             auth_service,
             provider_registry,
+            otlp_traces_relay: Arc::new(OtlpTracesRelay::bogus_for_tests()),
+            category_management_service: Arc::new(CategoryManagementService::new(
+                SYSTEM_CATEGORY_SLUGS,
+            )),
+            auto_categorization_service,
+            webauthn_service: Arc::new(
+                crate::services::webauthn_service::WebAuthnService::new(
+                    "localhost",
+                    &[url::Url::parse("http://localhost:8080").unwrap()],
+                )
+                .unwrap(),
+            ),
         };
 
         Ok(create_app(state))
@@ -386,7 +706,7 @@ impl TestFixtures {
         let user = User {
             id: user_id,
             email: format!("test-{}@example.com", user_id),
-            password_hash: auth_service.hash_password(&test_password).unwrap(),
+            password_hash: None,
             provider: "teller".to_string(),
             created_at: Utc::now(),
             updated_at: Utc::now(),
@@ -397,11 +717,18 @@ impl TestFixtures {
         (user, auth_token.token)
     }
 
+    pub fn create_authenticated_user_with_token_for_user(user: User) -> (User, String) {
+        let auth_service =
+            AuthService::new("test_jwt_secret_key_for_integration_testing".to_string()).unwrap();
+        let auth_token = auth_service.generate_token(user.id).unwrap();
+        (user, auth_token.token)
+    }
+
     pub fn create_authenticated_request(method: Method, uri: &str, token: &str) -> Request<Body> {
         Request::builder()
             .method(method)
             .uri(uri)
-            .header(AUTHORIZATION, format!("Bearer {}", token))
+            .header(COOKIE, format!("auth_token={}", token))
             .header(CONTENT_TYPE, "application/json")
             .body(Body::empty())
             .unwrap()
@@ -432,7 +759,7 @@ impl TestFixtures {
         Request::builder()
             .method(Method::POST)
             .uri(uri)
-            .header(AUTHORIZATION, format!("Bearer {}", token))
+            .header(COOKIE, format!("auth_token={}", token))
             .header(CONTENT_TYPE, "application/json")
             .body(Body::from(body_json))
             .unwrap()
@@ -526,8 +853,36 @@ impl TestFixtures {
         r#"{"id":"txn_zero","date":"2024-01-15","amount":"0.00","description":"Fee Reversal","status":"posted","details":{"category":"general"}}"#
     }
 
+    pub fn teller_transaction_dining() -> &'static str {
+        r#"{"id":"txn_dining","date":"2024-01-15","amount":"-42.10","description":"Dinner","status":"posted","details":{"category":"dining","counterparty":{"type":"merchant","name":"Restaurant"}}}"#
+    }
+
+    pub fn teller_transaction_fuel() -> &'static str {
+        r#"{"id":"txn_fuel","date":"2024-01-16","amount":"-55.00","description":"Gas","status":"posted","details":{"category":"fuel","counterparty":{"type":"merchant","name":"Gas Station"}}}"#
+    }
+
+    pub fn teller_transaction_income() -> &'static str {
+        r#"{"id":"txn_income","date":"2024-01-17","amount":"1500.00","description":"Paycheck","status":"posted","details":{"category":"income","counterparty":{"type":"organization","name":"Employer"}}}"#
+    }
+
+    pub fn teller_transaction_investment_inflow() -> &'static str {
+        r#"{"id":"txn_investment_in","date":"2024-01-18","amount":"5000.00","description":"Investment contribution","status":"posted","details":{"category":"investment","counterparty":{"type":"organization","name":"Brokerage"}}}"#
+    }
+
+    pub fn teller_transaction_investment_outflow() -> &'static str {
+        r#"{"id":"txn_investment_out","date":"2024-01-19","amount":"-5000.00","description":"Investment withdrawal","status":"posted","details":{"category":"investment","counterparty":{"type":"organization","name":"Brokerage"}}}"#
+    }
+
+    pub fn teller_transaction_utilities() -> &'static str {
+        r#"{"id":"txn_utilities","date":"2024-01-20","amount":"-120.00","description":"Utilities","status":"posted","details":{"category":"utilities","counterparty":{"type":"merchant","name":"Utility Company"}}}"#
+    }
+
+    pub fn teller_transaction_null_category() -> &'static str {
+        r#"{"id":"txn_null_category","date":"2024-01-21","amount":"-12.34","description":"Unknown","status":"posted","details":{"category":null,"counterparty":{"type":"merchant","name":"Merchant"}}}"#
+    }
+
     pub fn plaid_transaction_with_category_json() -> &'static str {
-        r#"{"transaction_id":"test_txn_123","account_id":"test_acc_456","amount":15.5,"date":"2025-09-10","name":"Starbucks Coffee","personal_finance_category":{"primary":"FOOD_AND_DRINK","detailed":"FOOD_AND_DRINK_RESTAURANTS","confidence_level":"VERY_HIGH"},"payment_channel":"in_store","pending":false}"#
+        r#"{"transaction_id":"test_txn_123","account_id":"test_acc_456","amount":15.5,"date":"2025-09-10","name":"Starbucks Coffee","personal_finance_category":{"primary":"FOOD_AND_DRINK","detailed":"FOOD_AND_DRINK_RESTAURANT","confidence_level":"VERY_HIGH"},"payment_channel":"in_store","pending":false}"#
     }
 
     pub fn plaid_transaction_minimal_json() -> &'static str {

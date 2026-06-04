@@ -1,5 +1,69 @@
 import type { ReactNode } from 'react';
 import { cn } from '@/ui/primitives/utils';
+import {
+  border as semanticBorders,
+  effect as semanticEffects,
+  status as semanticStatus,
+  surface as semanticSurfaces,
+  text as semanticTextRecipes,
+  radius as uiRadiusRecipes,
+  font as uiTypographyRecipes,
+} from '@/ui/recipes';
+
+export const pageLayoutRecipes = {
+  shell: [
+    'relative',
+    'overflow-hidden',
+    uiRadiusRecipes.standard,
+    'border',
+    ...semanticBorders.glass,
+    ...semanticSurfaces.glassPanel,
+    'p-4',
+    ...semanticEffects.glassShadow,
+    'backdrop-blur-[28px]',
+    'backdrop-saturate-[150%]',
+    'transition-colors',
+    'duration-500',
+    'ease-out',
+    'md:p-8',
+    'lg:p-8',
+  ],
+  innerRing: [
+    'absolute',
+    'inset-[1px]',
+    uiRadiusRecipes.standard,
+    'ring-1',
+    'ring-white/45',
+    ...semanticEffects.pageShellInsetRing,
+    'dark:ring-white/12',
+  ],
+  innerGradient: [
+    'absolute',
+    'inset-0',
+    uiRadiusRecipes.standard,
+    'bg-gradient-to-b',
+    'from-white/72',
+    'via-white/28',
+    'to-transparent',
+    'transition-colors',
+    'duration-500',
+    'dark:from-slate-900/68',
+    'dark:via-slate-900/34',
+    'dark:to-transparent',
+  ],
+  badge: `${uiTypographyRecipes.badge} inline-flex items-center justify-center rounded-full ${semanticSurfaces.mutedChip.join(' ')} px-3 py-1 ${semanticTextRecipes.label} ${semanticEffects.glassShadow[0]} dark:text-slate-200`,
+  title: `${uiTypographyRecipes.pageTitle} ${semanticTextRecipes.primary} transition-colors duration-300 ease-out`,
+  subtitle: `${uiTypographyRecipes.body} ${semanticTextRecipes.body} transition-colors duration-300 ease-out`,
+  error: [
+    uiRadiusRecipes.standard,
+    ...semanticBorders.danger,
+    ...semanticStatus.danger.surface,
+    'px-5 py-3',
+    'shadow-sm',
+  ].join(' '),
+  errorText: `${uiTypographyRecipes.captionStrong} ${semanticTextRecipes.danger}`,
+  settingsShell: ['mx-auto', 'w-full', 'max-w-3xl'],
+} as const;
 
 interface PageLayoutProps {
   badge?: string;
@@ -23,57 +87,11 @@ export function PageLayout({
   className,
 }: PageLayoutProps) {
   return (
-    <div className={cn('space-y-8', className)}>
-      <section
-        className={cn(
-          'relative',
-          'overflow-hidden',
-          'rounded-[2.25rem]',
-          'border',
-          'border-white/35',
-          'bg-white/24',
-          'p-8',
-          'shadow-[0_32px_110px_-60px_rgba(15,23,42,0.75)]',
-          'backdrop-blur-[28px]',
-          'backdrop-saturate-[150%]',
-          'transition-colors',
-          'duration-500',
-          'ease-out',
-          'dark:border-white/12',
-          'dark:bg-[#0f172a]/55',
-          'dark:shadow-[0_36px_120px_-62px_rgba(2,6,23,0.85)]',
-          'sm:p-12'
-        )}
-      >
+    <div className={cn('space-y-6', 'md:space-y-8', className)}>
+      <section className={cn(...pageLayoutRecipes.shell)}>
         <div className={cn('pointer-events-none', 'absolute', 'inset-0')}>
-          <div
-            className={cn(
-              'absolute',
-              'inset-[1px]',
-              'rounded-[2.2rem]',
-              'ring-1',
-              'ring-white/45',
-              'shadow-[inset_0_1px_0_rgba(255,255,255,0.45),inset_0_-1px_0_rgba(15,23,42,0.18)]',
-              'dark:ring-white/12',
-              'dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.12),inset_0_-1px_0_rgba(2,6,23,0.48)]'
-            )}
-          />
-          <div
-            className={cn(
-              'absolute',
-              'inset-0',
-              'rounded-[2.2rem]',
-              'bg-gradient-to-b',
-              'from-white/72',
-              'via-white/28',
-              'to-transparent',
-              'transition-colors',
-              'duration-500',
-              'dark:from-slate-900/68',
-              'dark:via-slate-900/34',
-              'dark:to-transparent'
-            )}
-          />
+          <div className={cn(pageLayoutRecipes.innerRing)} />
+          <div className={cn(pageLayoutRecipes.innerGradient)} />
         </div>
 
         <div className={cn('relative', 'z-10', 'flex', 'flex-col', 'gap-5')}>
@@ -88,59 +106,10 @@ export function PageLayout({
             )}
           >
             <div className={cn('max-w-2xl', 'space-y-3')}>
-              {badge && (
-                <span
-                  className={cn(
-                    'inline-flex',
-                    'items-center',
-                    'justify-center',
-                    'rounded-full',
-                    'bg-white/75',
-                    'px-3',
-                    'py-1',
-                    'text-[11px]',
-                    'font-semibold',
-                    'uppercase',
-                    'tracking-[0.32em]',
-                    'text-slate-600',
-                    'shadow-[0_16px_42px_-30px_rgba(15,23,42,0.45)]',
-                    'dark:bg-[#1e293b]/75',
-                    'dark:text-slate-200'
-                  )}
-                >
-                  {badge}
-                </span>
-              )}
+              {badge && <span className={cn(pageLayoutRecipes.badge)}>{badge}</span>}
               <div className="space-y-2">
-                <h1
-                  className={cn(
-                    'text-3xl',
-                    'font-bold',
-                    'text-slate-900',
-                    'transition-colors',
-                    'duration-300',
-                    'ease-out',
-                    'dark:text-white',
-                    'sm:text-4xl'
-                  )}
-                >
-                  {title}
-                </h1>
-                {subtitle && (
-                  <p
-                    className={cn(
-                      'text-base',
-                      'leading-relaxed',
-                      'text-slate-600',
-                      'transition-colors',
-                      'duration-300',
-                      'ease-out',
-                      'dark:text-slate-300'
-                    )}
-                  >
-                    {subtitle}
-                  </p>
-                )}
+                <h1 className={cn(pageLayoutRecipes.title)}>{title}</h1>
+                {subtitle && <p className={cn(pageLayoutRecipes.subtitle)}>{subtitle}</p>}
               </div>
             </div>
 
@@ -152,22 +121,8 @@ export function PageLayout({
           </div>
 
           {error && (
-            <div
-              className={cn(
-                'rounded-2xl',
-                'border',
-                'border-red-200/70',
-                'bg-red-50/80',
-                'px-5',
-                'py-3',
-                'shadow-sm',
-                'dark:border-red-700/60',
-                'dark:bg-red-900/25'
-              )}
-            >
-              <div className={cn('text-sm', 'font-medium', 'text-red-600', 'dark:text-red-300')}>
-                Error: {error}
-              </div>
+            <div className={cn(pageLayoutRecipes.error)}>
+              <div className={cn(pageLayoutRecipes.errorText)}>Error: {error}</div>
             </div>
           )}
 
@@ -175,7 +130,7 @@ export function PageLayout({
         </div>
       </section>
 
-      {children}
+      {children ? <div className={cn('w-full', 'min-w-0', 'max-w-full')}>{children}</div> : null}
     </div>
   );
 }

@@ -1,10 +1,12 @@
+//! Plaid adapter for linking, accounts, and transactions.
+
 use anyhow::Result;
 use async_trait::async_trait;
 use chrono::NaiveDate;
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::models::{account::Account, transaction::Transaction};
+use crate::models::{account::Account, transaction::ProviderTransactionsResult};
 use crate::providers::trait_definition::{
     FinancialDataProvider, InstitutionInfo, ProviderCredentials,
 };
@@ -53,10 +55,17 @@ impl FinancialDataProvider for PlaidProvider {
         credentials: &ProviderCredentials,
         start_date: NaiveDate,
         end_date: NaiveDate,
-    ) -> Result<Vec<Transaction>> {
+    ) -> Result<ProviderTransactionsResult> {
         self.client
             .get_transactions(&credentials.access_token, start_date, end_date)
             .await
+    }
+
+    async fn fetch_balances_snapshot(
+        &self,
+        _credentials: &ProviderCredentials,
+    ) -> Result<Option<crate::models::simplefin::SimpleFinAccountsResponse>> {
+        Ok(None)
     }
 
     async fn get_institution_info(

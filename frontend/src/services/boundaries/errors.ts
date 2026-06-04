@@ -1,3 +1,7 @@
+/**
+ * Typed errors raised by the HTTP client layer.
+ */
+
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -16,14 +20,14 @@ export class AuthenticationError extends ApiError {
 }
 
 export class ValidationError extends ApiError {
-  constructor(message = 'Invalid input data', details?: Record<string, string>) {
+  public details?: unknown;
+
+  constructor(message = 'Invalid input data', details?: unknown) {
     super(400, message, 'VALIDATION_ERROR');
     if (details) {
       this.details = details;
     }
   }
-
-  public details?: Record<string, string>;
 }
 
 export class NetworkError extends ApiError {
@@ -39,8 +43,11 @@ export class ServerError extends ApiError {
 }
 
 export class ConflictError extends ApiError {
-  constructor(message = 'Resource conflict') {
+  readonly body?: unknown;
+
+  constructor(message = 'Resource conflict', body?: unknown) {
     super(409, message, 'CONFLICT');
+    this.body = body;
   }
 }
 
@@ -51,7 +58,16 @@ export class NotFoundError extends ApiError {
 }
 
 export class ForbiddenError extends ApiError {
-  constructor(message = 'Access forbidden') {
-    super(403, message, 'FORBIDDEN');
+  constructor(message = 'Access forbidden', code = 'FORBIDDEN') {
+    super(403, message, code);
+  }
+}
+
+export class RateLimitError extends ApiError {
+  readonly retryAfterSeconds?: number;
+
+  constructor(message = 'Too many requests', retryAfterSeconds?: number) {
+    super(429, message, 'RATE_LIMITED');
+    this.retryAfterSeconds = retryAfterSeconds;
   }
 }

@@ -1,4 +1,6 @@
 import { Link2 } from 'lucide-react';
+import type { ReactNode } from 'react';
+import type { FinancialProvider } from '@/types/api';
 import { EmptyState } from '@/ui/primitives';
 import { BankCard } from '../../../components/BankCard';
 import ConnectButton from './ConnectButton';
@@ -10,6 +12,7 @@ export interface BankAccount {
   type: 'checking' | 'savings' | 'credit' | 'loan' | 'investment' | 'other';
   balance?: number;
   transactions?: number;
+  providerAccountId?: string | null;
 }
 
 export interface BankConnectionViewModel {
@@ -18,6 +21,8 @@ export interface BankConnectionViewModel {
   short: string;
   status: 'connected' | 'needs_reauth' | 'error';
   lastSync?: string | null;
+  provider: FinancialProvider;
+  connectionId: string | null;
   accounts: BankAccount[];
 }
 
@@ -26,17 +31,53 @@ interface ConnectionsListProps {
   onConnect: () => void;
   onSync: (id: string) => Promise<void>;
   onDisconnect: (id: string) => Promise<void>;
-  onAccountSelect?: (accountId: string) => void;
+  onExport?: (format: 'csv' | 'ofx', connectionId?: string) => Promise<void>;
+  isExporting?: boolean;
+  isOnline: boolean;
+  onImportSuccess?: (count: number, mask: string) => void;
+  providerName?: string;
+  connectLabel?: string;
+  connectLogoSrc?: string;
+  emptyState?: ReactNode;
 }
 
-const ConnectionsList = ({ banks, onConnect, onSync, onDisconnect, onAccountSelect }: ConnectionsListProps) => {
+const ConnectionsList = ({
+  banks,
+  onConnect,
+  onSync,
+  onDisconnect,
+  onExport = async () => undefined,
+  isExporting = false,
+  isOnline,
+  onImportSuccess,
+  providerName,
+  connectLabel,
+  connectLogoSrc,
+  emptyState,
+}: ConnectionsListProps) => {
+  const headingProviderName = providerName ?? 'accounts';
+  const connectButtonLabel = connectLabel ?? 'Add ally account';
+
   if (!banks.length) {
+    if (emptyState) {
+      return emptyState;
+    }
+
     return (
       <EmptyState
         icon={Link2}
-        title="No accounts connected yet"
-        description="Add your first institution to unlock live balances and automated transaction sync."
-        action={<ConnectButton onClick={onConnect} />}
+        title={`No ${headingProviderName} connected yet`}
+        description={`Use ${connectButtonLabel} to unlock live balances and automated transaction sync.`}
+        action={
+          <ConnectButton
+            onClick={onConnect}
+            disabled={!isOnline}
+            title={!isOnline ? 'Unavailable while offline' : undefined}
+            leadingImageSrc={connectLogoSrc}
+          >
+            {connectButtonLabel}
+          </ConnectButton>
+        }
       />
     );
   }
@@ -49,7 +90,10 @@ const ConnectionsList = ({ banks, onConnect, onSync, onDisconnect, onAccountSele
           bank={bank}
           onSync={onSync}
           onDisconnect={onDisconnect}
-          onAccountSelect={onAccountSelect}
+          onExport={onExport}
+          isExporting={isExporting}
+          isOnline={isOnline}
+          onImportSuccess={onImportSuccess}
         />
       ))}
     </div>

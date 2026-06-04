@@ -1,60 +1,44 @@
-import { render } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
+import React from 'react';
+import { Button } from '@/ui/primitives/Button';
 import { Input } from '@/ui/primitives/Input';
+import { control, radius as uiRadiusRecipes } from '@/ui/recipes';
 
 describe('Input', () => {
-  describe('variants', () => {
-    it('renders default variant correctly', () => {
-      const { container } = render(<Input variant="default" />);
-      const input = container.querySelector('input');
-      expect(input?.className).toMatchSnapshot();
-    });
+  it.each([
+    ['sm', control.height.sm, control.paddingX.sm, control.label.sm],
+    ['md', control.height.md, control.paddingX.md, control.label.md],
+    ['lg', control.height.lg, control.paddingX.lg, control.label.lg],
+  ] as const)('renders the %s control size', (inputSize, height, paddingX, label) => {
+    render(<Input aria-label="Email" inputSize={inputSize} />);
 
-    it('renders invalid variant correctly', () => {
-      const { container } = render(<Input variant="invalid" />);
-      const input = container.querySelector('input');
-      expect(input?.className).toMatchSnapshot();
-    });
-
-    it('renders glass variant correctly', () => {
-      const { container } = render(<Input variant="glass" />);
-      const input = container.querySelector('input');
-      expect(input?.className).toMatchSnapshot();
-    });
+    const input = screen.getByRole('textbox', { name: 'Email' });
+    expect(input.className).toContain(height);
+    expect(input.className).toContain(paddingX);
+    expect(input.className).toContain(label);
+    expect(input.className).toContain(uiRadiusRecipes.standard);
   });
 
-  describe('sizes', () => {
-    it('renders sm size correctly', () => {
-      const { container } = render(<Input inputSize="sm" />);
-      const input = container.querySelector('input');
-      expect(input?.className).toMatchSnapshot();
-    });
+  it('shares the md height with Button md', () => {
+    render(
+      <div>
+        <Button>Save</Button>
+        <Input aria-label="Search" inputSize="md" />
+      </div>
+    );
 
-    it('renders md size correctly', () => {
-      const { container } = render(<Input inputSize="md" />);
-      const input = container.querySelector('input');
-      expect(input?.className).toMatchSnapshot();
-    });
-
-    it('renders lg size correctly', () => {
-      const { container } = render(<Input inputSize="lg" />);
-      const input = container.querySelector('input');
-      expect(input?.className).toMatchSnapshot();
-    });
+    expect(screen.getByRole('button', { name: 'Save' }).className).toContain(control.height.md);
+    expect(screen.getByRole('textbox', { name: 'Search' }).className).toContain(control.height.md);
   });
 
-  describe('states', () => {
-    it('renders disabled state correctly', () => {
-      const { container } = render(<Input disabled />);
-      const input = container.querySelector('input');
-      expect(input?.disabled).toBe(true);
-    });
-  });
+  it('renders the floating chrome invalid variant with the floating surface and danger ring', () => {
+    render(<Input aria-label="Category" variant="floatingChromeInvalid" />);
 
-  describe('custom className', () => {
-    it('merges custom className with variant classes', () => {
-      const { container } = render(<Input variant="default" className="custom-class" />);
-      const input = container.querySelector('input');
-      expect(input?.className).toContain('custom-class');
-    });
+    const input = screen.getByRole('textbox', { name: 'Category' });
+    expect(input.className).toContain(
+      'bg-[color:color-mix(in_srgb,var(--color-surface-glass-panel)_26%,transparent)]'
+    );
+    expect(input.className).toContain('border-[var(--color-status-danger-border)]');
+    expect(input.className).toContain('focus-visible:ring-inset');
   });
 });

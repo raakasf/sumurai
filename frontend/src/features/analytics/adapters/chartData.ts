@@ -1,7 +1,16 @@
-import type { AnalyticsTopMerchantsResponse } from '../../../types/api';
-import { formatCategoryName } from '../../../utils/categories';
+/**
+ * Transforms analytics API results into chart-ready series.
+ */
 
-export type DonutDatum = { name: string; value: number };
+import type { AnalyticsTopMerchantsResponse } from '../../../types/api';
+import { formatCategoryName, getTagThemeForCategory } from '../../../utils/categories';
+
+export type DonutDatum = {
+  name: string;
+  categoryKey: string;
+  value: number;
+  color?: string;
+};
 
 type CategoryDatum = {
   category?: string | null;
@@ -10,16 +19,23 @@ type CategoryDatum = {
   value?: number | string | null;
 };
 
-export function categoriesToDonut(categories: CategoryDatum[] = []): DonutDatum[] {
-  const categoryTotals = new Map<string, number>();
-
-  for (const c of categories) {
+export function categoriesToDonut(
+  categories: CategoryDatum[] = [],
+  accentIndexByName?: ReadonlyMap<string, number>
+): DonutDatum[] {
+  const mapped = categories.map((c) => {
     const rawName: string = (c.category ?? c.name ?? 'Unknown') || 'Unknown';
+    const displayName = formatCategoryName(rawName);
     const rawAmount: number | string | null | undefined = c.amount ?? c.value ?? 0;
     const value = typeof rawAmount === 'string' ? Number(rawAmount) : Number(rawAmount || 0);
-    if (!Number.isFinite(value) || value <= 0) {
-      continue;
-    }
+    const theme = getTagThemeForCategory(rawName, accentIndexByName);
+    return {
+      name: displayName,
+      categoryKey: rawName,
+      value: Number.isFinite(value) ? value : 0,
+      color: theme.ringHex,
+    };
+  });
 
     const name = formatCategoryName(rawName);
     categoryTotals.set(name, (categoryTotals.get(name) || 0) + value);

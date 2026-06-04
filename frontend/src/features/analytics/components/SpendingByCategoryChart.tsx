@@ -1,104 +1,124 @@
 import { BarChart3 } from 'lucide-react';
-import type React from 'react';
-import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from 'recharts';
-import { useCurrency } from '@/hooks/useCurrency';
+import React from 'react';
+import { Cell, Pie, PieChart, Tooltip } from 'recharts';
 import { cn, EmptyState } from '@/ui/primitives';
+import { text as uiTextRecipes } from '@/ui/recipes';
+import { chart } from '@/ui/tokens';
 import { useTheme } from '../../../context/ThemeContext';
 import type { DonutDatum } from '../adapters/chartData';
+import { useChartContainerSize } from '../hooks/useChartContainerSize';
+import { ChartGlassTooltip, chartTooltipRechartsProps } from './ChartGlassTooltip';
 
 type Props = {
   data: DonutDatum[];
   total: number;
   hoveredCategory: string | null;
   setHoveredCategory: (name: string | null) => void;
+  className?: string;
 };
 
-export const SpendingByCategoryChart: React.FC<Props> = ({
+type TooltipItem = { payload?: DonutDatum };
+
+const tooltipFormatter = (
+  value: number | string,
+  _name: string,
+  item: TooltipItem
+): [string, string] => {
+  const numericValue = typeof value === 'number' ? value : Number(value);
+  return [fmtUSD(Number.isFinite(numericValue) ? numericValue : 0), item.payload?.name ?? ''];
+};
+
+const SpendingByCategoryChartFn: React.FC<Props> = ({
   data,
   total,
   hoveredCategory,
   setHoveredCategory,
+  className,
 }) => {
-  const { mode, colors } = useTheme();
-  const { format } = useCurrency();
-  const tooltipFormatter = (
-    value: number | string,
-    _name: string,
-    item: { payload?: DonutDatum }
-  ): [string, string] => {
-    const numericValue = typeof value === 'number' ? value : Number(value);
-    return [format(Number.isFinite(numericValue) ? numericValue : 0), item.payload?.name ?? ''];
-  };
+  const { mode } = useTheme();
+  const { ref: chartContainerRef, width, height } = useChartContainerSize();
+  const chartSize = Math.min(width, height);
+  if (data.length === 0) {
+    return (
+      <EmptyState
+        icon={BarChart3}
+        title="No spending yet"
+        description="Nothing to chart in this period."
+      />
+    );
+  }
+
+  const center = chartSize / 2;
+  const outerRadius = Math.max(Math.floor(center) - 1, 0);
+  const innerRadius = Math.round(outerRadius * 0.62);
 
   return (
     <div
+      ref={chartContainerRef}
       className={cn(
-        'group',
         'relative',
+        'w-full',
+        'h-full',
+        'min-w-0',
+        'min-h-[220px]',
+        'md:min-h-0',
         'flex',
-        'flex-col',
         'items-center',
         'justify-center',
-        'min-h-[260px]'
+        className
       )}
     >
-      {data.length > 0 ? (
-        <div className={cn('relative', 'w-[260px]', 'h-[260px]')}>
-          <ResponsiveContainer width="100%" height="100%">
-            <PieChart>
-              <Pie
-                dataKey="value"
-                data={data}
-                cx="50%"
-                cy="50%"
-                outerRadius={120}
-                innerRadius={70}
-                stroke="none"
-                paddingAngle={1}
-                nameKey="name"
-                isAnimationActive={true}
-                animationBegin={0}
-                animationDuration={800}
-              >
-                {data.map((cat, index) => {
-                  const color = colors.chart.primary[index % colors.chart.primary.length];
-                  const isHovered = hoveredCategory === cat.name;
-                  return (
-                    <Cell
-                      key={`cell-${cat.name}`}
-                      fill={color}
-                      stroke={isHovered ? colors.chart.tooltipText : 'none'}
-                      strokeWidth={isHovered ? 3 : 0}
-                      onMouseEnter={() => setHoveredCategory(cat.name)}
-                      onMouseLeave={() => setHoveredCategory(null)}
-                      style={{
-                        filter: isHovered ? 'brightness(1.15) saturate(1.1)' : 'none',
-                        cursor: 'pointer',
-                        transition: 'all 0.2s ease',
-                      }}
-                    />
-                  );
-                })}
-              </Pie>
-              <Tooltip
-                contentStyle={{
-                  background: colors.chart.tooltipBg,
-                  border: `1px solid ${colors.chart.tooltipBorder}`,
-                  color: colors.chart.tooltipText,
-                  borderRadius: '8px',
-                  boxShadow:
-                    mode === 'dark'
-                      ? '0 10px 25px -5px rgba(0, 0, 0, 0.5)'
-                      : '0 10px 25px -5px rgba(0, 0, 0, 0.1)',
-                  fontSize: '14px',
-                  fontWeight: '500',
-                }}
-                itemStyle={{ color: colors.chart.tooltipText }}
-                labelStyle={{ color: colors.chart.tooltipText }}
-                formatter={tooltipFormatter}
-              />
-            </PieChart>
-          </ResponsiveContainer>
+      {chartSize > 0 ? (
+        <>
+          <PieChart
+            width={chartSize}
+            height={chartSize}
+            margin={{ top: 0, right: 0, bottom: 0, left: 0 }}
+            accessibilityLayer={false}
+          >
+            <Pie
+              dataKey="value"
+              data={data}
+              cx={center}
+              cy={center}
+              outerRadius={outerRadius}
+              innerRadius={innerRadius}
+              stroke="none"
+              paddingAngle={1}
+              nameKey="name"
+              isAnimationActive={true}
+              animationBegin={0}
+              animationDuration={800}
+            >
+              {data.map((cat, index) => {
+                const palette = chart.series[mode];
+                const color = cat.color ?? palette[index % palette.length];
+                const isHovered = hoveredCategory === cat.name;
+                return (
+                  <Cell
+                    key={`cell-${cat.name}`}
+                    fill={color}
+                    fillOpacity={hoveredCategory === null || isHovered ? 1 : 0.35}
+                    onMouseEnter={() => setHoveredCategory(cat.name)}
+                    onMouseLeave={() => setHoveredCategory(null)}
+                    onClick={() => setHoveredCategory(cat.name)}
+                    style={{
+                      filter: isHovered ? 'brightness(1.08) saturate(1.05)' : 'none',
+                      cursor: 'pointer',
+                      outline: 'none',
+                      transition: 'all 0.2s ease',
+                    }}
+                  />
+                );
+              })}
+            </Pie>
+            <Tooltip
+              content={(tooltipProps) => (
+                <ChartGlassTooltip {...tooltipProps} formatter={tooltipFormatter} />
+              )}
+              {...chartTooltipRechartsProps}
+            />
+          </PieChart>
           <div
             className={cn(
               'absolute',
@@ -106,31 +126,28 @@ export const SpendingByCategoryChart: React.FC<Props> = ({
               'flex',
               'items-center',
               'justify-center',
-              'pointer-events-none'
+              'pointer-events-none',
+              'px-[22%]'
             )}
           >
             <div
               className={cn(
-                'text-2xl',
+                'font-display',
                 'font-bold',
-                'text-slate-900',
-                'dark:text-slate-50',
-                'tracking-tight'
+                'leading-none',
+                'tabular-nums',
+                'text-center',
+                'text-[clamp(0.875rem,4vw,1.5rem)]',
+                uiTextRecipes.primary
               )}
             >
               {format(total)}
             </div>
           </div>
-        </div>
-      ) : (
-        <EmptyState
-          icon={BarChart3}
-          title="No transactions found"
-          description="No transaction data available"
-        />
-      )}
+        </>
+      ) : null}
     </div>
   );
 };
-
+export const SpendingByCategoryChart = React.memo(SpendingByCategoryChartFn);
 export default SpendingByCategoryChart;

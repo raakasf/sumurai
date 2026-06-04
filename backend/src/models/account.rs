@@ -10,6 +10,7 @@ use serde_json::json;
 #[schema(example = json!({
     "id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
     "user_id": "ffffffff-1111-2222-3333-444444444444",
+    "provider": "simplefin",
     "provider_account_id": "acct-123",
     "provider_connection_id": "99999999-8888-7777-6666-555555555555",
     "name": "Demo Checking",
@@ -29,7 +30,7 @@ pub struct Account {
     pub balance_current: Option<Decimal>,
     pub mask: Option<String>,
     pub institution_name: Option<String>,
-    pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub provider_conn_id: Option<String>,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -48,6 +49,7 @@ pub struct Account {
 pub struct AccountResponse {
     pub id: Uuid,
     pub user_id: Option<Uuid>,
+    pub provider: Option<String>,
     pub provider_account_id: Option<String>,
     pub provider_connection_id: Option<Uuid>,
     pub name: String,
@@ -136,7 +138,7 @@ impl Account {
             balance_current: None,
             mask: teller_acc["last_four"].as_str().map(String::from),
             institution_name: teller_acc["institution"]["name"].as_str().map(String::from),
-            updated_at: None,
+            provider_conn_id: None,
         }
     }
 
@@ -153,7 +155,7 @@ impl Account {
                 .and_then(Decimal::from_f64_retain),
             mask: plaid_acc["mask"].as_str().map(String::from),
             institution_name: None,
-            updated_at: None,
+            provider_conn_id: None,
         }
     }
 }

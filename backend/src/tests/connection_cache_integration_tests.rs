@@ -8,6 +8,7 @@ use crate::services::{
     cache_service::MockCacheService, connection_service::ConnectionService,
     repository_service::MockDatabaseRepository,
 };
+use crate::test_fixtures::{build_credential_resolvers, noop_categorizer};
 use chrono::Utc;
 use rust_decimal::Decimal;
 use std::sync::Arc;
@@ -18,6 +19,7 @@ fn create_test_connection(user_id: Uuid) -> ProviderConnection {
         id: Uuid::new_v4(),
         user_id,
         item_id: "test_item_123".to_string(),
+        provider: "plaid".to_string(),
         is_connected: true,
         last_sync_at: Some(Utc::now()),
         connected_at: Some(Utc::now()),
@@ -45,7 +47,7 @@ fn create_test_accounts() -> Vec<Account> {
             balance_current: Some(Decimal::new(150000, 2)),
             mask: Some("1234".to_string()),
             institution_name: None,
-            updated_at: None,
+            provider_conn_id: None,
         },
         Account {
             id: Uuid::new_v4(),
@@ -57,7 +59,7 @@ fn create_test_accounts() -> Vec<Account> {
             balance_current: Some(Decimal::new(300000, 2)),
             mask: Some("5678".to_string()),
             institution_name: None,
-            updated_at: None,
+            provider_conn_id: None,
         },
     ]
 }
@@ -100,28 +102,43 @@ async fn given_bank_sync_operation_when_completing_then_updates_jwt_scoped_cache
 
     mock_cache
         .expect_invalidate_pattern()
+        .times(2)
+        .returning(|_| Box::pin(async { Ok(()) }));
+
+    mock_cache
+        .expect_clear_transactions()
+        .times(1)
+        .returning(|_| Box::pin(async { Ok(()) }));
+
+    mock_cache
+        .expect_clear_budgets()
         .times(1)
         .returning(|_| Box::pin(async { Ok(()) }));
 
     let provider_registry = Arc::new(ProviderRegistry::new());
-    let service =
-        ConnectionService::new(Arc::new(mock_db), Arc::new(mock_cache), provider_registry);
+    let db_repository = Arc::new(mock_db);
+    let credential_resolvers = build_credential_resolvers(db_repository.clone());
+    let service = ConnectionService::new(
+        db_repository,
+        Arc::new(mock_cache),
+        provider_registry,
+        noop_categorizer(),
+        credential_resolvers,
+    );
 
     let result =
-        complete_sync_with_jwt_cache_update(&service, &user_id, jwt_id, &connection, &accounts)
-            .await;
+        complete_sync_with_jwt_cache_update(&service, jwt_id, &connection, &accounts).await;
 
     assert!(result.is_ok());
 }
 
 async fn complete_sync_with_jwt_cache_update(
     service: &ConnectionService,
-    user_id: &Uuid,
     jwt_id: &str,
     connection: &ProviderConnection,
     accounts: &[Account],
 ) -> anyhow::Result<()> {
     service
-        .complete_sync_with_jwt_cache_update(user_id, jwt_id, connection, accounts)
+        .complete_sync_with_jwt_cache_update(jwt_id, connection, accounts)
         .await
 }

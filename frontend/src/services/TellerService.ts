@@ -1,4 +1,9 @@
-import type { ProviderStatusResponse } from '../types/api';
+/**
+ * API access for Teller connection status and sync.
+ */
+
+import type { PlaidSyncResponse, ProviderStatusResponse } from '../types/api';
+import { buildSyncTransactionsRequest } from '../utils/syncTransactionsRequest';
 import { ApiClient } from './ApiClient';
 
 export interface TellerConnectionStatus {
@@ -30,10 +35,10 @@ export class TellerService {
     }));
   }
 
-  static async syncTransactions(connectionId?: string): Promise<void> {
-    await ApiClient.post(
+  static async syncTransactions(connectionId?: string): Promise<PlaidSyncResponse> {
+    return ApiClient.post<PlaidSyncResponse>(
       '/providers/sync-transactions',
-      connectionId ? { connection_id: connectionId } : {}
+      buildSyncTransactionsRequest(connectionId)
     );
   }
 

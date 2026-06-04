@@ -27,7 +27,7 @@ fn create_test_accounts_for_bank(connection_id: Uuid, user_id: Uuid) -> Vec<Acco
             balance_current: Some(dec!(1500.00)),
             mask: Some("1234".to_string()),
             institution_name: None,
-            updated_at: None,
+            provider_conn_id: None,
         },
         Account {
             id: Uuid::new_v4(),
@@ -39,7 +39,7 @@ fn create_test_accounts_for_bank(connection_id: Uuid, user_id: Uuid) -> Vec<Acco
             balance_current: Some(dec!(5000.00)),
             mask: Some("5678".to_string()),
             institution_name: None,
-            updated_at: None,
+            provider_conn_id: None,
         },
         Account {
             id: Uuid::new_v4(),
@@ -51,7 +51,7 @@ fn create_test_accounts_for_bank(connection_id: Uuid, user_id: Uuid) -> Vec<Acco
             balance_current: Some(dec!(-250.00)),
             mask: Some("9012".to_string()),
             institution_name: None,
-            updated_at: None,
+            provider_conn_id: None,
         },
     ]
 }
@@ -63,7 +63,7 @@ fn build_sync_service(plaid_client: Arc<RealPlaidClient>) -> SyncService {
         "plaid",
         Arc::clone(&plaid_provider),
     )]));
-    SyncService::new(provider_registry, "plaid")
+    SyncService::new(provider_registry)
 }
 
 #[test]
@@ -95,6 +95,7 @@ fn given_connection_with_no_cursor_when_calculating_date_ranges_then_uses_defaul
     let mut connection = create_test_bank_connection(user_id);
     connection.sync_cursor = None;
     connection.last_sync_at = None;
+    let now = Utc::now().date_naive();
 
     let plaid_client = Arc::new(RealPlaidClient::new(
         "test_client_id".to_string(),
@@ -103,9 +104,10 @@ fn given_connection_with_no_cursor_when_calculating_date_ranges_then_uses_defaul
     ));
     let sync_service = build_sync_service(plaid_client);
 
-    let (start_date, end_date) = sync_service.calculate_sync_date_range(connection.last_sync_at);
-    let expected_start = Utc::now().date_naive() - Duration::days(90);
-    let expected_end = Utc::now().date_naive();
+    let (start_date, end_date) =
+        sync_service.calculate_sync_date_range(connection.last_sync_at, None);
+    let expected_start = now.checked_sub_days(chrono::Days::new(90)).unwrap();
+    let expected_end = now;
 
     assert_eq!(start_date, expected_start);
     assert_eq!(end_date, expected_end);
@@ -133,7 +135,7 @@ async fn given_bank_connection_when_sync_fails_then_returns_error_without_updati
     };
 
     let result = sync_service
-        .sync_bank_connection_transactions(&credentials, &connection, &accounts)
+        .sync_bank_connection_transactions(&credentials, &connection, &accounts, None)
         .await;
 
     assert!(result.is_err());
@@ -155,7 +157,7 @@ async fn given_bank_connection_when_upserting_account_then_assigns_connection_id
         balance_current: Some(dec!(1000.00)),
         mask: Some("1234".to_string()),
         institution_name: None,
-        updated_at: None,
+        provider_conn_id: None,
     };
 
     account.user_id = Some(user_id);

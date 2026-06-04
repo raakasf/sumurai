@@ -8,11 +8,18 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
+import {
+  ChartGlassTooltip,
+  chartTooltipRechartsProps,
+} from '@/features/analytics/components/ChartGlassTooltip';
 import { cn } from '@/ui/primitives';
+import { text as uiTextRecipes, font as uiTypographyRecipes } from '@/ui/recipes';
+import { chart, getThemeColors } from '@/ui/tokens';
 import { useTheme } from '../context/ThemeContext';
 
 export const NetWorthOverTimeWidget: React.FC = () => {
-  const { colors } = useTheme();
+  const { mode } = useTheme();
+  const colors = getThemeColors(mode);
   const mockData = [
     { date: '2024-01', netWorth: 10000 },
     { date: '2024-02', netWorth: 10500 },
@@ -20,21 +27,27 @@ export const NetWorthOverTimeWidget: React.FC = () => {
   ];
 
   return (
-    <div data-testid="net-worth-widget" className="h-full">
-      <div
-        className={cn('text-sm', 'text-slate-600', 'dark:text-slate-400', 'mb-4', 'font-medium')}
-      >
+    <div data-testid="net-worth-widget" className={cn('h-full', 'w-full', 'min-w-0')}>
+      <div className={cn(uiTypographyRecipes.captionStrong, 'mb-4', uiTextRecipes.muted)}>
         Net Worth Over Time
       </div>
-      <ResponsiveContainer width="100%" height={200}>
-        <LineChart data={mockData}>
-          <CartesianGrid strokeDasharray="3 3" />
-          <XAxis dataKey="date" />
-          <YAxis />
-          <Tooltip />
-          <Line type="monotone" dataKey="netWorth" stroke={colors.semantic.netWorth} />
-        </LineChart>
-      </ResponsiveContainer>
+      <div className={cn('h-[200px]', 'w-full', 'min-w-0')}>
+        <ResponsiveContainer width="100%" height={200}>
+          <LineChart accessibilityLayer={false} data={mockData}>
+            <CartesianGrid strokeDasharray="3 3" stroke={chart.grid[mode]} />
+            <XAxis dataKey="date" tick={{ fill: chart.axis[mode] }} />
+            <YAxis tick={{ fill: chart.axis[mode] }} />
+            <Tooltip
+              cursor={false}
+              content={(tooltipProps) => (
+                <ChartGlassTooltip {...tooltipProps} valueClassName={uiTextRecipes.success} />
+              )}
+              {...chartTooltipRechartsProps}
+            />
+            <Line type="monotone" dataKey="netWorth" stroke={colors.semantic.netWorth} />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
     </div>
   );
 };

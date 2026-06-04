@@ -1,4 +1,5 @@
-export type FinancialProvider = 'plaid' | 'teller';
+export type FinancialProvider = 'plaid' | 'teller' | 'simplefin';
+export type ExportFormat = 'csv' | 'ofx';
 
 export interface TransactionLocation {
   address?: string;
@@ -7,10 +8,23 @@ export interface TransactionLocation {
   postal_code?: string;
 }
 
+export interface CustomCategory {
+  id: string;
+  display_name: string;
+  lookup_key: string;
+}
+
+export interface CategoryListResponse {
+  system: string[];
+  custom: CustomCategory[];
+}
+
 export interface TransactionCategory {
   primary: string;
   detailed?: string;
   confidence_level?: string;
+  is_custom?: boolean;
+  is_overridden?: boolean;
 }
 
 export interface Transaction {
@@ -21,8 +35,10 @@ export interface Transaction {
   merchant?: string;
   amount: number;
   category: TransactionCategory;
-  account_name: string;
-  account_type: string;
+  provider?: FinancialProvider;
+  provider_account_id?: string | null;
+  account_name?: string;
+  account_type?: string;
   account_mask?: string;
   provider?: FinancialProvider;
   running_balance?: number;
@@ -45,6 +61,28 @@ export interface CategoryRule {
   category_name: string;
   created_at: string;
   updated_at: string;
+}
+
+export interface PaginatedTransactionsResponse {
+  transactions: Transaction[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface LargestTransaction {
+  amount: number;
+  merchant: string;
+}
+
+export interface TransactionsInsightsResponse {
+  total_count: number;
+  total_spent: number;
+  average_amount: number;
+  largest: LargestTransaction | null;
+  recurring_count: number;
+  recurring_merchants: string[];
+  top_categories: string[];
 }
 
 export interface Budget {
@@ -107,6 +145,10 @@ export interface PlaidExchangeTokenRequest {
 
 export interface PlaidExchangeTokenResponse {
   access_token: string;
+  item_id?: string;
+  institution_id?: string | null;
+  institution_name?: string;
+  connection_id?: string;
 }
 
 export interface PlaidSyncResponse {
@@ -119,6 +161,14 @@ export interface PlaidSyncResponse {
     end_date: string;
     connection_updated: boolean;
   };
+  simplefin_institution_results?: SimpleFinInstitutionSyncResult[];
+  bridge_warnings?: string[];
+}
+
+export interface SyncTransactionsRequest {
+  connection_id?: string;
+  client_date: string;
+  client_timezone: string;
 }
 
 export interface ProviderConnectionStatus {
@@ -126,14 +176,61 @@ export interface ProviderConnectionStatus {
   last_sync_at: string | null;
   institution_name: string | null;
   connection_id: string | null;
+  item_id?: string | null;
   transaction_count: number;
   account_count: number;
   sync_in_progress: boolean;
 }
 
+export interface ProviderConnectResponse {
+  connection_id: string;
+  institution_name: string;
+  simplefin_institutions_requiring_auth?: SimpleFinInstitutionAuthRequired[];
+}
+
+export interface SimpleFinInstitutionAuthRequired {
+  institution_name: string;
+  org_conn_id?: string | null;
+  message: string;
+}
+
+export type SimpleFinInstitutionSyncStatus =
+  | 'synced'
+  | 'auth_required'
+  | 'skipped_hidden'
+  | 'no_accounts';
+
+export interface SimpleFinInstitutionSyncResult {
+  institution_name: string;
+  org_conn_id?: string | null;
+  connection_id?: string | null;
+  status: SimpleFinInstitutionSyncStatus;
+  transaction_count?: number | null;
+  message?: string | null;
+}
+
+export interface SimpleFinBridgeSyncResponse {
+  rateLimited: boolean;
+  retryAfterSeconds?: number;
+  transactions: Transaction[];
+  metadata?: PlaidSyncResponse['metadata'];
+  simplefin_institution_results: SimpleFinInstitutionSyncResult[];
+  bridge_warnings: string[];
+}
+
 export interface ProviderStatusResponse {
   provider: FinancialProvider;
   connections: ProviderConnectionStatus[];
+}
+
+export interface SimpleFinIgnoredInstitution {
+  org_conn_id: string;
+  institution_name: string | null;
+  hidden_at: string;
+}
+
+export interface SimpleFinIgnoredInstitutionsResponse {
+  institutions: SimpleFinIgnoredInstitution[];
 }
 
 export interface DataCleared {
@@ -156,7 +253,7 @@ export interface AnalyticsSpendingResponse {
 export interface AnalyticsCategoryResponse {
   category: string;
   amount: number;
-  count: number;
+  count?: number;
   percentage: number;
 }
 
@@ -174,8 +271,43 @@ export interface AnalyticsCategoryTrendResponse {
 export interface AnalyticsTopMerchantsResponse {
   name: string;
   amount: number;
-  count: number;
+  count?: number;
   percentage: number;
+}
+
+export interface AnalyticsCashFlowPoint {
+  month: string;
+  income: number;
+  expenses: number;
+  net: number;
+}
+
+export interface AnalyticsCashFlowResponse {
+  series: AnalyticsCashFlowPoint[];
+  currency: string;
+}
+
+export type AutoCategorizationJobStatus =
+  | 'running'
+  | 'cancelling'
+  | 'completed'
+  | 'cancelled'
+  | 'failed';
+
+export interface AutoCategorizationJobState {
+  job_id: string;
+  status: AutoCategorizationJobStatus;
+  total: number;
+  processed: number;
+  updated: number;
+  skipped: number;
+  started_at: string;
+  finished_at: string | null;
+  error_message: string | null;
+}
+
+export function isAutoCategorizationJobActive(status: AutoCategorizationJobStatus): boolean {
+  return status === 'running' || status === 'cancelling';
 }
 
 export interface ApiError {
@@ -186,4 +318,63 @@ export interface ApiError {
 export interface ApiResponse<T> {
   data?: T;
   error?: ApiError;
+}
+
+export interface AuthResponse {
+  user_id: string;
+  expires_at: string;
+  onboarding_completed: boolean;
+  requires_passkey_enrollment?: boolean;
+}
+
+export interface PasswordLoginRequest {
+  email: string;
+  password: string;
+}
+
+export interface PasswordLoginRequest {
+  email: string;
+  password: string;
+}
+
+export interface RefreshResponse {
+  user_id: string;
+  expires_at: string;
+  onboarding_completed: boolean;
+}
+
+export interface LogoutResponse {
+  message: string;
+  cleared_session: string;
+}
+
+export interface PasskeyItem {
+  id: string;
+  name: string;
+  created_at: string;
+  last_used_at?: string | null;
+}
+
+export interface PasskeyRegisterBeginResponse {
+  session_id: string;
+  challenge: Record<string, unknown>;
+}
+
+export interface PasskeyLoginBeginResponse {
+  session_id: string;
+  challenge: Record<string, unknown>;
+  account_exists: boolean;
+  passkey_available: boolean;
+  password_available: boolean;
+}
+
+export interface RegisterBeginResponse {
+  user_id: string;
+  session_id: string;
+  challenge: Record<string, unknown>;
+}
+
+export interface RegisterRequest {
+  email: string;
+  name: string;
 }

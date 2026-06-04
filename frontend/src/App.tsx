@@ -1,42 +1,41 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { type ReactNode, useCallback, useEffect, useState } from 'react';
 import { cn } from '@/ui/primitives';
 import { LoginScreen, RegisterScreen } from './Auth';
 import { AuthenticatedApp, type TabKey } from './components/AuthenticatedApp';
-import { OnboardingWizard } from './components/onboarding/OnboardingWizard';
-import { ProviderMismatchCheck } from './components/ProviderMismatchCheck';
-import { ThemeProvider, useTheme } from './context/ThemeContext';
+import { OnboardingProviderPicker } from './components/onboarding/OnboardingProviderPicker';
+import { ThemeProvider } from './context/ThemeContext';
+import {
+  EnrollPasskeyScreen,
+  type PendingPasskeyRecoveryEnrollment,
+} from './features/auth/EnrollPasskeyScreen';
 import { AccountFilterProvider } from './hooks/useAccountFilter';
-import { CurrencyProvider } from './hooks/useCurrency';
+import { useOnlineStatus } from './hooks/useOnlineStatus';
 import { TelemetryProvider, TelemetryService } from './observability';
 import { SessionManager } from './SessionManager';
+import { AuthenticationError } from './services/ApiClient';
 import { AuthService } from './services/authService';
 import { BrowserStorageAdapter } from './services/boundaries';
 import { AppFooter, AppTitleBar, GlassCard, GradientShell } from './ui/primitives';
+import { text as uiTextRecipes, font as uiTypographyRecipes } from './ui/recipes';
 
 AuthService.configure({
   storage: new BrowserStorageAdapter(),
 });
 
 const telemetryService = new TelemetryService();
-
-const parseJWT = (token: string) => {
-  try {
-    const base64Url = token.split('.')[1];
-    const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
-    const jsonPayload = atob(base64);
-    return JSON.parse(jsonPayload);
-  } catch {
-    return null;
-  }
-};
-
-const isTokenExpired = (token: string): boolean => {
-  const payload = parseJWT(token);
-  if (!payload?.exp) return true;
-  return Math.floor(Date.now() / 1000) >= payload.exp;
-};
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 5 * 60 * 1000,
+      gcTime: 10 * 60 * 1000,
+      retry: 1,
+      refetchOnWindowFocus: true,
+    },
+  },
+});
 
 interface AppContentProps {
   initialTab?: TabKey;
@@ -45,54 +44,111 @@ interface AppContentProps {
 
 function AppContent({ initialTab, initialAuthScreen }: AppContentProps) {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [needsPasskeyEnrollment, setNeedsPasskeyEnrollment] = useState(false);
+  const [pendingRecoveryEnrollment, setPendingRecoveryEnrollment] =
+    useState<PendingPasskeyRecoveryEnrollment | null>(null);
+  const [enrollmentLockedEmail, setEnrollmentLockedEmail] = useState<string | null>(null);
+  const [showEnrollmentModal, setShowEnrollmentModal] = useState(false);
+  const [pendingOnboarding, setPendingOnboarding] = useState(false);
+  const [pendingExpiresAt, setPendingExpiresAt] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [authScreen, setAuthScreen] = useState<'login' | 'register'>(initialAuthScreen ?? 'login');
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [mainAppKey, setMainAppKey] = useState(0);
-  const [showProviderMismatch, setShowProviderMismatch] = useState(false);
+  const [sessionExpiresAt, setSessionExpiresAt] = useState<string | null>(null);
 
-  const { mode, toggle } = useTheme();
+  const isOnline = useOnlineStatus();
 
   useEffect(() => {
-    const checkAuth = async () => {
-      const token = sessionStorage.getItem('auth_token');
+    const handler = () => setShowEnrollmentModal(true);
+    window.addEventListener('sumurai:enrollment-required', handler);
+    return () => window.removeEventListener('sumurai:enrollment-required', handler);
+  }, []);
 
-      if (!token || isTokenExpired(token)) {
-        setIsAuthenticated(false);
-        sessionStorage.removeItem('auth_token');
-        setIsLoading(false);
-        return;
-      }
-
-      const isValid = await AuthService.validateSession();
-      if (!isValid) {
-        setIsAuthenticated(false);
-        setIsLoading(false);
-        return;
-      }
-
+  useEffect(() => {
+    let active = true;
+    const establishSession = async () => {
       try {
         const refreshResponse = await AuthService.refreshToken();
-        AuthService.storeToken(refreshResponse.token);
+        if (!active) {
+          return;
+        }
         setIsAuthenticated(true);
         setShowOnboarding(!refreshResponse.onboarding_completed);
+        setSessionExpiresAt(refreshResponse.expires_at);
       } catch (error) {
-        console.warn('Auth validation error:', error);
-        setIsAuthenticated(false);
+        if (active) {
+          setIsAuthenticated(false);
+          setShowOnboarding(false);
+          setSessionExpiresAt(null);
+        }
+        if (!(error instanceof AuthenticationError)) {
+          console.warn('Auth validation error:', error);
+        }
         AuthService.clearToken();
       } finally {
-        setIsLoading(false);
+        if (active) {
+          setIsLoading(false);
+        }
       }
     };
 
-    checkAuth();
+    establishSession();
+
+    return () => {
+      active = false;
+    };
   }, []);
 
   const handleAuthSuccess = useCallback(
-    (authResponse: { token: string; onboarding_completed: boolean }) => {
-      sessionStorage.setItem('auth_token', authResponse.token);
+    (authResponse: { user_id: string; expires_at: string; onboarding_completed: boolean }) => {
       setIsAuthenticated(true);
       setShowOnboarding(!authResponse.onboarding_completed);
+      setSessionExpiresAt(authResponse.expires_at);
+    },
+    []
+  );
+
+  const handleEnrollmentRequired = useCallback(
+    (
+      authResponse: { user_id: string; expires_at: string; onboarding_completed: boolean },
+      email: string
+    ) => {
+      setEnrollmentLockedEmail(email);
+      setPendingOnboarding(!authResponse.onboarding_completed);
+      setPendingExpiresAt(authResponse.expires_at);
+      setNeedsPasskeyEnrollment(true);
+    },
+    []
+  );
+
+  const handleEnrollmentComplete = useCallback(
+    (authResponse?: { user_id: string; expires_at: string; onboarding_completed: boolean }) => {
+      setNeedsPasskeyEnrollment(false);
+      setShowEnrollmentModal(false);
+      setPendingRecoveryEnrollment(null);
+      setEnrollmentLockedEmail(null);
+      setIsAuthenticated(true);
+      if (authResponse) {
+        setShowOnboarding(!authResponse.onboarding_completed);
+        setSessionExpiresAt(authResponse.expires_at);
+        setPendingOnboarding(false);
+        setPendingExpiresAt(null);
+      } else {
+        setShowOnboarding(pendingOnboarding);
+        setSessionExpiresAt(pendingExpiresAt);
+        setPendingOnboarding(false);
+        setPendingExpiresAt(null);
+      }
+    },
+    [pendingOnboarding, pendingExpiresAt]
+  );
+
+  const handleRecoveryEnrollmentStarted = useCallback(
+    (pending: PendingPasskeyRecoveryEnrollment) => {
+      setEnrollmentLockedEmail(pending.email);
+      setPendingRecoveryEnrollment(pending);
+      setNeedsPasskeyEnrollment(true);
     },
     []
   );
@@ -102,10 +158,19 @@ function AppContent({ initialTab, initialAuthScreen }: AppContentProps) {
       await AuthService.logout();
     } catch (error) {
       console.error('Logout error:', error);
+    } finally {
+      queryClient.clear();
     }
 
     setIsAuthenticated(false);
+    setNeedsPasskeyEnrollment(false);
+    setPendingRecoveryEnrollment(null);
+    setEnrollmentLockedEmail(null);
+    setShowEnrollmentModal(false);
     setShowOnboarding(false);
+    setSessionExpiresAt(null);
+    setPendingOnboarding(false);
+    setPendingExpiresAt(null);
     setAuthScreen('login');
   }, []);
 
@@ -114,21 +179,16 @@ function AppContent({ initialTab, initialAuthScreen }: AppContentProps) {
     setMainAppKey((prev) => prev + 1);
   }, []);
 
-  const handleProviderMismatchConfirm = useCallback(async () => {
-    setShowProviderMismatch(false);
-    await handleLogout();
-  }, [handleLogout]);
-
   if (isLoading) {
     return (
       <GradientShell>
-        <div className={cn('flex', 'min-h-screen', 'items-center', 'justify-center', 'px-4')}>
+        <div className={cn('flex', 'min-h-dvh', 'items-center', 'justify-center', 'px-4')}>
           <GlassCard
             variant="accent"
             rounded="lg"
             padding="md"
             withInnerEffects={false}
-            className={cn('text-center', 'text-sm', 'text-slate-600', 'dark:text-slate-300')}
+            className={cn('text-center', uiTypographyRecipes.body, uiTextRecipes.body)}
           >
             Loading...
           </GlassCard>
@@ -139,53 +199,63 @@ function AppContent({ initialTab, initialAuthScreen }: AppContentProps) {
 
   if (!isAuthenticated) {
     return (
-      <GradientShell className={cn('text-slate-900', 'dark:text-slate-100')}>
-        <div className={cn('flex', 'flex-col', 'min-h-screen')}>
-          <AppTitleBar
-            state="unauthenticated"
-            scrolled={false}
-            themeMode={mode}
-            onThemeToggle={toggle}
-          />
-          <main className={cn('flex-1', 'flex', 'items-center', 'justify-center')}>
-            {authScreen === 'login' ? (
-              <LoginScreen
-                onNavigateToRegister={() => setAuthScreen('register')}
-                onLoginSuccess={handleAuthSuccess}
-              />
-            ) : (
-              <RegisterScreen
-                onNavigateToLogin={() => setAuthScreen('login')}
-                onRegisterSuccess={handleAuthSuccess}
-              />
-            )}
-          </main>
-          <AppFooter />
-        </div>
-      </GradientShell>
+      <>
+        <GradientShell className={uiTextRecipes.primary}>
+          <div className={cn('flex', 'flex-col', 'min-h-dvh')}>
+            <AppTitleBar state="unauthenticated" scrolled={false} isOnline={isOnline} />
+            <main className={cn('flex-1', 'flex', 'items-center', 'justify-center')}>
+              {authScreen === 'login' ? (
+                <LoginScreen
+                  onNavigateToRegister={() => setAuthScreen('register')}
+                  onLoginSuccess={handleAuthSuccess}
+                  onEnrollmentRequired={handleEnrollmentRequired}
+                  onRecoveryEnrollmentStarted={handleRecoveryEnrollmentStarted}
+                  lockedEmail={needsPasskeyEnrollment ? enrollmentLockedEmail : null}
+                />
+              ) : (
+                <RegisterScreen
+                  onNavigateToLogin={() => setAuthScreen('login')}
+                  onRegisterSuccess={handleAuthSuccess}
+                />
+              )}
+            </main>
+            <AppFooter />
+          </div>
+        </GradientShell>
+        <EnrollPasskeyScreen
+          isOpen={needsPasskeyEnrollment}
+          pendingRecovery={pendingRecoveryEnrollment}
+          onEnrollmentComplete={handleEnrollmentComplete}
+          onLogout={handleLogout}
+        />
+      </>
     );
   }
 
   if (showOnboarding) {
-    return <OnboardingWizard onComplete={handleOnboardingComplete} onLogout={handleLogout} />;
+    return (
+      <OnboardingProviderPicker onComplete={handleOnboardingComplete} onLogout={handleLogout} />
+    );
   }
 
   return (
-    <SessionManager onLogout={handleLogout}>
+    <SessionManager
+      expiresAt={sessionExpiresAt}
+      onSessionRefreshed={setSessionExpiresAt}
+      onLogout={handleLogout}
+    >
       <AccountFilterProvider key={`filter-${mainAppKey}`}>
-        <CurrencyProvider>
-          <AuthenticatedApp
-            key={`app-${mainAppKey}`}
-            onLogout={handleLogout}
-            initialTab={initialTab}
-          />
-        </CurrencyProvider>
+        <AuthenticatedApp
+          key={`app-${mainAppKey}`}
+          onLogout={handleLogout}
+          initialTab={initialTab}
+          isOnline={isOnline}
+        />
       </AccountFilterProvider>
-
-      <ProviderMismatchCheck
-        showMismatch={showProviderMismatch}
-        onShowMismatch={setShowProviderMismatch}
-        onConfirm={handleProviderMismatchConfirm}
+      <EnrollPasskeyScreen
+        isOpen={showEnrollmentModal}
+        onEnrollmentComplete={handleEnrollmentComplete}
+        onLogout={handleLogout}
       />
     </SessionManager>
   );
@@ -196,13 +266,21 @@ export interface AppProps {
   initialAuthScreen?: 'login' | 'register';
 }
 
+export function AppProviders({ children }: { children: ReactNode }) {
+  return (
+    <QueryClientProvider client={queryClient}>
+      <ThemeProvider>
+        <TelemetryProvider service={telemetryService}>{children}</TelemetryProvider>
+      </ThemeProvider>
+    </QueryClientProvider>
+  );
+}
+
 export function App({ initialTab, initialAuthScreen }: AppProps) {
   return (
-    <ThemeProvider>
-      <TelemetryProvider service={telemetryService}>
-        <AppContent initialTab={initialTab} initialAuthScreen={initialAuthScreen} />
-      </TelemetryProvider>
-    </ThemeProvider>
+    <AppProviders>
+      <AppContent initialTab={initialTab} initialAuthScreen={initialAuthScreen} />
+    </AppProviders>
   );
 }
 

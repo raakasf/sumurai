@@ -1,44 +1,48 @@
-import { AnimatePresence } from 'framer-motion';
-import {
-  Building2,
-  ChevronDown,
-  Clock,
-  CreditCard,
-  Home,
-  Landmark,
-  Pencil,
-  Plus,
-  RefreshCw,
-  Trash2,
-  X,
-} from 'lucide-react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { FileDown, RefreshCw } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Button, cn, GlassCard, Input } from '@/ui/primitives';
-import { getProviderCardConfig } from '@/utils/providerCards';
-import { Toast } from '../components/Toast';
-import HeroStatCard from '../components/widgets/HeroStatCard';
-import ConnectionsList from '../features/plaid/components/ConnectionsList';
-import { usePlaidLinkFlow } from '../features/plaid/hooks/usePlaidLinkFlow';
-import {
-  type DisplayCurrency,
-  SUPPORTED_DISPLAY_CURRENCIES,
-} from '../context/CurrencyContext';
-import { useCurrency } from '../hooks/useCurrency';
-import { useTellerLinkFlow } from '../hooks/useTellerLinkFlow';
-import { useTellerProviderInfo } from '../hooks/useTellerProviderInfo';
+import { Button, cn, MenuDropdown, MenuItem } from '@/ui/primitives';
+import { appTitleBarRecipes } from '@/ui/primitives/AppTitleBar';
+import { control, text as uiTextRecipes, font as uiTypographyRecipes } from '@/ui/recipes';
+import { OnboardingProviderConnectModal } from '../components/onboarding/OnboardingProviderConnectModal';
+import { ToastStack } from '../components/toastStack/ToastStack';
+import { useAccountsToastStack } from '../features/accounts/hooks/useAccountsToastStack';
+import AccountsSummaryStats from '../features/plaid/components/AccountsSummaryStats';
+import ConnectButton from '../features/plaid/components/ConnectButton';
+import ConnectionsList, {
+  type BankConnectionViewModel,
+} from '../features/plaid/components/ConnectionsList';
+import { ProviderSelectionPanel } from '../features/plaid/components/ProviderSelectionPanel';
+import { inferBankProvider } from '../features/plaid/utils/inferBankProvider';
+import { SimpleFinIgnoredInstitutionsPanel } from '../features/simplefin/components/SimpleFinIgnoredInstitutionsPanel';
+import { formatSimpleFinAuthRequiredToast } from '../features/simplefin/utils/formatSimpleFinAuthRequiredToast';
+import { SyncAllStatusToast } from '../features/sync/components/SyncAllStatusToast';
+import { SyncInstitutionStatusToast } from '../features/sync/components/SyncInstitutionStatusToast';
+import { useSyncAllOrchestrator } from '../features/sync/hooks/useSyncAllOrchestrator';
+import type { SyncAllRow } from '../features/sync/types/syncAllStatus';
+import { useAccountFilter } from '../hooks/useAccountFilter';
+import { useExport } from '../hooks/useExport';
+import { useFinancialConnection } from '../hooks/useFinancialConnection';
+import { useOnlineStatus } from '../hooks/useOnlineStatus';
+import { usePlaidConnections } from '../hooks/usePlaidConnections';
+import { useProviderCatalog } from '../hooks/useProviderCatalog';
 import { PageLayout } from '../layouts/PageLayout';
-import { ManualAssetService } from '../services/ManualAssetService';
-import { ManualInvestmentService } from '../services/ManualInvestmentService';
-import { ProviderCatalog } from '../services/ProviderCatalog';
-import { getUsdRate } from '../services/CurrencyRateService';
-import type {
-  Account,
-  FinancialProvider,
-  ManualAssetAccountType,
-  ManualAssetRequest,
-  ManualInvestmentRequest,
-} from '../types/api';
+import { PlaidService } from '../services/PlaidService';
+import { SimpleFinService } from '../services/SimpleFinService';
+import { TellerService } from '../services/TellerService';
+import type { FinancialProvider } from '../types/api';
+import type { ProviderCatalogue } from '../types/providerCatalog';
 import { dispatchAccountsChanged } from '../utils/events';
+import { formatUserFacingApiError } from '../utils/formatUserFacingApiError';
+import {
+  getConnectAccountProviderContent,
+  getProviderCardConfig,
+  getProviderLogoSrc,
+} from '../utils/providerCards';
+import {
+  refreshFinancialDataAfterProviderChange,
+  type SyncProvider,
+} from '../utils/queryInvalidation';
 
 const formatRelativeTime = (iso: string): string => {
   const timestamp = Date.parse(iso);
@@ -142,96 +146,57 @@ interface AccountsPageProps {
   onAccountSelect?: (accountId: string) => void;
 }
 
-const AccountsPage = ({ onError, onAccountSelect }: AccountsPageProps) => {
-  const { format } = useCurrency();
-  const providerInfo = useTellerProviderInfo();
-  const selectedProvider = providerInfo.selectedProvider;
-  const providerLoading = providerInfo.loading;
-  const providerError = providerInfo.error;
-  const [selectingProvider, setSelectingProvider] = useState<string | null>(null);
-  const [manualInvestments, setManualInvestments] = useState<Account[]>([]);
-  const [manualPropertyAccounts, setManualPropertyAccounts] = useState<Account[]>([]);
-  const [manualForm, setManualForm] =
-    useState<ManualInvestmentFormState>(emptyManualInvestmentForm);
-  const [manualPropertyForm, setManualPropertyForm] =
-    useState<ManualPropertyFormState>(emptyManualPropertyForm);
-  const [editingManualId, setEditingManualId] = useState<string | null>(null);
-  const [editingManualPropertyId, setEditingManualPropertyId] = useState<string | null>(null);
-  const [manualSaving, setManualSaving] = useState(false);
-  const [manualPropertySaving, setManualPropertySaving] = useState(false);
-  const [manualError, setManualError] = useState<string | null>(null);
-  const [manualPropertyError, setManualPropertyError] = useState<string | null>(null);
-  const [manualRateLoading, setManualRateLoading] = useState(false);
-  const [manualRateError, setManualRateError] = useState<string | null>(null);
-  const [manualRateDate, setManualRateDate] = useState<string | null>(null);
-  const [connectMenuOpen, setConnectMenuOpen] = useState(false);
-  const connectMenuRef = useRef<HTMLDivElement | null>(null);
-  const pendingConnectProviderRef = useRef<FinancialProvider | null>(null);
-  const autoSyncAttemptedRef = useRef(false);
+const toAccountType = (
+  value: string | undefined
+): BankConnectionViewModel['accounts'][number]['type'] => {
+  const normalized = (value ?? '').toLowerCase();
+  if (normalized === 'savings') return 'savings';
+  if (normalized === 'credit' || normalized === 'credit card') return 'credit';
+  if (normalized === 'loan') return 'loan';
+  if (normalized === 'checking' || normalized === 'depository') return 'checking';
+  return 'other';
+};
 
-  const loadManualInvestments = useCallback(async () => {
-    try {
-      const accounts = await ProviderCatalog.getAccounts();
-      setManualInvestments(accounts.filter(isManualInvestmentAccount));
-      setManualPropertyAccounts(accounts.filter(isManualPropertyAccount));
-    } catch (err) {
-      console.warn('Failed to load manual investments', err);
-      setManualInvestments([]);
-      setManualPropertyAccounts([]);
+const AccountsPage = ({ onError }: AccountsPageProps) => {
+  const queryClient = useQueryClient();
+  const isOnline = useOnlineStatus();
+  const accountFilter = useAccountFilter();
+  const providerCatalog = useProviderCatalog();
+  const primaryProvider = useMemo(() => {
+    const preferred = providerCatalog.userProvider ?? providerCatalog.availableProviders[0];
+    if (!preferred) {
+      return 'simplefin' as const;
     }
-  }, []);
+    return providerCatalog.resolveConnectProvider(preferred);
+  }, [providerCatalog]);
+  const primaryProviderCard = getProviderCardConfig(primaryProvider);
+  const primaryConnectContent = getConnectAccountProviderContent(primaryProvider);
+  const providerLabel = primaryProviderCard.title;
+  const providerLogoSrc = getProviderLogoSrc(primaryProvider);
+  const { isExporting, error: exportError, toast: exportToast, exportAccounts } = useExport();
 
-  useEffect(() => {
-    loadManualInvestments();
-  }, [loadManualInvestments]);
-
-  useEffect(() => {
-    if (providerError) {
-      onError?.(providerError);
-    } else if (!providerLoading && selectedProvider) {
-      onError?.(null);
-    }
-  }, [onError, providerError, providerLoading, selectedProvider]);
-
-  const plaidFlow = usePlaidLinkFlow({ onError, enabled: selectedProvider === 'plaid' });
-  const tellerFlow = useTellerLinkFlow({
-    applicationId: providerInfo.tellerApplicationId,
-    environment: providerInfo.tellerEnvironment,
-    onError,
-    enabled: selectedProvider === 'teller',
+  const plaidConnections = usePlaidConnections({
+    enabled: isOnline && providerCatalog.canConnectWith('plaid'),
+  });
+  const tellerStatusQuery = useQuery({
+    queryKey: ['teller', 'connections'],
+    queryFn: () => TellerService.getStatus(),
+    enabled: isOnline && providerCatalog.canConnectWith('teller'),
+    staleTime: 5 * 60 * 1000,
   });
   const plaidConnect = plaidFlow.connect;
   const tellerConnect = tellerFlow.connect;
 
-  const flow = selectedProvider === 'teller' ? tellerFlow : plaidFlow;
-
-  const {
-    connections,
-    toast,
-    setToast,
-    connect,
-    syncOne,
-    syncAll,
-    disconnect,
-    syncingAll,
-    loading: flowLoading,
-    error: flowError,
-  } = flow;
-
-  const handleProviderSelect = useCallback(
-    async (provider: FinancialProvider) => {
-      setSelectingProvider(provider);
-      try {
-        await providerInfo.chooseProvider(provider);
-      } catch (err) {
-        console.warn('Failed to select provider', err);
-        onError?.('Failed to select provider');
-      } finally {
-        setSelectingProvider(null);
-      }
-    },
-    [onError, providerInfo]
-  );
+  const providerByConnectionId = useMemo(() => {
+    const providers = new Map<string, FinancialProvider>();
+    for (const connection of plaidConnections.connections) {
+      providers.set(connection.connectionId, 'plaid');
+    }
+    for (const status of tellerStatusQuery.data ?? []) {
+      providers.set(status.connection_id, 'teller');
+    }
+    return providers;
+  }, [plaidConnections.connections, tellerStatusQuery.data]);
 
   useEffect(() => {
     if (!connectMenuOpen) return;
@@ -509,21 +474,500 @@ const AccountsPage = ({ onError, onAccountSelect }: AccountsPageProps) => {
 
   const banks = useMemo(
     () =>
-      (connections || []).map((conn) => ({
-        id: conn.connectionId,
-        name: conn.institutionName,
-        short: conn.institutionName
-          .split(' ')
-          .map((word) => word[0])
-          .join('')
-          .slice(0, 2)
-          .toUpperCase(),
-        status: conn.isConnected ? ('connected' as const) : ('error' as const),
-        lastSync: conn.lastSyncAt,
-        accounts: conn.accounts,
-      })),
-    [connections]
+      Object.entries(accountFilter.accountsByBank).map(([bankName, accounts]) => {
+        const displayName = accounts[0]?.institution_name ?? bankName.split('::')[0] ?? bankName;
+        const connectionId =
+          accounts.find((account) => account.connection_id)?.connection_id ?? null;
+        const provider =
+          accounts.find((account) => account.provider != null)?.provider ??
+          inferBankProvider(connectionId, providerByConnectionId, primaryProvider);
+
+        return {
+          id: connectionId ?? bankName,
+          name: displayName,
+          short: displayName
+            .split(' ')
+            .map((word) => word[0])
+            .join('')
+            .slice(0, 2)
+            .toUpperCase(),
+          status: 'connected' as const,
+          lastSync: null,
+          provider,
+          connectionId,
+          accounts: accounts.map((account) => ({
+            id: account.id,
+            name: account.name,
+            mask: account.mask ?? '0000',
+            type: toAccountType(account.account_type),
+            balance:
+              account.balance_current ??
+              account.balance_ledger ??
+              account.balance_available ??
+              undefined,
+            transactions: account.transaction_count ?? undefined,
+            providerAccountId: account.provider_account_id ?? null,
+          })),
+        };
+      }),
+    [accountFilter.accountsByBank, primaryProvider, providerByConnectionId]
   );
+
+  const providersForSync = useMemo(() => {
+    const providers = new Set<SyncProvider>([primaryProvider]);
+    for (const bank of banks) {
+      providers.add(bank.provider);
+    }
+    return providers;
+  }, [banks, primaryProvider]);
+
+  const banksWithSync = useMemo(() => {
+    const syncByConnectionId = new Map<string, string | null>();
+    for (const connection of plaidConnections.connections) {
+      syncByConnectionId.set(connection.connectionId, connection.lastSyncAt);
+    }
+    for (const status of tellerStatusQuery.data ?? []) {
+      syncByConnectionId.set(status.connection_id, status.last_sync_at);
+    }
+    return banks.map((bank) => {
+      const connectionId = bank.connectionId;
+      if (!connectionId) {
+        return bank;
+      }
+      const fromStatus = syncByConnectionId.get(connectionId);
+      return {
+        ...bank,
+        lastSync: fromStatus ?? bank.lastSync ?? null,
+      };
+    });
+  }, [banks, plaidConnections.connections, tellerStatusQuery.data]);
+
+  const { pushToast: pushAccountsToast, ...accountsToastStack } = useAccountsToastStack(null);
+  const [syncInstitutionRow, setSyncInstitutionRow] = useState<SyncAllRow | null>(null);
+  const exportInFlightRef = useRef(false);
+  const dismissSyncInstitutionToast = useCallback(() => {
+    setSyncInstitutionRow(null);
+  }, []);
+  const connectionFlow = useFinancialConnection({
+    provider: primaryProvider,
+    onError: (message) => {
+      pushAccountsToast(message, 'error');
+      onError?.(message);
+    },
+    onSimpleFinAuthRequired: (institutions) => {
+      pushAccountsToast(formatSimpleFinAuthRequiredToast(institutions));
+    },
+    isOnline,
+  });
+  const plaidPickerConnectionFlow = useFinancialConnection({
+    provider: 'plaid',
+    onError: (message) => {
+      pushAccountsToast(message, 'error');
+      onError?.(message);
+    },
+    isOnline,
+  });
+  const tellerPickerConnectionFlow = useFinancialConnection({
+    provider: 'teller',
+    onError: (message) => {
+      pushAccountsToast(message, 'error');
+      onError?.(message);
+    },
+    isOnline,
+  });
+  const [pickerConnectingProvider, setPickerConnectingProvider] = useState<SyncProvider | null>(
+    null
+  );
+  const pickerPrevInProgressRef = useRef(false);
+  const [restoringIgnoredOrgConnId, setRestoringIgnoredOrgConnId] = useState<string | null>(null);
+  const accountsDataLoading = providerCatalog.loading || accountFilter.loading;
+  const hasActiveConnections = banks.some((bank) => bank.connectionId != null);
+
+  const needsProviderPick =
+    !accountsDataLoading && (providerCatalog.userProvider == null || !hasActiveConnections);
+  const prevNeedsProviderPickRef = useRef(needsProviderPick);
+  const pickerConnectionFlow =
+    pickerConnectingProvider === 'plaid'
+      ? plaidPickerConnectionFlow
+      : pickerConnectingProvider === 'teller'
+        ? tellerPickerConnectionFlow
+        : null;
+  const activePickerConnectingProvider =
+    pickerConnectingProvider === 'simplefin'
+      ? pickerConnectingProvider
+      : pickerConnectionFlow?.connectionInProgress
+        ? pickerConnectingProvider
+        : null;
+
+  const simpleFinEmptyStateActive =
+    primaryProvider === 'simplefin' && banksWithSync.length === 0 && !accountsDataLoading;
+  const pickerProviderReadyState = {
+    plaid: plaidPickerConnectionFlow.isReady,
+    teller: tellerPickerConnectionFlow.isReady,
+    simplefin: true,
+  } satisfies Partial<Record<FinancialProvider, boolean>>;
+  const ignoredInstitutionsQuery = useQuery({
+    queryKey: ['simplefin', 'ignored-institutions'],
+    queryFn: () => SimpleFinService.getIgnoredInstitutions(),
+    enabled: simpleFinEmptyStateActive && isOnline,
+    staleTime: 60 * 1000,
+  });
+  const ignoredInstitutions = ignoredInstitutionsQuery.data ?? [];
+  const showSimpleFinIgnoredList = simpleFinEmptyStateActive && ignoredInstitutions.length > 0;
+  const refreshBankData = useCallback(
+    async (provider: SyncProvider) => {
+      await refreshFinancialDataAfterProviderChange(queryClient, [provider]);
+    },
+    [queryClient]
+  );
+  const { syncingAll, syncAllModalOpen, syncAllRows, syncAll, closeSyncAllModal } =
+    useSyncAllOrchestrator({
+      banks: banksWithSync,
+      primaryProvider,
+      isOnline,
+      queryClient,
+      onError: (message) => {
+        if (message) {
+          pushAccountsToast(message, 'error');
+          onError?.(message);
+        }
+      },
+    });
+
+  const startProviderPickerConnection = useCallback(
+    async (provider: FinancialProvider) => {
+      if (provider === 'simplefin') {
+        setPickerConnectingProvider(provider);
+        return;
+      }
+
+      setPickerConnectingProvider(provider);
+
+      if (provider === 'plaid') {
+        await plaidPickerConnectionFlow.initiateConnection();
+        return;
+      }
+
+      await tellerPickerConnectionFlow.initiateConnection();
+    },
+    [plaidPickerConnectionFlow, tellerPickerConnectionFlow]
+  );
+
+  const finishSimpleFinPickerConnection = useCallback(
+    async (provider: FinancialProvider) => {
+      try {
+        await providerCatalog.chooseProvider(provider);
+      } catch (error) {
+        console.warn('Failed to select provider after SimpleFIN connection', error);
+        pushAccountsToast('Unable to select provider right now', 'error');
+      } finally {
+        setPickerConnectingProvider(null);
+      }
+    },
+    [providerCatalog, pushAccountsToast]
+  );
+
+  const openConnectModal = useCallback(() => {
+    setPickerConnectingProvider('simplefin');
+  }, []);
+
+  useEffect(() => {
+    if (exportInFlightRef.current && !isExporting && exportToast) {
+      pushAccountsToast(exportToast, exportError ? 'error' : 'success');
+      if (exportError) {
+        onError?.(exportError);
+      }
+    }
+
+    exportInFlightRef.current = isExporting;
+  }, [exportError, exportToast, isExporting, onError, pushAccountsToast]);
+
+  const handlePrimaryConnect = useCallback(() => {
+    if (primaryProvider === 'simplefin') {
+      openConnectModal();
+      return;
+    }
+
+    void connectionFlow.initiateConnection();
+  }, [connectionFlow, openConnectModal, primaryProvider]);
+
+  useEffect(() => {
+    if (prevNeedsProviderPickRef.current === needsProviderPick) {
+      return;
+    }
+
+    prevNeedsProviderPickRef.current = needsProviderPick;
+    setPickerConnectingProvider(null);
+    pickerPrevInProgressRef.current = false;
+  }, [needsProviderPick]);
+
+  useEffect(() => {
+    if (!pickerConnectionFlow || !pickerConnectingProvider) {
+      pickerPrevInProgressRef.current = false;
+      return;
+    }
+
+    const wasInProgress = pickerPrevInProgressRef.current;
+    pickerPrevInProgressRef.current = pickerConnectionFlow.connectionInProgress;
+
+    if (
+      wasInProgress &&
+      !pickerConnectionFlow.connectionInProgress &&
+      !pickerConnectionFlow.isConnected
+    ) {
+      setPickerConnectingProvider(null);
+    }
+  }, [pickerConnectingProvider, pickerConnectionFlow]);
+
+  useEffect(() => {
+    if (!pickerConnectionFlow || !pickerConnectingProvider) {
+      return;
+    }
+
+    if (
+      pickerConnectionFlow.isConnected &&
+      !pickerConnectionFlow.connectionInProgress &&
+      !pickerConnectionFlow.isSyncing
+    ) {
+      void providerCatalog
+        .chooseProvider(pickerConnectingProvider)
+        .catch(() => pushAccountsToast('Unable to select provider right now', 'error'))
+        .finally(() => {
+          setPickerConnectingProvider(null);
+          pickerPrevInProgressRef.current = false;
+        });
+    }
+  }, [pickerConnectingProvider, pickerConnectionFlow, providerCatalog, pushAccountsToast]);
+
+  const syncBank = useCallback(
+    async (bankId: string) => {
+      if (!isOnline) {
+        return;
+      }
+
+      const bank = banks.find((entry) => entry.id === bankId);
+      if (!bank?.connectionId) {
+        return;
+      }
+
+      const startRow: SyncAllRow = {
+        id: bank.id,
+        provider: bank.provider,
+        institutionName: bank.name,
+        connectionId: bank.connectionId,
+        status: 'syncing',
+        detail: null,
+        transactionCount: null,
+        retryAfterSeconds: null,
+      };
+      setSyncInstitutionRow(startRow);
+
+      const countNewTransactions = (transactions: { provider_account_id?: string | null }[]) => {
+        const providerAccountIds = new Set(
+          bank.accounts
+            .map((account) => account.providerAccountId)
+            .filter((id): id is string => Boolean(id))
+        );
+
+        if (providerAccountIds.size === 0) {
+          return transactions.length;
+        }
+
+        return transactions.filter((transaction) => {
+          if (!transaction.provider_account_id) {
+            return false;
+          }
+
+          return providerAccountIds.has(transaction.provider_account_id);
+        }).length;
+      };
+
+      try {
+        let count = 0;
+        if (bank.provider === 'simplefin') {
+          const result = await SimpleFinService.syncBridge(bank.connectionId);
+          if (result.rateLimited) {
+            setSyncInstitutionRow({
+              ...startRow,
+              status: 'rate_limited',
+              retryAfterSeconds: result.retryAfterSeconds ?? null,
+            });
+            return;
+          }
+
+          const matchingResult = result.simplefin_institution_results.find(
+            (entry) =>
+              entry.connection_id === bank.connectionId ||
+              entry.org_conn_id === bank.connectionId ||
+              entry.institution_name === bank.name
+          );
+          if (!matchingResult) {
+            setSyncInstitutionRow({
+              ...startRow,
+              status: 'error',
+              detail: 'No bridge result was returned for this institution.',
+            });
+            return;
+          }
+
+          if (matchingResult.status === 'auth_required') {
+            setSyncInstitutionRow({
+              ...startRow,
+              status: 'auth_required',
+              detail: matchingResult.message ?? 'Re-authenticate this institution in SimpleFIN.',
+            });
+            return;
+          }
+
+          if (matchingResult.status !== 'synced') {
+            setSyncInstitutionRow({
+              ...startRow,
+              status: matchingResult.status,
+              detail: matchingResult.message ?? null,
+            });
+            return;
+          }
+
+          count = countNewTransactions(result.transactions);
+        } else if (bank.provider === 'teller') {
+          const result = await TellerService.syncTransactions(bank.connectionId);
+          count = result.transactions.length;
+        } else {
+          const result = await PlaidService.syncTransactions(bank.connectionId);
+          count = result.transactions.length;
+        }
+        await refreshBankData(bank.provider);
+        setSyncInstitutionRow({
+          ...startRow,
+          status: 'synced',
+          detail: `Synced ${count} new transaction${count === 1 ? '' : 's'}`,
+          transactionCount: count,
+        });
+      } catch (error) {
+        console.warn('Failed to sync bank', error);
+        const message = formatUserFacingApiError(error, `Failed to sync ${bank.name}`);
+        setSyncInstitutionRow({
+          ...startRow,
+          status: 'error',
+          detail: message,
+        });
+      }
+    },
+    [banks, isOnline, refreshBankData]
+  );
+
+  const disconnect = useCallback(
+    async (bankId: string) => {
+      const bank = banks.find((entry) => entry.id === bankId);
+      if (!bank?.connectionId) {
+        return;
+      }
+
+      const disconnectingLastBank = banks.length === 1;
+
+      try {
+        if (bank.provider === 'teller') {
+          await TellerService.disconnect(bank.connectionId);
+        } else {
+          await PlaidService.disconnect(bank.connectionId);
+        }
+        await refreshBankData(bank.provider);
+        dispatchAccountsChanged();
+        if (disconnectingLastBank) {
+          queryClient.setQueryData<ProviderCatalogue>(['provider', 'catalog'], (prev) =>
+            prev ? { ...prev, user_provider: null } : prev
+          );
+        }
+        try {
+          await providerCatalog.refresh();
+        } catch (refreshError) {
+          console.warn('Failed to refresh provider catalog after disconnect', refreshError);
+        }
+        pushAccountsToast(`${bank.name} disconnected successfully`);
+      } catch (error) {
+        console.warn('Failed to disconnect bank', error);
+        onError?.('Failed to disconnect institution');
+      }
+    },
+    [banks, onError, providerCatalog, refreshBankData, pushAccountsToast, queryClient.setQueryData]
+  );
+
+  const handleImportSuccess = useCallback(
+    (count: number, mask: string) => {
+      pushAccountsToast(`Imported ${count} transactions for ••${mask}`);
+    },
+    [pushAccountsToast]
+  );
+
+  const restoreIgnoredInstitution = useCallback(
+    async (orgConnId: string) => {
+      if (!isOnline) {
+        return;
+      }
+
+      setRestoringIgnoredOrgConnId(orgConnId);
+      connectionFlow.setError(null);
+      onError?.(null);
+
+      try {
+        const { rateLimited, transactionCount, institutionsRequiringAuth } =
+          await SimpleFinService.restoreInstitution(orgConnId);
+
+        await queryClient.refetchQueries({
+          queryKey: ['simplefin', 'ignored-institutions'],
+          type: 'active',
+        });
+        await refreshBankData('simplefin');
+        dispatchAccountsChanged();
+        connectionFlow.setError(null);
+        onError?.(null);
+
+        if (rateLimited) {
+          pushAccountsToast(
+            'Institution restored. Balances are ready; transaction sync will resume when the rate limit clears.'
+          );
+        } else if (institutionsRequiringAuth.length > 0) {
+          pushAccountsToast(formatSimpleFinAuthRequiredToast(institutionsRequiringAuth));
+        } else {
+          pushAccountsToast(
+            `Institution restored — synced ${transactionCount} new transaction${transactionCount === 1 ? '' : 's'}`
+          );
+        }
+      } catch (error) {
+        console.warn('Failed to restore SimpleFIN institution', error);
+        const message = formatUserFacingApiError(
+          error,
+          'Failed to restore institution. Try again.'
+        );
+        connectionFlow.setError(message);
+        onError?.(message);
+      } finally {
+        setRestoringIgnoredOrgConnId(null);
+      }
+    },
+    [connectionFlow, isOnline, onError, queryClient, refreshBankData, pushAccountsToast]
+  );
+
+  const connectionsEmptyState = useMemo(() => {
+    if (!showSimpleFinIgnoredList) {
+      return undefined;
+    }
+
+    return (
+      <SimpleFinIgnoredInstitutionsPanel
+        institutions={ignoredInstitutions}
+        onRestore={restoreIgnoredInstitution}
+        restoringOrgConnId={restoringIgnoredOrgConnId}
+        isOnline={isOnline}
+      />
+    );
+  }, [
+    ignoredInstitutions,
+    isOnline,
+    restoreIgnoredInstitution,
+    restoringIgnoredOrgConnId,
+    showSimpleFinIgnoredList,
+  ]);
 
   const summary = useMemo(() => {
     let connectedInstitutions = 0;
@@ -531,7 +975,7 @@ const AccountsPage = ({ onError, onAccountSelect }: AccountsPageProps) => {
     let latestSyncIso: string | null = null;
     let latestSyncTime = 0;
 
-    for (const bank of banks) {
+    for (const bank of banksWithSync) {
       if (bank.status === 'connected') connectedInstitutions += 1;
       totalAccounts += bank.accounts.length;
 
@@ -545,824 +989,142 @@ const AccountsPage = ({ onError, onAccountSelect }: AccountsPageProps) => {
     }
 
     return {
-      institutions: banks.length,
+      institutions: banksWithSync.length,
       connectedInstitutions,
       accounts: totalAccounts + manualInvestments.length + manualPropertyAccounts.length,
       latestSync: latestSyncIso,
     };
-  }, [banks, manualInvestments.length, manualPropertyAccounts.length]);
+  }, [banksWithSync]);
 
-  useEffect(() => {
-    if (
-      autoSyncAttemptedRef.current ||
-      selectedProvider !== 'plaid' ||
-      flowLoading ||
-      syncingAll ||
-      summary.connectedInstitutions === 0
-    ) {
-      return;
-    }
+  const catalogLoading = providerCatalog.loading || accountFilter.loading;
 
-    autoSyncAttemptedRef.current = true;
-    void syncAll().catch((err) => {
-      console.warn('Auto sync on account refresh failed', err);
-    });
-  }, [flowLoading, selectedProvider, summary.connectedInstitutions, syncAll, syncingAll]);
+  const connectDisabled =
+    catalogLoading ||
+    connectionFlow.connectionInProgress ||
+    (primaryProvider === 'teller' && !connectionFlow.isReady) ||
+    !isOnline ||
+    !providerCatalog.canConnectWith(primaryProvider);
 
-  if (providerLoading) {
-    return (
-      <section
-        className={cn(
-          'relative',
-          'overflow-hidden',
-          'rounded-[2.25rem]',
-          'border',
-          'border-white/35',
-          'bg-white/24',
-          'p-12',
-          'text-center',
-          'shadow-[0_32px_110px_-60px_rgba(15,23,42,0.75)]',
-          'backdrop-blur-[28px]',
-          'dark:border-white/12',
-          'dark:bg-[#0f172a]/55',
-          'dark:shadow-[0_36px_120px_-62px_rgba(2,6,23,0.85)]'
-        )}
-      >
-        <div className={cn('text-sm', 'font-medium', 'text-slate-600', 'dark:text-slate-300')}>
-          Loading provider catalogue…
-        </div>
-      </section>
-    );
-  }
-
-  if (providerError) {
-    return (
-      <section
-        className={cn(
-          'relative',
-          'overflow-hidden',
-          'rounded-[2.25rem]',
-          'border',
-          'border-red-200/70',
-          'bg-red-50/80',
-          'p-12',
-          'text-center',
-          'shadow-[0_32px_110px_-60px_rgba(220,38,38,0.45)]',
-          'backdrop-blur-[28px]',
-          'dark:border-red-700/60',
-          'dark:bg-red-900/25'
-        )}
-      >
-        <div className={cn('text-sm', 'font-semibold', 'text-red-600', 'dark:text-red-300')}>
-          {providerError}
-        </div>
-        <div className={cn('mt-2', 'text-xs', 'text-red-500', 'dark:text-red-200')}>
-          Please refresh or try again later.
-        </div>
-      </section>
-    );
-  }
-
-  if (!selectedProvider) {
-    return (
-      <section
-        className={cn(
-          'relative',
-          'overflow-hidden',
-          'rounded-[2.25rem]',
-          'border',
-          'border-white/35',
-          'bg-white/24',
-          'p-10',
-          'shadow-[0_32px_110px_-60px_rgba(15,23,42,0.75)]',
-          'backdrop-blur-[28px]',
-          'dark:border-white/12',
-          'dark:bg-[#0f172a]/55',
-          'dark:shadow-[0_36px_120px_-62px_rgba(2,6,23,0.85)]'
-        )}
-      >
-        <div className={cn('relative', 'z-10', 'flex', 'flex-col', 'gap-8')}>
-          <div className={cn('space-y-3', 'text-center')}>
-            <span
-              className={cn(
-                'inline-flex',
-                'items-center',
-                'justify-center',
-                'rounded-full',
-                'bg-white/75',
-                'px-3',
-                'py-1',
-                'text-[11px]',
-                'font-semibold',
-                'uppercase',
-                'tracking-[0.32em]',
-                'text-[#475569]',
-                'shadow-[0_16px_42px_-30px_rgba(15,23,42,0.45)]',
-                'dark:bg-[#1e293b]/75',
-                'dark:text-[#cbd5e1]'
-              )}
-            >
-              Select Provider
-            </span>
-            <h1
-              className={cn(
-                'text-3xl',
-                'font-bold',
-                'text-slate-900',
-                'dark:text-white',
-                'sm:text-4xl'
-              )}
-            >
-              Choose how you connect accounts
-            </h1>
-            <p className={cn('text-sm', 'text-slate-600', 'dark:text-slate-300')}>
-              Pick the data provider that matches your deployment. You can change this later from
-              account settings.
-            </p>
-          </div>
-
-          <div className={cn('grid', 'gap-6', 'lg:grid-cols-2')}>
-            {providerInfo.availableProviders.map((provider) => {
-              const details = getProviderCardConfig(provider);
-              return (
-                <button
-                  key={provider}
-                  type="button"
-                  onClick={() => handleProviderSelect(provider)}
-                  disabled={selectingProvider === provider}
-                  className={cn(
-                    'relative',
-                    'flex',
-                    'h-full',
-                    'flex-col',
-                    'gap-4',
-                    'rounded-[1.75rem]',
-                    'border',
-                    'border-white/45',
-                    'bg-white/80',
-                    'p-6',
-                    'text-left',
-                    'transition-all',
-                    'duration-200',
-                    'hover:-translate-y-[2px]',
-                    'hover:shadow-[0_24px_80px_-50px_rgba(15,23,42,0.55)]',
-                    'focus:outline-none',
-                    'focus-visible:ring-2',
-                    'focus-visible:ring-sky-400/80',
-                    'focus-visible:ring-offset-2',
-                    'focus-visible:ring-offset-white',
-                    'disabled:cursor-not-allowed',
-                    'disabled:opacity-75',
-                    'dark:border-white/10',
-                    'dark:bg-[#111a2f]/85',
-                    'dark:hover:border-sky-400/40',
-                    'dark:hover:shadow-[0_28px_90px_-60px_rgba(2,6,23,0.7)]',
-                    'dark:focus-visible:ring-offset-[#0f172a]'
-                  )}
-                >
-                  <div className={cn('flex', 'items-center', 'justify-between')}>
-                    <div
-                      className={cn(
-                        'text-lg',
-                        'font-semibold',
-                        'text-slate-900',
-                        'dark:text-white'
-                      )}
-                    >
-                      {details.title}
-                    </div>
-                    <span
-                      className={cn(
-                        'rounded-full',
-                        'bg-sky-100',
-                        'px-3',
-                        'py-1',
-                        'text-[10px]',
-                        'font-semibold',
-                        'uppercase',
-                        'tracking-[0.28em]',
-                        'text-sky-700',
-                        'dark:bg-sky-500/15',
-                        'dark:text-sky-200'
-                      )}
-                    >
-                      {details.badge}
-                    </span>
-                  </div>
-                  <p className={cn('text-sm', 'text-slate-600', 'dark:text-slate-300')}>
-                    {details.description}
-                  </p>
-                  <ul
-                    className={cn('space-y-2', 'text-sm', 'text-slate-500', 'dark:text-slate-400')}
-                  >
-                    {details.bullets.map((bullet) => (
-                      <li key={bullet} className={cn('flex', 'items-start', 'gap-2')}>
-                        <span
-                          className={cn(
-                            'mt-[5px]',
-                            'h-1.5',
-                            'w-1.5',
-                            'rounded-full',
-                            'bg-sky-400',
-                            'dark:bg-sky-500'
-                          )}
-                        />
-                        <span>{bullet}</span>
-                      </li>
-                    ))}
-                  </ul>
-                  <div
-                    className={cn(
-                      'mt-auto',
-                      'inline-flex',
-                      'items-center',
-                      'justify-center',
-                      'rounded-full',
-                      'bg-sky-500',
-                      'px-4',
-                      'py-2',
-                      'text-sm',
-                      'font-semibold',
-                      'text-white',
-                      'shadow-[0_18px_48px_-32px_rgba(14,165,233,0.65)]'
-                    )}
-                  >
-                    {selectingProvider === provider ? 'Selecting…' : `Use ${details.title}`}
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      </section>
-    );
-  }
-
-  const providerCardConfig = getProviderCardConfig(selectedProvider);
-  const providerLabel = providerCardConfig.title;
-  const providerDescription =
-    selectedProvider === 'plaid'
-      ? 'Securely connect institutions with Plaid. Your credentials never touch Sumurai and you can revoke access at any time.'
-      : 'Launch Teller Connect to link accounts using your own Teller credentials. Connections stay in your control and can be revoked instantly.';
-
-  const syncFooter =
-    selectedProvider === 'plaid'
-      ? 'Plaid keeps credentials read-only and disconnectable anytime.'
-      : 'Teller connections respect your API keys and can be rotated from your Teller dashboard.';
-
-  const primaryConnectLabel =
-    selectedProvider === 'teller' ? 'Launch Teller Connect' : 'Launch Plaid Link';
-  const connectDisabled = flowLoading || selectingProvider !== null;
-
-  const hasConnections = summary.institutions > 0;
   const lastSyncValue = syncingAll
     ? 'Syncing...'
-    : flowLoading
+    : summary.institutions === 0 && catalogLoading
       ? 'Loading...'
       : summary.latestSync
         ? formatRelativeTime(summary.latestSync)
-        : 'Awaiting first sync';
+        : summary.institutions > 0
+          ? 'Just now'
+          : 'Awaiting first ledger.';
   const lastSyncDetail = summary.latestSync
     ? `Refreshed ${formatAbsoluteTime(summary.latestSync)}`
-    : syncFooter;
-
-  const syncButtonClasses =
-    'inline-flex items-center gap-2 rounded-full border border-white/60 bg-white/85 px-5 py-2 text-sm font-semibold text-[#0f172a] shadow-[0_18px_48px_-32px_rgba(15,23,42,0.45)] transition-all duration-200 hover:-translate-y-[1px] hover:border-[#93c5fd] hover:text-[#0f172a] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0ea5e9] focus-visible:ring-offset-2 focus-visible:ring-offset-white disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0 disabled:hover:shadow-none dark:border-[#334155] dark:bg-[#1e293b]/90 dark:text-[#cbd5e1] dark:hover:border-[#38bdf8] dark:hover:text-white dark:focus-visible:ring-offset-slate-900';
-  const connectButtonClasses =
-    'inline-flex items-center gap-2 rounded-full bg-gradient-to-r from-[#0ea5e9] via-[#38bdf8] to-[#a78bfa] px-5 py-2 text-sm font-semibold whitespace-nowrap text-white shadow-[0_22px_60px_-32px_rgba(14,165,233,0.78)] transition-all duration-200 hover:-translate-y-[1px] hover:shadow-[0_28px_70px_-35px_rgba(14,165,233,0.85)] focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 focus-visible:ring-offset-2 focus-visible:ring-offset-white active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0 disabled:hover:shadow-none dark:shadow-[0_22px_60px_-32px_rgba(56,189,248,0.65)] dark:focus-visible:ring-offset-slate-900';
-  const menuItemClasses =
-    'flex w-full items-center gap-3 px-4 py-3 text-left text-sm font-semibold text-slate-700 transition-colors duration-150 hover:bg-sky-50 hover:text-slate-950 focus:bg-sky-50 focus:text-slate-950 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 dark:text-slate-200 dark:hover:bg-sky-500/10 dark:hover:text-white dark:focus:bg-sky-500/10 dark:focus:text-white';
-
-  const pendingInstitutions = Math.max(0, summary.institutions - summary.connectedInstitutions);
-
+    : '';
   const actions = (
-    <>
-      {hasConnections && (
-        <button
-          type="button"
-          onClick={syncAll}
-          disabled={syncingAll || flowLoading}
-          className={syncButtonClasses}
-        >
-          <RefreshCw className={`h-4 w-4 ${syncingAll ? 'animate-spin' : ''}`} />
-          {syncingAll ? 'Syncing...' : 'Sync all'}
-        </button>
-      )}
-      <div ref={connectMenuRef} className={cn('relative')}>
-        <button
-          type="button"
-          onClick={() => setConnectMenuOpen((open) => !open)}
-          disabled={connectDisabled}
-          className={connectButtonClasses}
-          aria-haspopup="menu"
-          aria-expanded={connectMenuOpen}
-        >
-          <Plus className={cn('h-4', 'w-4')} />
-          <span>{primaryConnectLabel}</span>
-          <ChevronDown
-            className={cn(
-              'h-4',
-              'w-4',
-              'transition-transform',
-              connectMenuOpen && 'rotate-180'
-            )}
-          />
-        </button>
-        {connectMenuOpen && (
-          <div
-            role="menu"
-            className={cn(
-              'absolute',
-              'right-0',
-              'z-30',
-              'mt-2',
-              'w-64',
-              'overflow-hidden',
-              'rounded-2xl',
-              'border',
-              'border-white/60',
-              'bg-white/95',
-              'py-1',
-              'shadow-[0_24px_70px_-35px_rgba(15,23,42,0.5)]',
-              'backdrop-blur-xl',
-              'dark:border-white/10',
-              'dark:bg-[#111827]/95',
-              'dark:shadow-[0_24px_70px_-35px_rgba(2,6,23,0.8)]'
-            )}
+    <div className="inline-flex max-w-full flex-col items-center gap-2">
+      <div className="flex flex-wrap items-center justify-center gap-3">
+        {summary.institutions > 0 && (
+          <Button
+            type="button"
+            onClick={syncAll}
+            disabled={syncingAll || !isOnline}
+            variant="ghost"
+            size="md"
+            className={cn(appTitleBarRecipes.settingsIdle, 'normal-case')}
+            title={!isOnline ? 'Unavailable while offline' : undefined}
           >
-            {connectProviders.map((provider) => {
-              const details = getProviderCardConfig(provider);
-              const isTellerMissingConfig = provider === 'teller' && !providerInfo.tellerApplicationId;
-              return (
-                <button
-                  key={provider}
-                  type="button"
-                  role="menuitem"
-                  onClick={() => handleConnectProvider(provider)}
-                  disabled={selectingProvider !== null || isTellerMissingConfig}
-                  className={menuItemClasses}
-                  title={isTellerMissingConfig ? 'Missing Teller application ID' : undefined}
-                >
-                  {provider === 'teller' ? (
-                    <Landmark className={cn('h-4', 'w-4', 'text-sky-500')} />
-                  ) : (
-                    <Building2 className={cn('h-4', 'w-4', 'text-sky-500')} />
-                  )}
-                  <span className={cn('flex', 'min-w-0', 'flex-col')}>
-                    <span className={cn('truncate')}>
-                      {provider === 'teller' ? 'Launch Teller Connect' : 'Launch Plaid Link'}
-                    </span>
-                    <span
-                      className={cn(
-                        'truncate',
-                        'text-xs',
-                        'font-medium',
-                        'text-slate-500',
-                        'dark:text-slate-400'
-                      )}
-                    >
-                      {selectingProvider === provider ? 'Switching provider...' : details.title}
-                    </span>
-                  </span>
-                </button>
-              );
-            })}
-          </div>
+            <RefreshCw className={cn(control.glyph.md, syncingAll && 'animate-spin')} />
+            {syncingAll ? 'Syncing...' : !isOnline ? 'Offline' : 'Sync all'}
+          </Button>
         )}
-      </div>
-    </>
-  );
-
-  const statsGrid = (
-    <div className={cn('grid', 'gap-3', 'sm:grid-cols-3')}>
-      {flowError && (
-        <div
-          className={cn(
-            'sm:col-span-3',
-            'rounded-2xl',
-            'border',
-            'border-red-200/70',
-            'bg-red-50/80',
-            'px-5',
-            'py-3',
-            'text-left',
-            'shadow-sm',
-            'dark:border-red-700/60',
-            'dark:bg-red-900/25'
-          )}
+        <MenuDropdown
+          trigger={
+            <Button
+              type="button"
+              variant="ghost"
+              size="md"
+              className={cn(appTitleBarRecipes.settingsIdle, 'normal-case')}
+              disabled={isExporting || !isOnline}
+              title={
+                isExporting
+                  ? 'Export all in progress'
+                  : !isOnline
+                    ? 'Unavailable while offline'
+                    : undefined
+              }
+            >
+              <FileDown className={cn(control.glyph.md, isExporting && 'animate-pulse')} />
+              {isExporting ? 'Exporting...' : 'Export All'}
+            </Button>
+          }
         >
-          <div className={cn('text-sm', 'font-medium', 'text-red-600', 'dark:text-red-300')}>
-            {flowError}
-          </div>
-        </div>
+          <MenuItem onClick={() => void exportAccounts('csv')}>Export as CSV</MenuItem>
+          <MenuItem onClick={() => void exportAccounts('ofx')}>Export as OFX</MenuItem>
+        </MenuDropdown>
+        <ConnectButton
+          onClick={handlePrimaryConnect}
+          disabled={connectDisabled}
+          title={!isOnline ? 'Unavailable while offline' : undefined}
+          leadingImageSrc={providerLogoSrc}
+        >
+          {primaryConnectContent.cta.defaultLabel}
+        </ConnectButton>
+      </div>
+      {!isOnline && (
+        <span
+          className={cn('w-full text-center', uiTypographyRecipes.caption, uiTextRecipes.warning)}
+        >
+          Unavailable while offline
+        </span>
       )}
-
-      <HeroStatCard
-        index={1}
-        title="Active institutions"
-        icon={<Building2 className={cn('h-4', 'w-4')} />}
-        value={hasConnections ? summary.connectedInstitutions : 0}
-        suffix={`out of ${summary.institutions}`}
-        subtext={
-          hasConnections
-            ? summary.connectedInstitutions === summary.institutions
-              ? 'All connections healthy'
-              : `${pendingInstitutions} ${pendingInstitutions === 1 ? 'needs' : 'need'} attention`
-            : 'Link your first institution'
-        }
-      />
-
-      <HeroStatCard
-        index={2}
-        title="Accounts tracked"
-        icon={<CreditCard className={cn('h-4', 'w-4')} />}
-        value={summary.accounts}
-        suffix={summary.accounts === 1 ? 'account' : 'accounts'}
-        subtext={
-          summary.accounts ? 'Balances stay in sync automatically' : 'Connect to start syncing'
-        }
-      />
-
-      <HeroStatCard
-        index={3}
-        title="Last sync"
-        icon={<Clock className={cn('h-4', 'w-4')} />}
-        value={lastSyncValue}
-        subtext={syncingAll ? 'Sync in progress' : lastSyncDetail}
-      />
     </div>
   );
 
-  const manualInvestmentsTotal = manualInvestments.reduce(
-    (sum, account) => sum + parseAccountBalance(account.balance_current),
-    0
+  const statsGrid = (
+    <AccountsSummaryStats
+      summary={summary}
+      syncingAll={syncingAll}
+      lastSyncValue={lastSyncValue}
+      lastSyncDetail={lastSyncDetail}
+    />
   );
-  const manualNativeToUsdRate = Number(manualForm.conversion_rate || '1');
-  const manualConvertedUsd =
-    Number.isFinite(Number(manualForm.balance_current)) && Number.isFinite(manualNativeToUsdRate)
-      ? Number(manualForm.balance_current) * manualNativeToUsdRate
-      : 0;
-  const manualPropertyAssetsTotal = manualPropertyAccounts
-    .filter((account) => account.account_type !== 'loan')
-    .reduce((sum, account) => sum + parseAccountBalance(account.balance_current), 0);
-  const manualPropertyLoansTotal = manualPropertyAccounts
-    .filter((account) => account.account_type === 'loan')
-    .reduce((sum, account) => sum + parseAccountBalance(account.balance_current), 0);
-  const manualHomeEquity = manualPropertyAssetsTotal - manualPropertyLoansTotal;
 
-  const manualInvestmentsSection = (
-    <section className={cn('space-y-4')}>
-      <div className={cn('flex', 'items-center', 'justify-between', 'gap-3')}>
-        <div>
-          <h2 className={cn('text-lg', 'font-semibold', 'text-slate-900', 'dark:text-white')}>
-            Manual investments
-          </h2>
-          <div className={cn('text-sm', 'text-slate-600', 'dark:text-slate-300')}>
-            {manualInvestments.length
-              ? `${manualInvestments.length} account${manualInvestments.length === 1 ? '' : 's'} tracked`
-              : 'Track brokerage, IRA, 401k, and foreign balances manually'}
+  if (needsProviderPick) {
+    return (
+      <div data-testid="accounts-page">
+        <div hidden>
+          {plaidPickerConnectionFlow.connectionMount}
+          {tellerPickerConnectionFlow.connectionMount}
+        </div>
+        <div className={cn('flex', 'h-full', 'items-center', 'justify-center', 'px-4', 'py-8')}>
+          <div className={cn('w-full', 'max-w-7xl')}>
+            <ProviderSelectionPanel
+              loading={providerCatalog.loading}
+              error={providerCatalog.error}
+              availableProviders={providerCatalog.availableProviders}
+              tellerApplicationId={providerCatalog.tellerApplicationId}
+              providerReadyState={pickerProviderReadyState}
+              connectingProvider={activePickerConnectingProvider}
+              onSelectProvider={(provider) => void startProviderPickerConnection(provider)}
+            />
           </div>
         </div>
-        <div
-          className={cn(
-            'text-right',
-            'text-sm',
-            'font-semibold',
-            'text-cyan-600',
-            'dark:text-cyan-300'
-          )}
-        >
-          {format(manualInvestmentsTotal)}
-        </div>
+        {pickerConnectingProvider === 'simplefin' ? (
+          <OnboardingProviderConnectModal
+            provider={pickerConnectingProvider}
+            isOpen
+            onClose={() => setPickerConnectingProvider(null)}
+            onConnected={(provider) => void finishSimpleFinPickerConnection(provider)}
+          />
+        ) : null}
       </div>
-
-      <GlassCard variant="accent" rounded="xl" padding="lg" withInnerEffects={false}>
-        <div
-          className={cn(
-            'grid',
-            'gap-3',
-            'md:grid-cols-[1.15fr_1.15fr_0.85fr_0.75fr_0.85fr_auto]'
-          )}
-        >
-          <Input
-            value={manualForm.institution_name}
-            onChange={(event) =>
-              setManualForm((prev) => ({ ...prev, institution_name: event.target.value }))
-            }
-            placeholder="Institution"
-            variant="glass"
-          />
-          <Input
-            value={manualForm.name}
-            onChange={(event) => setManualForm((prev) => ({ ...prev, name: event.target.value }))}
-            placeholder="Account name"
-            variant="glass"
-          />
-          <Input
-            value={manualForm.balance_current}
-            onChange={(event) =>
-              setManualForm((prev) => ({ ...prev, balance_current: event.target.value }))
-            }
-            placeholder="Balance"
-            inputMode="decimal"
-            variant="glass"
-          />
-          <select
-            value={manualForm.currency}
-            onChange={(event) =>
-              setManualForm((prev) => ({
-                ...prev,
-                currency: event.target.value as DisplayCurrency,
-              }))
-            }
-            className={cn(
-              'rounded-xl border px-3 py-2 text-sm',
-              'border-white/40 bg-white/60 text-slate-900 shadow-inner',
-              'focus:border-primary-400 focus:outline-none focus:ring-2 focus:ring-primary-400/30',
-              'dark:border-slate-700/70 dark:bg-slate-900/50 dark:text-slate-100'
-            )}
-            aria-label="Investment currency"
-          >
-            {SUPPORTED_DISPLAY_CURRENCIES.map((currency) => (
-              <option key={currency} value={currency}>
-                {currency}
-              </option>
-            ))}
-          </select>
-          <Input
-            value={manualForm.mask}
-            onChange={(event) => setManualForm((prev) => ({ ...prev, mask: event.target.value }))}
-            placeholder="Label"
-            variant="glass"
-          />
-          <div className={cn('flex', 'gap-2')}>
-            <Button
-              onClick={saveManualInvestment}
-              loading={manualSaving}
-              disabled={manualRateLoading}
-              variant="secondary"
-            >
-              <Plus className={cn('h-4', 'w-4')} />
-              {editingManualId ? 'Update' : 'Add'}
-            </Button>
-            {editingManualId && (
-              <Button onClick={resetManualForm} variant="icon" size="icon" aria-label="Cancel edit">
-                <X className={cn('h-4', 'w-4')} />
-              </Button>
-            )}
-          </div>
-        </div>
-        <div className={cn('mt-3', 'text-xs', 'text-slate-600', 'dark:text-slate-300')}>
-          {manualRateLoading
-            ? 'Loading currency rate...'
-            : manualRateError
-              ? manualRateError
-              : manualForm.currency === 'USD'
-                ? 'Saved as USD.'
-                : `Using ${manualForm.currency} rate${manualRateDate ? ` from ${manualRateDate}` : ''}: ${manualForm.balance_current || '0'} ${manualForm.currency} = ${format(manualConvertedUsd)}.`}
-        </div>
-        {manualError && (
-          <div className={cn('mt-3', 'text-sm', 'font-medium', 'text-red-600', 'dark:text-red-300')}>
-            {manualError}
-          </div>
-        )}
-      </GlassCard>
-
-      {manualInvestments.length > 0 && (
-        <div className={cn('grid', 'gap-3', 'md:grid-cols-2')}>
-          {manualInvestments.map((account) => (
-            <GlassCard
-              key={account.id}
-              variant="accent"
-              rounded="xl"
-              padding="lg"
-              withInnerEffects={false}
-            >
-              <div className={cn('flex', 'items-start', 'justify-between', 'gap-3')}>
-                <div>
-                  <div className={cn('text-sm', 'font-semibold', 'text-slate-900', 'dark:text-white')}>
-                    {formatManualInvestmentTitle(account)}
-                  </div>
-                  <div className={cn('mt-1', 'text-xs', 'text-slate-600', 'dark:text-slate-300')}>
-                    {formatManualInvestmentDetail(account)}
-                    {account.mask ? ` • ${account.mask}` : ''}
-                  </div>
-                  {account.updated_at && (
-                    <div
-                      className={cn(
-                        'mt-2',
-                        'flex',
-                        'items-center',
-                        'gap-1.5',
-                        'text-xs',
-                        'text-slate-500',
-                        'dark:text-slate-400'
-                      )}
-                      title={`Updated ${formatAbsoluteTime(account.updated_at)}`}
-                    >
-                      <Clock className={cn('h-3.5', 'w-3.5')} />
-                      <span>Updated {formatRelativeTime(account.updated_at)}</span>
-                    </div>
-                  )}
-                </div>
-                <div className={cn('text-right')}>
-                  <div className={cn('text-sm', 'font-semibold', 'text-cyan-600', 'dark:text-cyan-300')}>
-                    {format(parseAccountBalance(account.balance_current))}
-                  </div>
-                  <div className={cn('mt-3', 'flex', 'justify-end', 'gap-2')}>
-                    <Button
-                      onClick={() => editManualInvestment(account)}
-                      variant="icon"
-                      size="icon"
-                      aria-label={`Edit ${formatManualInvestmentTitle(account)}`}
-                    >
-                      <Pencil className={cn('h-4', 'w-4')} />
-                    </Button>
-                    <Button
-                      onClick={() => deleteManualInvestment(account)}
-                      variant="icon"
-                      size="icon"
-                      aria-label={`Delete ${formatManualInvestmentTitle(account)}`}
-                    >
-                      <Trash2 className={cn('h-4', 'w-4')} />
-                    </Button>
-                  </div>
-                </div>
-              </div>
-            </GlassCard>
-          ))}
-        </div>
-      )}
-    </section>
-  );
-
-  const manualPropertySection = (
-    <section className={cn('space-y-4')}>
-      <div className={cn('flex', 'items-center', 'justify-between', 'gap-3')}>
-        <div>
-          <h2 className={cn('text-lg', 'font-semibold', 'text-slate-900', 'dark:text-white')}>
-            Manual property
-          </h2>
-          <div className={cn('text-sm', 'text-slate-600', 'dark:text-slate-300')}>
-            {manualPropertyAccounts.length
-              ? `${manualPropertyAccounts.length} asset${manualPropertyAccounts.length === 1 ? '' : 's'} tracked`
-              : 'Track home value and mortgage principal manually'}
-          </div>
-        </div>
-        <div className={cn('text-right')}>
-          <div className={cn('text-sm', 'font-semibold', 'text-teal-600', 'dark:text-teal-300')}>
-            {format(manualHomeEquity)}
-          </div>
-          <div className={cn('text-xs', 'text-slate-500', 'dark:text-slate-400')}>equity</div>
-        </div>
-      </div>
-
-      <GlassCard variant="accent" rounded="xl" padding="lg" withInnerEffects={false}>
-        <div className={cn('grid', 'gap-3', 'md:grid-cols-[0.9fr_1.4fr_1fr_auto]')}>
-          <select
-            value={manualPropertyForm.account_type}
-            onChange={(event) =>
-              setManualPropertyForm((prev) => ({
-                ...prev,
-                account_type: event.target.value as ManualAssetAccountType,
-                name: event.target.value === 'loan' ? 'Primary Mortgage' : prev.name,
-              }))
-            }
-            className={cn(
-              'rounded-xl border px-3 py-2 text-sm',
-              'border-white/40 bg-white/60 text-slate-900 shadow-inner',
-              'focus:border-primary-400 focus:outline-none focus:ring-2 focus:ring-primary-400/30',
-              'dark:border-slate-700/70 dark:bg-slate-900/50 dark:text-slate-100'
-            )}
-          >
-            <option value="property">Property</option>
-            <option value="loan">Mortgage</option>
-          </select>
-          <Input
-            value={manualPropertyForm.name}
-            onChange={(event) =>
-              setManualPropertyForm((prev) => ({ ...prev, name: event.target.value }))
-            }
-            placeholder="Account name"
-            variant="glass"
-          />
-          <Input
-            value={manualPropertyForm.balance_current}
-            onChange={(event) =>
-              setManualPropertyForm((prev) => ({ ...prev, balance_current: event.target.value }))
-            }
-            placeholder="Balance"
-            inputMode="decimal"
-            variant="glass"
-          />
-          <div className={cn('flex', 'gap-2')}>
-            <Button onClick={saveManualProperty} loading={manualPropertySaving} variant="secondary">
-              <Plus className={cn('h-4', 'w-4')} />
-              {editingManualPropertyId ? 'Update' : 'Add'}
-            </Button>
-            {editingManualPropertyId && (
-              <Button
-                onClick={resetManualPropertyForm}
-                variant="icon"
-                size="icon"
-                aria-label="Cancel edit"
-              >
-                <X className={cn('h-4', 'w-4')} />
-              </Button>
-            )}
-          </div>
-        </div>
-        {manualPropertyError && (
-          <div className={cn('mt-3', 'text-sm', 'font-medium', 'text-red-600', 'dark:text-red-300')}>
-            {manualPropertyError}
-          </div>
-        )}
-      </GlassCard>
-
-      {manualPropertyAccounts.length > 0 && (
-        <div className={cn('grid', 'gap-3', 'md:grid-cols-2')}>
-          {manualPropertyAccounts.map((account) => (
-            <GlassCard
-              key={account.id}
-              variant="accent"
-              rounded="xl"
-              padding="lg"
-              withInnerEffects={false}
-            >
-              <div className={cn('flex', 'items-start', 'justify-between', 'gap-3')}>
-                <div>
-                  <div className={cn('flex', 'items-center', 'gap-2')}>
-                    <Home className={cn('h-4', 'w-4', 'text-teal-500')} />
-                    <div className={cn('text-sm', 'font-semibold', 'text-slate-900', 'dark:text-white')}>
-                      {account.name}
-                    </div>
-                  </div>
-                  <div className={cn('mt-1', 'text-xs', 'text-slate-600', 'dark:text-slate-300')}>
-                    {account.account_type === 'loan' ? 'Mortgage' : 'Property'}
-                  </div>
-                  {account.updated_at && (
-                    <div
-                      className={cn(
-                        'mt-2',
-                        'flex',
-                        'items-center',
-                        'gap-1.5',
-                        'text-xs',
-                        'text-slate-500',
-                        'dark:text-slate-400'
-                      )}
-                      title={`Updated ${formatAbsoluteTime(account.updated_at)}`}
-                    >
-                      <Clock className={cn('h-3.5', 'w-3.5')} />
-                      <span>Updated {formatRelativeTime(account.updated_at)}</span>
-                    </div>
-                  )}
-                </div>
-                <div className={cn('text-right')}>
-                  <div
-                    className={cn(
-                      'text-sm',
-                      'font-semibold',
-                      account.account_type === 'loan'
-                        ? 'text-amber-600 dark:text-amber-300'
-                        : 'text-teal-600 dark:text-teal-300'
-                    )}
-                  >
-                    {format(parseAccountBalance(account.balance_current))}
-                  </div>
-                  <div className={cn('mt-3', 'flex', 'justify-end', 'gap-2')}>
-                    <Button
-                      onClick={() => editManualProperty(account)}
-                      variant="icon"
-                      size="icon"
-                      aria-label={`Edit ${account.name}`}
-                    >
-                      <Pencil className={cn('h-4', 'w-4')} />
-                    </Button>
-                    <Button
-                      onClick={() => deleteManualProperty(account)}
-                      variant="icon"
-                      size="icon"
-                      aria-label={`Delete ${account.name}`}
-                    >
-                      <Trash2 className={cn('h-4', 'w-4')} />
-                    </Button>
-                  </div>
-                </div>
-              </div>
-            </GlassCard>
-          ))}
-        </div>
-      )}
-    </section>
-  );
+    );
+  }
 
   return (
     <div data-testid="accounts-page">
+      {connectionFlow.connectionMount}
       <PageLayout
-        badge={`${providerLabel} Accounts`}
-        title="Link banks and keep balances current"
-        subtitle={providerDescription}
+        badge={`${providerLabel} Connections`}
+        title="Bring all your ally institutions under one house, answering to you."
+        subtitle="Keep every account balance in clear view."
         actions={actions}
         stats={statsGrid}
       >
@@ -1371,17 +1133,45 @@ const AccountsPage = ({ onError, onAccountSelect }: AccountsPageProps) => {
         {manualInvestmentsSection}
 
         <ConnectionsList
-          banks={banks}
-          onConnect={() => (selectedProvider ? handleConnectProvider(selectedProvider) : connect())}
-          onSync={syncOne}
+          banks={banksWithSync}
+          onConnect={handlePrimaryConnect}
+          onSync={syncBank}
           onDisconnect={disconnect}
-          onAccountSelect={onAccountSelect}
+          onExport={exportAccounts}
+          isExporting={isExporting}
+          isOnline={isOnline}
+          providerName={`${providerLabel} accounts`}
+          connectLabel={primaryConnectContent.cta.defaultLabel}
+          connectLogoSrc={providerLogoSrc}
+          onImportSuccess={handleImportSuccess}
+          emptyState={connectionsEmptyState}
         />
 
-        <AnimatePresence>
-          {toast && <Toast message={toast} onClose={() => setToast(null)} />}
-        </AnimatePresence>
+        <ToastStack
+          transients={accountsToastStack.transients}
+          pinnedToast={accountsToastStack.pinnedToast}
+          onDismissTransient={accountsToastStack.dismissTransient}
+          onDismissPinned={accountsToastStack.dismissPinned}
+        />
+        <SyncInstitutionStatusToast
+          row={syncInstitutionRow}
+          onClose={dismissSyncInstitutionToast}
+        />
+        <SyncAllStatusToast
+          isOpen={syncAllModalOpen}
+          syncingAll={syncingAll}
+          rows={syncAllRows}
+          onClose={closeSyncAllModal}
+        />
       </PageLayout>
+      {pickerConnectingProvider === 'simplefin' ? (
+        <OnboardingProviderConnectModal
+          provider={pickerConnectingProvider}
+          isOpen
+          onClose={() => setPickerConnectingProvider(null)}
+          onConnected={(provider) => void finishSimpleFinPickerConnection(provider)}
+        />
+      ) : null}
     </div>
   );
 };

@@ -45,7 +45,7 @@ async fn given_valid_payload_when_create_budget_then_returns_budget() {
     let req = Request::builder()
         .method("POST")
         .uri("/api/budgets")
-        .header("authorization", format!("Bearer {}", token))
+        .header("Cookie", format!("auth_token={}", token))
         .header("content-type", "application/json")
         .body(Body::from(payload.to_string()))
         .unwrap();
@@ -57,22 +57,57 @@ async fn given_valid_payload_when_create_budget_then_returns_budget() {
 #[tokio::test]
 async fn given_valid_payload_when_update_budget_then_returns_budget() {
     let budget_id = Uuid::new_v4();
-    let user_id = Uuid::new_v4();
 
     let mut mock = MockDatabaseRepository::new();
     mock.expect_get_all_provider_connections_by_user()
         .returning(|_| Box::pin(async { Ok(vec![]) }));
     mock.expect_get_transactions_for_user()
         .returning(|_| Box::pin(async { Ok(vec![]) }));
-    mock.expect_get_budgets_for_user()
-        .returning(|_| Box::pin(async { Ok(vec![]) }));
+    let (user, token) = TestFixtures::create_authenticated_user_with_token();
+    let user_id = user.id;
+    let owned_budget =
+        Budget::new(user_id, "Groceries".to_string(), dec!(250.00)).into_with_id(budget_id);
+
+    mock.expect_get_budget_by_id_for_user()
+        .withf(move |id, uid| *id == budget_id && *uid == user_id)
+        .returning(move |_, _| {
+            let owned_budget = owned_budget.clone();
+            Box::pin(async move { Ok(Some(owned_budget)) })
+        });
+
     mock.expect_update_budget_for_user()
-        .returning(move |id, _uid, amount| {
-            let user_id = user_id;
+        .withf(move |id, uid, _amount| *id == budget_id && *uid == user_id)
+        .returning(move |id, uid, amount| {
             Box::pin(async move {
-                Ok(Budget::new(user_id, "Groceries".to_string(), amount).into_with_id(id))
+                Ok(Budget::new(uid, "Groceries".to_string(), amount).into_with_id(id))
             })
         });
+
+    let app = TestFixtures::create_test_app_with_db(mock).await.unwrap();
+
+    let payload = r#"{"amount":"250.00"}"#;
+    let req = Request::builder()
+        .method("PUT")
+        .uri(format!("/api/budgets/{}", budget_id))
+        .header("Cookie", format!("auth_token={}", token))
+        .header("content-type", "application/json")
+        .body(Body::from(payload))
+        .unwrap();
+
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn given_foreign_budget_id_when_update_budget_then_returns_not_found() {
+    let budget_id = Uuid::new_v4();
+    let mut mock = MockDatabaseRepository::new();
+    mock.expect_get_all_provider_connections_by_user()
+        .returning(|_| Box::pin(async { Ok(vec![]) }));
+    mock.expect_get_transactions_for_user()
+        .returning(|_| Box::pin(async { Ok(vec![]) }));
+    mock.expect_get_budget_by_id_for_user()
+        .returning(|_, _| Box::pin(async { Ok(None) }));
 
     let app = TestFixtures::create_test_app_with_db(mock).await.unwrap();
     let (_user, token) = TestFixtures::create_authenticated_user_with_token();
@@ -81,13 +116,77 @@ async fn given_valid_payload_when_update_budget_then_returns_budget() {
     let req = Request::builder()
         .method("PUT")
         .uri(format!("/api/budgets/{}", budget_id))
-        .header("authorization", format!("Bearer {}", token))
+        .header("Cookie", format!("auth_token={}", token))
         .header("content-type", "application/json")
         .body(Body::from(payload))
         .unwrap();
 
     let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn given_owned_budget_when_delete_budget_then_returns_deleted() {
+    let budget_id = Uuid::new_v4();
+    let mut mock = MockDatabaseRepository::new();
+    mock.expect_get_all_provider_connections_by_user()
+        .returning(|_| Box::pin(async { Ok(vec![]) }));
+    mock.expect_get_transactions_for_user()
+        .returning(|_| Box::pin(async { Ok(vec![]) }));
+    let (user, token) = TestFixtures::create_authenticated_user_with_token();
+    let user_id = user.id;
+    let owned_budget =
+        Budget::new(user_id, "Groceries".to_string(), dec!(250.00)).into_with_id(budget_id);
+
+    mock.expect_get_budget_by_id_for_user()
+        .withf(move |id, uid| *id == budget_id && *uid == user_id)
+        .returning(move |_, _| {
+            let owned_budget = owned_budget.clone();
+            Box::pin(async move { Ok(Some(owned_budget)) })
+        });
+
+    mock.expect_delete_budget_for_user()
+        .withf(move |id, uid| *id == budget_id && *uid == user_id)
+        .returning(|_, _| Box::pin(async { Ok(()) }));
+
+    let app = TestFixtures::create_test_app_with_db(mock).await.unwrap();
+
+    let req = Request::builder()
+        .method("DELETE")
+        .uri(format!("/api/budgets/{}", budget_id))
+        .header("Cookie", format!("auth_token={}", token))
+        .header("content-type", "application/json")
+        .body(Body::empty())
+        .unwrap();
+
+    let res = app.clone().oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn given_foreign_budget_id_when_delete_budget_then_returns_not_found() {
+    let budget_id = Uuid::new_v4();
+    let mut mock = MockDatabaseRepository::new();
+    mock.expect_get_all_provider_connections_by_user()
+        .returning(|_| Box::pin(async { Ok(vec![]) }));
+    mock.expect_get_transactions_for_user()
+        .returning(|_| Box::pin(async { Ok(vec![]) }));
+    mock.expect_get_budget_by_id_for_user()
+        .returning(|_, _| Box::pin(async { Ok(None) }));
+
+    let app = TestFixtures::create_test_app_with_db(mock).await.unwrap();
+    let (_user, token) = TestFixtures::create_authenticated_user_with_token();
+
+    let req = Request::builder()
+        .method("DELETE")
+        .uri(format!("/api/budgets/{}", budget_id))
+        .header("Cookie", format!("auth_token={}", token))
+        .header("content-type", "application/json")
+        .body(Body::empty())
+        .unwrap();
+
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
@@ -109,7 +208,7 @@ async fn given_duplicate_category_when_create_budget_then_conflict() {
     let req = Request::builder()
         .method("POST")
         .uri("/api/budgets")
-        .header("authorization", format!("Bearer {}", token))
+        .header("Cookie", format!("auth_token={}", token))
         .header("content-type", "application/json")
         .body(Body::from(payload.to_string()))
         .unwrap();
@@ -127,7 +226,7 @@ async fn given_non_positive_amount_when_create_budget_then_bad_request() {
     let req = Request::builder()
         .method("POST")
         .uri("/api/budgets")
-        .header("authorization", format!("Bearer {}", token))
+        .header("Cookie", format!("auth_token={}", token))
         .header("content-type", "application/json")
         .body(Body::from(payload.to_string()))
         .unwrap();
@@ -138,15 +237,26 @@ async fn given_non_positive_amount_when_create_budget_then_bad_request() {
 
 #[tokio::test]
 async fn given_invalid_amount_when_update_budget_then_bad_request() {
-    let app = TestFixtures::create_test_app().await.unwrap();
-    let (_user, token) = TestFixtures::create_authenticated_user_with_token();
+    let mut mock = MockDatabaseRepository::new();
+    let (user, token) = TestFixtures::create_authenticated_user_with_token();
     let budget_id = Uuid::new_v4();
+    let owned_budget =
+        Budget::new(user.id, "Groceries".to_string(), dec!(250.00)).into_with_id(budget_id);
+
+    mock.expect_get_budget_by_id_for_user()
+        .withf(move |id, uid| *id == budget_id && *uid == user.id)
+        .returning(move |_, _| {
+            let owned_budget = owned_budget.clone();
+            Box::pin(async move { Ok(Some(owned_budget)) })
+        });
+
+    let app = TestFixtures::create_test_app_with_db(mock).await.unwrap();
     let payload = r#"{"amount":"-1"}"#;
 
     let req = Request::builder()
         .method("PUT")
         .uri(format!("/api/budgets/{}", budget_id))
-        .header("authorization", format!("Bearer {}", token))
+        .header("Cookie", format!("auth_token={}", token))
         .header("content-type", "application/json")
         .body(Body::from(payload))
         .unwrap();
@@ -164,7 +274,7 @@ async fn given_invalid_budget_id_when_update_then_bad_request() {
     let req = Request::builder()
         .method("PUT")
         .uri("/api/budgets/not-a-uuid")
-        .header("authorization", format!("Bearer {}", token))
+        .header("Cookie", format!("auth_token={}", token))
         .header("content-type", "application/json")
         .body(Body::from(payload))
         .unwrap();
@@ -201,8 +311,7 @@ async fn given_cache_hit_when_get_budgets_then_skips_db() {
     let user_id = Uuid::new_v4();
     let budgets = vec![Budget::new(user_id, "Groceries".to_string(), dec!(100))];
     let serialized = serde_json::to_string(&budgets).unwrap();
-    mock_cache.expect_get_string().returning(move |key| {
-        let _ = key; // ignore
+    mock_cache.expect_get_budgets().returning(move |_| {
         let serialized = serialized.clone();
         Box::pin(async move { Ok(Some(serialized)) })
     });
@@ -241,14 +350,14 @@ async fn given_create_budget_when_success_then_invalidate_cache() {
         .expect_is_session_valid()
         .returning(|_| Box::pin(async { Ok(true) }));
     mock_cache
-        .expect_get_string()
+        .expect_get_budgets()
         .returning(|_| Box::pin(async { Ok(None) }));
     mock_cache
-        .expect_set_with_ttl()
-        .returning(|_, _, _| Box::pin(async { Ok(()) }));
+        .expect_set_budgets()
+        .returning(|_, _| Box::pin(async { Ok(()) }));
 
     mock_cache
-        .expect_invalidate_pattern()
+        .expect_clear_budgets()
         .returning(|_| Box::pin(async { Ok(()) }));
 
     let app = TestFixtures::create_test_app_with_db_and_cache(mock_db, mock_cache)
@@ -260,7 +369,7 @@ async fn given_create_budget_when_success_then_invalidate_cache() {
     let req = Request::builder()
         .method("POST")
         .uri("/api/budgets")
-        .header("authorization", format!("Bearer {}", token))
+        .header("Cookie", format!("auth_token={}", token))
         .header("content-type", "application/json")
         .body(Body::from(payload.to_string()))
         .unwrap();

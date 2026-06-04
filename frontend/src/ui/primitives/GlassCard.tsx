@@ -1,57 +1,81 @@
 import { cva, type VariantProps } from 'class-variance-authority';
 import type React from 'react';
-import { cn, glassBackdropClasses } from './utils';
+import {
+  border as semanticBorders,
+  effect as semanticEffects,
+  surface as semanticSurfaces,
+  radius as uiRadiusRecipes,
+} from '@/ui/recipes';
+import { cn } from './utils';
 
-const glassCardVariants = cva(
-  [
+export const glassCardRecipes = {
+  base: [
     'relative overflow-hidden',
     'border',
-    'shadow-[0_40px_120px_-82px_rgba(15,23,42,0.75)]',
-    glassBackdropClasses,
+    ...semanticEffects.glassShadow,
+    'backdrop-blur-2xl backdrop-saturate-[150%]',
     'transition-colors duration-500',
-    'dark:shadow-[0_42px_140px_-80px_rgba(2,6,23,0.85)]',
+    'dark:shadow-[0_42px_140px_-80px_var(--color-effect-glass-shadow)]',
   ],
-  {
-    variants: {
-      variant: {
-        default: ['border-white/35', 'bg-white/18', 'dark:border-white/12', 'dark:bg-[#0f172a]/55'],
-        auth: [
-          'border-white/35',
-          'bg-white/20',
-          'shadow-[0_38px_120px_-60px_rgba(15,23,42,0.78)]',
-          'backdrop-blur-[26px]',
-          'backdrop-saturate-[140%]',
-          'dark:border-white/12',
-          'dark:bg-[#0f172a]/55',
-          'dark:shadow-[0_40px_120px_-58px_rgba(2,6,23,0.85)]',
-        ],
-        accent: [
-          'border-white/40',
-          'bg-white/85',
-          'backdrop-blur-sm',
-          'dark:border-white/10',
-          'dark:bg-[#111a2f]/75',
-        ],
-      },
-      rounded: {
-        default: 'rounded-[2.25rem]',
-        lg: 'rounded-2xl',
-        xl: 'rounded-3xl',
-      },
-      padding: {
-        none: 'p-0',
-        sm: 'p-4',
-        md: 'p-6',
-        lg: 'p-8',
-      },
+  default: [...semanticBorders.glass, ...semanticSurfaces.glassPanel],
+  auth: [
+    ...semanticBorders.glass,
+    ...semanticSurfaces.glassPanel,
+    'shadow-[0_38px_120px_-60px_var(--color-effect-glass-shadow)]',
+    'backdrop-blur-[26px]',
+    'backdrop-saturate-[140%]',
+    'dark:shadow-[0_40px_120px_-58px_var(--color-effect-glass-shadow)]',
+  ],
+  accent: [
+    ...semanticBorders.elevatedGlass,
+    'bg-[color:color-mix(in_srgb,var(--color-surface-glass-panel)_36%,transparent)]',
+    'dark:bg-[color:color-mix(in_srgb,var(--color-surface-glass-panel)_55%,transparent)]',
+  ],
+  danger: ['border-red-200/70', 'bg-red-50/80', 'dark:border-red-700/60', 'dark:bg-red-900/25'],
+  rounded: {
+    default: uiRadiusRecipes.standard,
+    lg: uiRadiusRecipes.standard,
+    xl: uiRadiusRecipes.standard,
+  },
+  padding: {
+    none: 'p-0',
+    sm: 'p-4',
+    md: 'p-6',
+    lg: 'p-8',
+  },
+} as const;
+
+const glassInsetLight =
+  'shadow-[inset_0_1px_0_rgba(255,255,255,0.45),inset_0_-1px_0_rgba(15,23,42,0.18)]';
+const glassInsetDark =
+  'dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.12),inset_0_-1px_0_rgba(2,6,23,0.5)]';
+
+const glassCardVariants = cva([...glassCardRecipes.base], {
+  variants: {
+    variant: {
+      default: [...glassCardRecipes.default],
+      auth: [...glassCardRecipes.auth],
+      accent: [...glassCardRecipes.accent],
+      danger: [...glassCardRecipes.danger],
     },
-    defaultVariants: {
-      variant: 'default',
-      rounded: 'default',
-      padding: 'md',
+    rounded: {
+      default: glassCardRecipes.rounded.default,
+      lg: glassCardRecipes.rounded.lg,
+      xl: glassCardRecipes.rounded.xl,
     },
-  }
-);
+    padding: {
+      none: glassCardRecipes.padding.none,
+      sm: glassCardRecipes.padding.sm,
+      md: glassCardRecipes.padding.md,
+      lg: glassCardRecipes.padding.lg,
+    },
+  },
+  defaultVariants: {
+    variant: 'default',
+    rounded: 'default',
+    padding: 'md',
+  },
+});
 
 export interface GlassCardProps
   extends React.HTMLAttributes<HTMLDivElement>,
@@ -90,8 +114,7 @@ export function GlassCard({
   beforeContent,
   ...props
 }: GlassCardProps) {
-  const roundedClass =
-    rounded === 'default' ? 'rounded-[2.25rem]' : rounded === 'lg' ? 'rounded-2xl' : 'rounded-3xl';
+  const roundedClass = uiRadiusRecipes.standard;
 
   return (
     <div
@@ -106,9 +129,9 @@ export function GlassCard({
               roundedClass,
               'ring-inset ring-1',
               'ring-white/40',
-              'shadow-[inset_0_1px_0_rgba(255,255,255,0.45),inset_0_-1px_0_rgba(15,23,42,0.18)]',
+              glassInsetLight,
               'dark:ring-white/10',
-              'dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.12),inset_0_-1px_0_rgba(2,6,23,0.5)]'
+              glassInsetDark
             )}
           />
           <div

@@ -1,17 +1,41 @@
-import { AnimatePresence, motion } from 'framer-motion';
-import { Building2, ChevronDown, ChevronRight } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { ChevronDown, ChevronRight, Filter } from 'lucide-react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useAccountFilter } from '@/hooks/useAccountFilter';
-import { cn } from '@/ui/primitives';
+import { Button, cn } from '@/ui/primitives';
+import { appTitleBarRecipes } from '@/ui/primitives/AppTitleBar';
+import {
+  chromeBar,
+  control,
+  border as uiBorderRecipes,
+  effect as uiEffectRecipes,
+  radius as uiRadiusRecipes,
+  surface as uiSurfaceRecipes,
+  text as uiTextRecipes,
+  font as uiTypographyRecipes,
+} from '@/ui/recipes';
+
+const POPOVER_GAP_PX = 8;
 
 interface HeaderAccountFilterProps {
-  scrolled: boolean;
+  triggerStyle?: 'default' | 'icon-only';
 }
 
-export function HeaderAccountFilter({ scrolled }: HeaderAccountFilterProps) {
+type PopoverPosition = {
+  bottom: number;
+  left: number;
+};
+
+export function HeaderAccountFilter({ triggerStyle = 'default' }: HeaderAccountFilterProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [collapsedBanks, setCollapsedBanks] = useState<Set<string>>(new Set());
+  const [mounted, setMounted] = useState(false);
+  const [popoverPosition, setPopoverPosition] = useState<PopoverPosition | null>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
   const {
     isAllAccountsSelected,
     selectedAccountIds,
@@ -34,7 +58,7 @@ export function HeaderAccountFilter({ scrolled }: HeaderAccountFilterProps) {
       return 'No accounts selected';
     }
     if (isAllAccountsSelected) {
-      return 'All accounts';
+      return 'Filter';
     }
     return `${selectedCount} ${selectedCount === 1 ? 'account' : 'accounts'}`;
   })();
@@ -86,205 +110,228 @@ export function HeaderAccountFilter({ scrolled }: HeaderAccountFilterProps) {
     }
   }, [isOpen]);
 
-  return (
-    <div className={cn('relative')}>
-      <button
-        ref={triggerRef}
-        type="button"
-        onClick={() => setIsOpen(!isOpen)}
-        onKeyDown={handleKeyDown}
-        className={cn(
-          'rounded-xl',
-          'border',
-          'border-slate-200',
-          'dark:border-slate-600',
-          'bg-slate-100/80',
-          'dark:bg-slate-700/80',
-          'backdrop-blur-sm',
-          'hover:bg-slate-200',
-          'dark:hover:bg-slate-600',
-          'transition-all',
-          'duration-200',
-          'flex',
-          'items-center',
-          'gap-2',
-          scrolled ? 'px-2.5 py-1 text-xs' : 'px-3 py-1.5 text-sm'
-        )}
-        aria-haspopup="dialog"
-        aria-expanded={isOpen}
-      >
-        <Building2 className={cn('h-4', 'w-4')} />
-        <span>{displayText}</span>
-        <ChevronDown
-          className={cn(
-            'h-4',
-            'w-4',
-            'transition-transform',
-            'duration-200',
-            isOpen && 'rotate-180'
-          )}
-        />
-      </button>
+  useLayoutEffect(() => {
+    if (!isOpen) {
+      return;
+    }
 
-      <AnimatePresence>
-        {isOpen && (
-          <motion.div
-            role="dialog"
-            aria-label="Account filter"
-            onKeyDown={(e) => e.key === 'Escape' && closePopover()}
-            initial={{ opacity: 0, y: -6, scale: 0.96 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -6, scale: 0.96 }}
-            transition={{ duration: 0.18, ease: [0.22, 0.61, 0.36, 1] }}
+    const updatePosition = () => {
+      const trigger = triggerRef.current;
+      if (!trigger) {
+        return;
+      }
+      const triggerRect = trigger.getBoundingClientRect();
+      setPopoverPosition({
+        bottom: window.innerHeight - triggerRect.top + POPOVER_GAP_PX,
+        left: triggerRect.left,
+      });
+    };
+
+    updatePosition();
+    window.addEventListener('scroll', updatePosition, true);
+    window.addEventListener('resize', updatePosition);
+
+    return () => {
+      window.removeEventListener('scroll', updatePosition, true);
+      window.removeEventListener('resize', updatePosition);
+    };
+  }, [isOpen]);
+
+  return (
+    <div className={cn('relative', triggerStyle === 'icon-only' && chromeBar.square)}>
+      {triggerStyle === 'icon-only' ? (
+        <nav
+          className={cn(
+            ...appTitleBarRecipes.pillContainer,
+            ...appTitleBarRecipes.contextPillInset,
+            chromeBar.square,
+            'flex',
+            'shrink-0',
+            'items-center',
+            'justify-center'
+          )}
+          aria-label="Account filter menu"
+        >
+          <Button
+            ref={triggerRef}
+            type="button"
+            onClick={() => setIsOpen(!isOpen)}
+            onKeyDown={handleKeyDown}
+            variant={isOpen ? 'tabActive' : 'tab'}
+            size="inherit"
             className={cn(
-              'absolute',
-              'top-full',
-              'right-0',
-              'mt-2',
-              'w-80',
-              'max-h-96',
-              'flex',
-              'flex-col',
-              'rounded-xl',
-              'border',
-              'border-slate-200',
-              'dark:border-slate-600',
-              'bg-white/95',
-              'dark:bg-slate-800/95',
-              'backdrop-blur-sm',
-              'shadow-lg',
-              'z-50',
-              'origin-top'
+              ...appTitleBarRecipes.contextPillTab,
+              'h-full',
+              'w-full',
+              'min-h-0',
+              'p-0',
+              isOpen ? uiTextRecipes.inverse : uiTextRecipes.muted
             )}
+            aria-haspopup="dialog"
+            aria-expanded={isOpen}
+            aria-label="Filter accounts"
           >
-            <div className={cn('p-4', 'border-b', 'border-slate-200', 'dark:border-slate-700')}>
-              <div className={cn('flex', 'items-center', 'justify-between', 'gap-3')}>
-                <div
-                  className={cn('text-sm', 'font-medium', 'text-slate-900', 'dark:text-slate-100')}
-                >
+            <span className={cn('relative', 'z-10', ...chromeBar.glyphWell)}>
+              <Filter className={chromeBar.glyph} />
+            </span>
+          </Button>
+        </nav>
+      ) : (
+        <Button
+          ref={triggerRef}
+          type="button"
+          onClick={() => setIsOpen(!isOpen)}
+          onKeyDown={handleKeyDown}
+          variant="ghost"
+          size="md"
+          className={cn(
+            uiBorderRecipes.default,
+            ...uiSurfaceRecipes.mutedChip,
+            'backdrop-blur-sm',
+            'shadow-none',
+            uiTextRecipes.body,
+            uiTypographyRecipes.captionStrong
+          )}
+          aria-haspopup="dialog"
+          aria-expanded={isOpen}
+        >
+          <Filter className={control.glyph.md} />
+          <span>{displayText}</span>
+          <ChevronDown
+            className={cn(
+              control.glyph.md,
+              'transition-transform',
+              'duration-200',
+              isOpen && 'rotate-180'
+            )}
+          />
+        </Button>
+      )}
+
+      {mounted &&
+        createPortal(
+          isOpen && popoverPosition ? (
+            <div
+              role="dialog"
+              aria-label="Account filter"
+              onKeyDown={(e) => e.key === 'Escape' && closePopover()}
+              style={{
+                bottom: popoverPosition.bottom,
+                left: popoverPosition.left,
+              }}
+              className={cn(
+                'fixed',
+                'w-80',
+                'max-h-96',
+                'flex',
+                'flex-col',
+                'overflow-hidden',
+                uiRadiusRecipes.standard,
+                'border',
+                ...uiBorderRecipes.floatingChrome,
+                ...uiSurfaceRecipes.floatingChromePanel,
+                ...uiEffectRecipes.glassShadow,
+                'backdrop-blur-md',
+                'backdrop-saturate-[150%]',
+                'z-50'
+              )}
+            >
+              <div className={cn('p-4', 'border-b', ...uiBorderRecipes.divider)}>
+                <div className={cn(uiTypographyRecipes.captionStrong, uiTextRecipes.primary)}>
                   Filter by account
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setSelectedAccountIds(allAccountIds)}
-                  disabled={loading || isAllAccountsSelected || totalAccounts === 0}
-                  className={cn(
-                    'rounded-md',
-                    'px-2',
-                    'py-1',
-                    'text-xs',
-                    'font-medium',
-                    'text-primary-700',
-                    'hover:bg-primary-50',
-                    'disabled:cursor-not-allowed',
-                    'disabled:text-slate-400',
-                    'disabled:hover:bg-transparent',
-                    'dark:text-primary-300',
-                    'dark:hover:bg-primary-950/40',
-                    'dark:disabled:text-slate-500'
-                  )}
-                >
-                  All accounts
-                </button>
               </div>
-            </div>
 
-            <div className={cn('overflow-y-auto', 'flex-1', 'p-4')}>
-              {loading ? (
-                <div className={cn('text-sm', 'text-slate-600', 'dark:text-slate-400')}>
-                  Loading accounts...
-                </div>
-              ) : (
-                <div className={cn('space-y-2')}>
-                  {Object.entries(accountsByBank).map(([bankName, accounts]) => {
-                    const bankAccountIds = accounts.map((account) => account.id);
-                    const allBankAccountsSelected = bankAccountIds.every((id) =>
-                      selectedAccountIds.includes(id)
-                    );
-                    const someBankAccountsSelected = bankAccountIds.some((id) =>
-                      selectedAccountIds.includes(id)
-                    );
-                    const isCollapsed = collapsedBanks.has(bankName);
+              <div className={cn('overflow-y-auto', 'flex-1', 'p-4')}>
+                {loading ? (
+                  <div className={cn(uiTypographyRecipes.caption, uiTextRecipes.muted)}>
+                    Loading accounts...
+                  </div>
+                ) : (
+                  <div className={cn('space-y-2')}>
+                    {Object.entries(accountsByBank).map(([bankName, accounts]) => {
+                      const displayName =
+                        accounts[0]?.institution_name ?? bankName.split('::')[0] ?? bankName;
+                      const bankAccountIds = accounts.map((account) => account.id);
+                      const allBankAccountsSelected = bankAccountIds.every((id) =>
+                        selectedAccountIds.includes(id)
+                      );
+                      const someBankAccountsSelected = bankAccountIds.some((id) =>
+                        selectedAccountIds.includes(id)
+                      );
+                      const isCollapsed = collapsedBanks.has(bankName);
 
-                    return (
-                      <div
-                        key={bankName}
-                        className={cn(
-                          'border-t',
-                          'border-slate-200',
-                          'dark:border-slate-700',
-                          'pt-2',
-                          'first:border-t-0',
-                          'first:pt-0'
-                        )}
-                      >
-                        <div className={cn('flex', 'items-center', 'gap-2')}>
-                          <button
-                            type="button"
-                            onClick={() => toggleBankCollapse(bankName)}
-                            className={cn(
-                              'p-1',
-                              'hover:bg-slate-100',
-                              'dark:hover:bg-slate-700',
-                              'rounded',
-                              'transition-colors'
-                            )}
-                            aria-label={isCollapsed ? `Expand ${bankName}` : `Collapse ${bankName}`}
-                          >
-                            <ChevronRight
+                      return (
+                        <div
+                          key={bankName}
+                          className={cn(
+                            'border-t',
+                            ...uiBorderRecipes.divider,
+                            'pt-2',
+                            'first:border-t-0',
+                            'first:pt-0'
+                          )}
+                        >
+                          <div className={cn('flex', 'items-center', 'gap-2')}>
+                            <button
+                              type="button"
+                              onClick={() => toggleBankCollapse(bankName)}
                               className={cn(
-                                'h-4',
-                                'w-4',
-                                'text-slate-600',
-                                'dark:text-slate-400',
-                                'transition-transform',
-                                !isCollapsed && 'rotate-90'
+                                'p-1',
+                                'hover:bg-[var(--color-surface-hover-row)]',
+                                'dark:hover:bg-[var(--color-surface-hover-row)]',
+                                uiRadiusRecipes.standard,
+                                'transition-all',
+                                'duration-200',
+                                'ease-out',
+                                'active:scale-[0.98]'
+                              )}
+                              aria-label={
+                                isCollapsed ? `Expand ${displayName}` : `Collapse ${displayName}`
+                              }
+                            >
+                              <ChevronRight
+                                className={cn(
+                                  'h-4',
+                                  'w-4',
+                                  uiTextRecipes.muted,
+                                  'transition-transform',
+                                  !isCollapsed && 'rotate-90'
+                                )}
+                              />
+                            </button>
+                            <input
+                              type="checkbox"
+                              id={`bank-${bankName}`}
+                              checked={allBankAccountsSelected}
+                              ref={(input) => {
+                                if (input)
+                                  input.indeterminate =
+                                    someBankAccountsSelected && !allBankAccountsSelected;
+                              }}
+                              onChange={() => toggleBank(bankName)}
+                              className={cn(
+                                'rounded',
+                                ...uiBorderRecipes.control,
+                                'text-primary-600',
+                                'focus:ring-primary-500'
                               )}
                             />
-                          </button>
-                          <input
-                            type="checkbox"
-                            id={`bank-${bankName}`}
-                            checked={allBankAccountsSelected}
-                            ref={(input) => {
-                              if (input)
-                                input.indeterminate =
-                                  someBankAccountsSelected && !allBankAccountsSelected;
-                            }}
-                            onChange={() => toggleBank(bankName)}
-                            className={cn(
-                              'rounded',
-                              'border-slate-300',
-                              'dark:border-slate-600',
-                              'text-primary-600',
-                              'focus:ring-primary-500'
-                            )}
-                          />
-                          <label
-                            htmlFor={`bank-${bankName}`}
-                            className={cn(
-                              'text-sm',
-                              'font-medium',
-                              'text-slate-900',
-                              'dark:text-slate-100',
-                              'flex-1',
-                              'cursor-pointer'
-                            )}
-                          >
-                            {bankName}
-                          </label>
-                        </div>
-
-                        <AnimatePresence initial={false}>
-                          {!isCollapsed && (
-                            <motion.div
-                              key="accounts"
-                              initial={{ opacity: 0, height: 0 }}
-                              animate={{ opacity: 1, height: 'auto' }}
-                              exit={{ opacity: 0, height: 0 }}
-                              transition={{ duration: 0.18, ease: 'easeOut' }}
-                              className={cn('ml-11', 'mt-2', 'space-y-2', 'overflow-hidden')}
+                            <label
+                              htmlFor={`bank-${bankName}`}
+                              className={cn(
+                                uiTypographyRecipes.captionStrong,
+                                uiTextRecipes.primary,
+                                'flex-1',
+                                'cursor-pointer'
+                              )}
                             >
+                              {displayName}
+                            </label>
+                          </div>
+
+                          {!isCollapsed ? (
+                            <div className={cn('ml-11', 'mt-2', 'space-y-2')}>
                               {accounts.map((account) => (
                                 <div
                                   key={account.id}
@@ -297,8 +344,7 @@ export function HeaderAccountFilter({ scrolled }: HeaderAccountFilterProps) {
                                     onChange={() => toggleAccount(account.id)}
                                     className={cn(
                                       'rounded',
-                                      'border-slate-300',
-                                      'dark:border-slate-600',
+                                      ...uiBorderRecipes.control,
                                       'text-primary-600',
                                       'focus:ring-primary-500'
                                     )}
@@ -306,9 +352,8 @@ export function HeaderAccountFilter({ scrolled }: HeaderAccountFilterProps) {
                                   <label
                                     htmlFor={`account-${account.id}`}
                                     className={cn(
-                                      'text-sm',
-                                      'text-slate-600',
-                                      'dark:text-slate-400',
+                                      uiTypographyRecipes.caption,
+                                      uiTextRecipes.muted,
                                       'cursor-pointer'
                                     )}
                                   >
@@ -316,23 +361,23 @@ export function HeaderAccountFilter({ scrolled }: HeaderAccountFilterProps) {
                                   </label>
                                 </div>
                               ))}
-                            </motion.div>
-                          )}
-                        </AnimatePresence>
+                            </div>
+                          ) : null}
+                        </div>
+                      );
+                    })}
+                    {Object.keys(accountsByBank).length === 0 && !loading && (
+                      <div className={cn(uiTypographyRecipes.caption, uiTextRecipes.muted)}>
+                        No accounts available.
                       </div>
-                    );
-                  })}
-                  {Object.keys(accountsByBank).length === 0 && !loading && (
-                    <div className={cn('text-sm', 'text-slate-600', 'dark:text-slate-400')}>
-                      No accounts available.
-                    </div>
-                  )}
-                </div>
-              )}
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
-          </motion.div>
+          ) : null,
+          document.body
         )}
-      </AnimatePresence>
     </div>
   );
 }

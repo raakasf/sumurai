@@ -1,18 +1,19 @@
-use crate::middleware::telemetry_middleware::{attach_encrypted_token_to_current_span, hash_token};
 use crate::models::api_error::ApiErrorResponse;
 use crate::models::auth::AuthError;
 pub use crate::models::auth::{AuthContext, AuthMiddlewareState};
 use crate::services::auth_service::AuthService;
+use crate::utils::auth_cookie::extract_auth_cookie;
 use axum::{
     extract::{Request, State},
-    http::{HeaderMap, StatusCode},
+    http::{header::COOKIE, HeaderMap, StatusCode},
     middleware::Next,
     response::{IntoResponse, Json, Response},
 };
+use tracing::Span;
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
 
-const BEARER_PREFIX: &str = "Bearer ";
-const BEARER_PREFIX_LEN: usize = 7;
+const AUTH_COOKIE_NAME: &str = "auth_token";
 
 pub async fn auth_middleware(
     State(middleware_state): State<AuthMiddlewareState>,
@@ -20,35 +21,31 @@ pub async fn auth_middleware(
     mut request: Request,
     next: Next,
 ) -> Result<Response, Response> {
-    let token = match extract_bearer_token(&headers) {
+    let token = match extract_auth_cookie_token(&headers) {
         Some(token) => token,
         None => {
             tracing::warn!(
-                auth_error_type = "missing_header",
+                auth_error_type = "missing_cookie",
                 path = %request.uri().path(),
                 method = %request.method(),
-                "Authentication failure: Missing Authorization header"
+                "Authentication failure: Missing auth cookie"
             );
             let error_response = ApiErrorResponse::with_code(
                 "UNAUTHORIZED",
-                "Authorization header is required",
-                "MISSING_AUTH_HEADER",
+                "Authentication required: auth_token cookie is missing",
+                "MISSING_AUTH_COOKIE",
             );
             return Err((StatusCode::UNAUTHORIZED, Json(error_response)).into_response());
         }
     };
 
-    let encrypted_token = hash_token(token);
-    attach_encrypted_token_to_current_span(&encrypted_token);
-
-    let auth_context = match extract_user_context(&middleware_state.auth_service, token) {
+    let auth_context = match extract_user_context(&middleware_state.auth_service, &token) {
         Ok(context) => context,
         Err(auth_error) => {
             let (error_message, error_code) = match auth_error {
                 AuthError::InvalidToken => {
                     tracing::warn!(
                         auth_error_type = "invalid_token",
-                        encrypted_token = %encrypted_token,
                         path = %request.uri().path(),
                         method = %request.method(),
                         "Authentication failure: Invalid JWT token"
@@ -58,7 +55,6 @@ pub async fn auth_middleware(
                 AuthError::TokenExpired => {
                     tracing::info!(
                         auth_error_type = "expired_token",
-                        encrypted_token = %encrypted_token,
                         path = %request.uri().path(),
                         method = %request.method(),
                         "Authentication failure: Expired JWT token"
@@ -69,7 +65,6 @@ pub async fn auth_middleware(
                     tracing::error!(
                         auth_error_type = "auth_error",
                         auth_error = ?auth_error,
-                        encrypted_token = %encrypted_token,
                         path = %request.uri().path(),
                         method = %request.method(),
                         "Authentication failure: Unexpected error"
@@ -84,6 +79,9 @@ pub async fn auth_middleware(
         }
     };
 
+    Span::current().record("session_id", auth_context.jwt_id.as_str());
+    Span::current().set_attribute("session_id", auth_context.jwt_id.clone());
+
     match middleware_state
         .cache_service
         .is_session_valid(&auth_context.jwt_id)
@@ -91,7 +89,7 @@ pub async fn auth_middleware(
     {
         Ok(true) => {
             tracing::debug!(
-                encrypted_token = %encrypted_token,
+                session_id = %auth_context.jwt_id,
                 path = %request.uri().path(),
                 method = %request.method(),
                 "Session validated successfully"
@@ -100,7 +98,7 @@ pub async fn auth_middleware(
         Ok(false) => {
             tracing::warn!(
                 auth_error_type = "session_invalid",
-                encrypted_token = %encrypted_token,
+                session_id = %auth_context.jwt_id,
                 path = %request.uri().path(),
                 method = %request.method(),
                 "Authentication failure: Session not found in cache"
@@ -115,7 +113,7 @@ pub async fn auth_middleware(
         Err(e) => {
             tracing::error!(
                 auth_error_type = "session_error",
-                encrypted_token = %encrypted_token,
+                session_id = %auth_context.jwt_id,
                 path = %request.uri().path(),
                 method = %request.method(),
                 error = %e,
@@ -135,17 +133,9 @@ pub async fn auth_middleware(
     Ok(next.run(request).await)
 }
 
-pub fn extract_bearer_token(headers: &HeaderMap) -> Option<&str> {
-    headers
-        .get("authorization")
-        .and_then(|value| value.to_str().ok())
-        .and_then(|auth_header| {
-            if auth_header.starts_with(BEARER_PREFIX) {
-                Some(&auth_header[BEARER_PREFIX_LEN..])
-            } else {
-                None
-            }
-        })
+pub fn extract_auth_cookie_token(headers: &HeaderMap) -> Option<String> {
+    let cookie_header = headers.get(COOKIE)?.to_str().ok()?;
+    extract_auth_cookie(Some(cookie_header), AUTH_COOKIE_NAME)
 }
 
 pub fn extract_user_context(

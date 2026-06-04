@@ -1,217 +1,350 @@
 import { cva } from 'class-variance-authority';
-import { Moon, Settings, Sun } from 'lucide-react';
+import { motion } from 'framer-motion';
+import {
+  ArrowLeftRight,
+  Building2,
+  LayoutDashboard,
+  LogOut,
+  Settings,
+  Target,
+  Wifi,
+  WifiOff,
+} from 'lucide-react';
 import Image from 'next/image';
-import React from 'react';
-import { Button } from './Button';
+import type React from 'react';
+import {
+  appLayout,
+  buttonChrome,
+  chromeBar,
+  control,
+  floatingChromeGlass,
+  border as semanticBorders,
+  effect as semanticEffects,
+  status as semanticStatus,
+  surface as semanticSurfaces,
+  text as semanticTextRecipes,
+  radius as uiRadiusRecipes,
+  font as uiTypographyRecipes,
+} from '@/ui/recipes';
+import { Button, buttonRecipes } from './Button';
+import { IconButton } from './IconButton';
 import { cn } from './utils';
 
-const titleBarVariants = cva(
-  'sticky top-0 z-50 border-b backdrop-blur-sm transition-all duration-200 ease-out',
-  {
-    variants: {
-      state: {
-        unauthenticated: 'bg-white/80 dark:bg-slate-800/80 border-slate-200 dark:border-slate-700',
-        onboarding: 'bg-white/80 dark:bg-slate-800/80 border-slate-200 dark:border-slate-700',
-        authenticated: 'bg-white/80 dark:bg-slate-800/80 border-slate-200 dark:border-slate-700',
-      },
-      scrolled: {
-        true: 'h-14',
-        false: 'h-16',
-      },
+export const appTitleBarRecipes = {
+  base: [
+    'sticky top-0 z-50 border-b backdrop-blur-md backdrop-saturate-[150%]',
+    'pt-[env(safe-area-inset-top)]',
+  ],
+  shell: [...semanticSurfaces.card, ...semanticBorders.divider, ...semanticEffects.glassShadow],
+  logo: {
+    container: ['flex', 'h-full', 'min-h-0', 'items-center', 'gap-2', semanticTextRecipes.primary],
+    image: [
+      'relative',
+      'aspect-square',
+      'shrink-0',
+      'overflow-hidden',
+      chromeBar.height,
+      'w-12',
+      uiRadiusRecipes.standard,
+    ],
+    wordmark: [uiTypographyRecipes.pageTitle, 'leading-none'],
+    fontFamily: { fontFamily: "'Cal Sans', system-ui, sans-serif" },
+  },
+  settingsIdle: buttonChrome.settingsIdle.join(' '),
+  actionIcon: ['shrink-0'],
+  titleBarGrid: [
+    'grid',
+    'grid-cols-[minmax(0,1fr)_auto]',
+    'grid-rows-1',
+    'items-center',
+    'max-md:content-center',
+    'gap-x-3',
+    'min-h-14',
+    'h-14',
+    'md:grid-cols-[auto_minmax(0,1fr)_auto]',
+    'md:gap-4',
+  ],
+  titleBarRow: ['flex', 'h-full', 'min-h-0', 'items-center'],
+  pillContainer: [
+    `flex items-center gap-1 ${uiRadiusRecipes.standard} border`,
+    ...floatingChromeGlass.backdrop,
+    ...floatingChromeGlass.shell,
+  ],
+  pillInset: ['p-2', 'md:p-3'],
+  floatingChromeGutter: [...appLayout.contentShellWithGutter],
+  pillContainerSize: [chromeBar.height],
+  pillTab: [
+    `relative flex h-full min-h-0 items-center justify-center gap-0 ${uiRadiusRecipes.standard}`,
+  ],
+  pillTabSize: ['px-3.5', 'lg:px-3'],
+  contextPillInset: ['py-1.5', 'px-2', 'md:py-2', 'md:px-2.5'],
+  contextPillTab: [
+    'relative',
+    'flex',
+    'h-full',
+    'min-h-0',
+    'items-center',
+    'justify-center',
+    'rounded-lg',
+  ],
+  contextPillTabSize: ['px-2.5'],
+  settingsPillInset: ['p-1.5', 'px-2', 'md:py-1', 'md:px-1.5'],
+  settingsPillSize: ['h-12', 'md:h-9', 'lg:h-8'],
+  pillTabIconWell: [...chromeBar.glyphWell, 'lg:h-4', 'lg:w-4'],
+  pillTabIcon: [chromeBar.glyph, 'lg:h-4', 'lg:w-4'],
+  pillNav: [
+    'hidden',
+    'md:flex',
+    'md:col-start-2',
+    'md:row-start-1',
+    'md:justify-self-center',
+    'md:items-center',
+  ],
+  actions: [
+    'col-start-2',
+    'row-start-1',
+    'flex',
+    'h-full',
+    'min-h-0',
+    'min-w-0',
+    'shrink-0',
+    'items-center',
+    'justify-end',
+    'gap-3',
+    'pl-2',
+    'md:col-start-3',
+    'md:justify-self-end',
+    'md:pl-4',
+    'lg:gap-3',
+  ],
+  statusFrame: ['inline-flex', 'shrink-0', 'items-center', 'justify-center', control.square.md],
+  statusWell: [
+    'inline-flex',
+    'items-center',
+    'justify-center',
+    control.glyph.md,
+    '[&_svg]:block',
+    '[&_svg]:h-full',
+    '[&_svg]:w-full',
+  ],
+} as const;
+
+const titleBarVariants = cva([...appTitleBarRecipes.base], {
+  variants: {
+    state: {
+      unauthenticated: [...appTitleBarRecipes.shell],
+      onboarding: [...appTitleBarRecipes.shell],
+      authenticated: [...appTitleBarRecipes.shell],
     },
-    defaultVariants: {
-      state: 'authenticated',
-      scrolled: false,
-    },
-  }
-);
+  },
+  defaultVariants: {
+    state: 'authenticated',
+  },
+});
 
 type TabKey = 'dashboard' | 'trends' | 'transactions' | 'budgets' | 'accounts' | 'settings';
 
-const TABS: Array<{ key: TabKey; label: string }> = [
-  { key: 'dashboard', label: 'Dashboard' },
-  { key: 'trends', label: 'Trends' },
-  { key: 'transactions', label: 'Transactions' },
-  { key: 'budgets', label: 'Budgets' },
-  { key: 'accounts', label: 'Accounts' },
+export const TABS: Array<{
+  key: Exclude<TabKey, 'settings'>;
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
+}> = [
+  { key: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { key: 'transactions', label: 'Transactions', icon: ArrowLeftRight },
+  { key: 'budgets', label: 'Budgets', icon: Target },
+  { key: 'accounts', label: 'Accounts', icon: Building2 },
 ];
+
+export const APP_TITLE_BAR_ACTIVE_PILL_LAYOUT_ID = 'title-bar-pill-active';
 
 export interface AppTitleBarProps {
   state: 'unauthenticated' | 'onboarding' | 'authenticated';
   scrolled: boolean;
-  themeMode: 'light' | 'dark';
-  onThemeToggle: () => void;
+  isOnline: boolean;
   onLogout?: () => void;
   currentTab?: TabKey;
   onTabChange?: (tab: TabKey) => void;
-  accountFilterNode?: React.ReactNode;
 }
 
-/**
- * Unified title bar component that adapts to app state.
- *
- * @example
- * ```tsx
- * <AppTitleBar
- *   state="authenticated"
- *   scrolled={scrolled}
- *   themeMode={mode}
- *   onThemeToggle={toggle}
- *   onLogout={handleLogout}
- *   currentTab={currentTab}
- *   onTabChange={handleTabChange}
- *   accountFilterNode={<HeaderAccountFilter scrolled={scrolled} />}
- * />
- * ```
- */
-export const AppTitleBar = React.forwardRef<HTMLElement, AppTitleBarProps>(
-  (
-    {
-      state,
-      scrolled,
-      themeMode,
-      onThemeToggle,
-      onLogout,
-      currentTab,
-      onTabChange,
-      accountFilterNode,
-    },
-    ref
-  ) => {
-    return (
-      <header
-        ref={ref}
-        className={titleBarVariants({
-          state,
-          scrolled,
-        })}
+export const AppTitleBar = ({
+  state,
+  isOnline,
+  onLogout,
+  currentTab,
+  onTabChange,
+  ref,
+}: AppTitleBarProps & { ref?: React.RefObject<HTMLElement | null> }) => {
+  const canGoToDashboard = state === 'authenticated' && onTabChange != null;
+
+  const logoMark = (
+    <>
+      <div className={cn(...appTitleBarRecipes.logo.image)}>
+        <Image
+          src="/sumurai-hero.webp"
+          alt="Sumurai Logo"
+          fill
+          sizes="48px"
+          className="object-cover"
+          unoptimized
+        />
+      </div>
+      <span className={cn(...appTitleBarRecipes.logo.wordmark)}>Sumurai</span>
+    </>
+  );
+
+  const logoClassName = cn(...appTitleBarRecipes.logo.container, appTitleBarRecipes.logo.wordmark);
+
+  const primaryTabs = canGoToDashboard ? (
+    <nav className={cn(...appTitleBarRecipes.pillNav)} aria-label="Primary">
+      <div
+        className={cn(
+          ...appTitleBarRecipes.pillContainer,
+          ...appTitleBarRecipes.contextPillInset,
+          ...appTitleBarRecipes.pillContainerSize,
+          'max-w-full',
+          'min-w-0'
+        )}
       >
-        <div
-          className={cn(
-            'px-4',
-            `${scrolled ? 'h-14' : 'h-16'}`,
-            'transition-all',
-            'duration-200',
-            'ease-out'
-          )}
-        >
-          <div className={cn('flex', 'items-center', 'justify-between', 'h-full')}>
-            <div className={cn('flex', 'items-center', 'gap-6')}>
-              <div
-                className={cn(
-                  'flex',
-                  'items-center',
-                  'gap-2',
-                  'text-slate-900',
-                  'dark:text-white',
-                  scrolled ? 'text-xl' : 'text-3xl'
-                )}
-              >
-                <Image
-                  src="/sumurai-logo.jpeg"
-                  alt="Sumurai Logo"
-                  width={scrolled ? 32 : 40}
-                  height={scrolled ? 32 : 40}
-                  className={cn('rounded-md')}
-                  unoptimized
-                />
-                <span style={{ fontFamily: "'Cal Sans', system-ui, sans-serif" }}>Sumurai</span>
-              </div>
-
-              {state === 'authenticated' && (
-                <nav className={cn('flex', 'gap-2')} aria-label="Primary">
-                  {TABS.map(({ key, label }) => (
-                    <Button
-                      key={key}
-                      type="button"
-                      onClick={() => onTabChange?.(key)}
-                      variant={currentTab === key ? 'tabActive' : 'tab'}
-                      className={`${scrolled ? 'px-3 py-1 text-xs' : 'px-4 py-1.5 text-sm'} after:absolute after:inset-[-28%] after:rounded-[999px] after:bg-[radial-gradient(circle_at_35%_30%,rgba(14,165,233,0.16),transparent_62%)] after:opacity-0 after:transition-opacity after:duration-300 hover:after:opacity-90 dark:after:bg-[radial-gradient(circle_at_35%_30%,rgba(56,189,248,0.22),transparent_62%)] ${
-                        currentTab !== key
-                          ? 'border border-slate-200/70 dark:border-white/10 bg-white/70 dark:bg-white/5 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:border-sky-300/50 dark:hover:border-sky-500/60 hover:shadow-[0_14px_32px_-18px_rgba(56,189,248,0.35)]'
-                          : ''
-                      }`}
-                    >
-                      {label}
-                    </Button>
-                  ))}
-                </nav>
+        {TABS.map(({ key, label, icon: Icon }) => (
+          <Button
+            key={key}
+            type="button"
+            onClick={() => onTabChange(key)}
+            variant={currentTab === key ? 'tabActive' : 'tab'}
+            size="inherit"
+            aria-label={label}
+            aria-current={currentTab === key ? 'page' : undefined}
+            className={cn(
+              ...appTitleBarRecipes.contextPillTab,
+              ...appTitleBarRecipes.contextPillTabSize,
+              'shrink-0',
+              'gap-1.5',
+              currentTab === key ? semanticTextRecipes.inverse : semanticTextRecipes.muted
+            )}
+          >
+            {currentTab === key ? (
+              <motion.div
+                layout
+                layoutId={APP_TITLE_BAR_ACTIVE_PILL_LAYOUT_ID}
+                data-slot="active-pill"
+                className={cn('absolute inset-0 rounded-[length:inherit] bg-[inherit]')}
+                transition={{ type: 'spring', stiffness: 400, damping: 35 }}
+              />
+            ) : null}
+            <span className={cn('relative z-10 shrink-0', ...appTitleBarRecipes.pillTabIconWell)}>
+              <Icon className={cn(...appTitleBarRecipes.pillTabIcon)} />
+            </span>
+            <span
+              className={cn(
+                'relative z-10 overflow-hidden whitespace-nowrap transition-[max-width,opacity] duration-300',
+                uiTypographyRecipes.bodyStrong,
+                currentTab === key
+                  ? 'max-w-[5rem] opacity-100 md:max-w-[6rem] lg:max-w-[8rem]'
+                  : 'max-w-0 opacity-0'
               )}
-            </div>
+            >
+              <span className={cn(currentTab === key && 'ml-1.5')}>{label}</span>
+            </span>
+          </Button>
+        ))}
+      </div>
+    </nav>
+  ) : null;
 
-            <div className={cn('flex', 'items-center', 'gap-2')}>
-              {state === 'authenticated' && accountFilterNode && (
-                <>
-                  {accountFilterNode}
-                  <div className={cn('w-px', 'h-6', 'bg-slate-200', 'dark:bg-slate-600')}></div>
-                </>
-              )}
-
-              <Button
+  return (
+    <header ref={ref} className={titleBarVariants({ state })}>
+      <div className={cn(...appLayout.contentShellWithGutter)}>
+        <div className={cn(...appTitleBarRecipes.titleBarGrid)}>
+          <div
+            className={cn('col-start-1', 'row-start-1', ...appTitleBarRecipes.titleBarRow, 'gap-6')}
+          >
+            {canGoToDashboard ? (
+              <button
                 type="button"
-                onClick={onThemeToggle}
-                variant="secondary"
-                size={scrolled ? 'xs' : 'sm'}
+                onClick={() => onTabChange('dashboard')}
                 className={cn(
-                  'rounded-lg',
-                  '!bg-amber-500/80',
-                  'dark:!bg-purple-600/80',
-                  'hover:!bg-amber-600/80',
-                  'dark:hover:!bg-purple-700/80',
-                  '!border',
-                  '!border-amber-400/30',
-                  'dark:!border-purple-500/30',
-                  '!text-white',
-                  'backdrop-blur-sm',
-                  'transition-colors'
+                  logoClassName,
+                  'cursor-pointer',
+                  'rounded-[length:var(--radius-standard)]',
+                  'border-0',
+                  'bg-transparent',
+                  'p-0',
+                  'transition-opacity',
+                  'duration-200',
+                  'hover:opacity-90',
+                  'focus-visible:outline-none',
+                  'focus-visible:ring-2',
+                  'focus-visible:ring-sky-400',
+                  'focus-visible:ring-offset-2',
+                  'focus-visible:ring-offset-white',
+                  'dark:focus-visible:ring-sky-400/80',
+                  'dark:focus-visible:ring-offset-slate-900'
                 )}
-                aria-label="Toggle theme"
-                title="Toggle theme"
+                aria-label="Go to dashboard"
               >
-                {themeMode === 'dark' ? (
-                  <Moon className={cn('h-4', 'w-4')} />
+                {logoMark}
+              </button>
+            ) : (
+              <div className={logoClassName}>{logoMark}</div>
+            )}
+          </div>
+
+          {primaryTabs}
+
+          <div className={cn(...appTitleBarRecipes.actions)}>
+            <span
+              className={cn(...appTitleBarRecipes.statusFrame)}
+              role="status"
+              aria-live="polite"
+              title={isOnline ? 'Online' : 'Offline'}
+            >
+              <span className={cn(...appTitleBarRecipes.statusWell)}>
+                {isOnline ? (
+                  <Wifi className={cn(...semanticStatus.success.icon)} />
                 ) : (
-                  <Sun className={cn('h-4', 'w-4')} />
+                  <WifiOff className={cn(...semanticStatus.warning.icon)} />
                 )}
-              </Button>
+              </span>
+            </span>
 
-              {state === 'authenticated' && onTabChange && (
-                <Button
-                  type="button"
-                  onClick={() => onTabChange('settings')}
-                  variant={currentTab === 'settings' ? 'tabActive' : 'ghost'}
-                  size={scrolled ? 'xs' : 'sm'}
-                  className={cn(
-                    'rounded-xl',
-                    currentTab !== 'settings'
-                      ? 'border border-slate-200 dark:border-slate-600 bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600'
-                      : ''
-                  )}
-                  aria-label="Settings"
-                  title="Settings"
-                >
-                  <Settings className={cn('h-4', 'w-4')} />
-                </Button>
-              )}
+            {state === 'authenticated' && onTabChange && (
+              <IconButton
+                type="button"
+                onClick={() => onTabChange('settings')}
+                variant="ghost"
+                size="md"
+                className={cn(
+                  ...appTitleBarRecipes.actionIcon,
+                  currentTab === 'settings'
+                    ? buttonRecipes.tabActive.join(' ')
+                    : appTitleBarRecipes.settingsIdle
+                )}
+                aria-label="Settings"
+                title="Settings"
+              >
+                <Settings />
+              </IconButton>
+            )}
 
-              {(state === 'onboarding' || state === 'authenticated') && onLogout && (
-                <Button
-                  type="button"
-                  onClick={onLogout}
-                  variant="danger"
-                  size={scrolled ? 'xs' : 'sm'}
-                  title="Logout"
-                >
-                  Logout
-                </Button>
-              )}
-            </div>
+            {(state === 'onboarding' || state === 'authenticated') && onLogout && (
+              <IconButton
+                type="button"
+                onClick={onLogout}
+                variant="danger"
+                size="md"
+                className={cn(...appTitleBarRecipes.actionIcon)}
+                aria-label="Logout"
+                title="Logout"
+              >
+                <LogOut />
+              </IconButton>
+            )}
           </div>
         </div>
-      </header>
-    );
-  }
-);
+      </div>
+    </header>
+  );
+};
 
 AppTitleBar.displayName = 'AppTitleBar';
 

@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "../ui/generated/theme.css";
 
 @custom-variant dark (&:where(.dark, .dark *));
 
@@ -21,6 +22,37 @@
 @layer base {
   h1, h2, h3, h4, h5, h6 {
     font-family: 'Cal Sans', system-ui, sans-serif;
+  }
+
+  body {
+    background-color: var(--color-surface-app-shell);
+  }
+
+  #app-shell {
+    min-height: 100dvh;
+  }
+
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]) {
+    cursor: pointer;
+  }
+
+  button:disabled,
+  [role="button"][aria-disabled="true"] {
+    cursor: not-allowed;
+  }
+}
+
+@media (max-width: 767px) {
+  body[data-provider-sdk-inset='active'] iframe[src*="teller.io/connect"],
+  body[data-provider-sdk-inset='active'] #teller-connect-window,
+  body[data-provider-sdk-inset='active'] iframe[src*="plaid.com"] {
+    top: env(safe-area-inset-top) !important;
+    right: env(safe-area-inset-right) !important;
+    bottom: env(safe-area-inset-bottom) !important;
+    left: env(safe-area-inset-left) !important;
+    width: auto !important;
+    height: auto !important;
   }
 }
 
@@ -46,13 +78,13 @@
 
 @keyframes successFlash {
   0% {
-    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
+    box-shadow: 0 0 0 0 var(--color-effect-success-glow);
   }
   50% {
-    box-shadow: 0 0 0 8px rgba(16, 185, 129, 0);
+    box-shadow: 0 0 0 8px transparent;
   }
   100% {
-    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
+    box-shadow: 0 0 0 0 transparent;
   }
 }
 
@@ -70,12 +102,12 @@
 
 @keyframes errorPulse {
   0%, 100% {
-    border-color: #f87171;
-    box-shadow: 0 0 0 0 rgba(248, 113, 113, 0.7);
+    border-color: var(--color-border-danger);
+    box-shadow: 0 0 0 0 var(--color-effect-danger-glow);
   }
   50% {
-    border-color: #fca5a5;
-    box-shadow: 0 0 0 4px rgba(248, 113, 113, 0);
+    border-color: var(--color-border-danger);
+    box-shadow: 0 0 0 4px transparent;
   }
 }
 
@@ -94,6 +126,28 @@
   }
   to {
     opacity: 0;
+  }
+}
+
+@keyframes modalZoomIn {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.965);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes modalZoomOut {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(10px) scale(0.985);
   }
 }
 
@@ -116,6 +170,78 @@
   to {
     opacity: 0;
     transform: translateX(-20px);
+  }
+}
+
+@keyframes drawerSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(100%);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes drawerSlideOut {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(100%);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .modal-centered-overlay[data-state='open'] {
+    animation: fadeIn 180ms ease-out forwards;
+  }
+
+  .modal-centered-overlay[data-exiting='true'] {
+    animation: fadeOut 160ms ease-in forwards;
+  }
+
+  .modal-centered-content[data-state='open'] {
+    animation: modalZoomIn 220ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  }
+
+  .modal-centered-content[data-exiting='true'] {
+    animation: modalZoomOut 180ms ease-in forwards;
+  }
+
+  .modal-drawer-content[data-state='open'] {
+    animation: drawerSlideIn 320ms cubic-bezier(0.32, 0.72, 0, 1) forwards;
+  }
+
+  .modal-drawer-content[data-state='closed'] {
+    animation: drawerSlideOut 240ms cubic-bezier(0.32, 0.72, 0, 1) forwards;
+  }
+
+  .modal-drawer-content[data-exiting='true'] {
+    animation: drawerSlideOut 240ms cubic-bezier(0.32, 0.72, 0, 1) forwards;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .category-picker-popover[data-state='open'] {
+    animation: fadeIn 200ms ease-out forwards;
+  }
+
+  .category-picker-popover[data-state='closed'] {
+    animation: fadeOut 200ms ease-in forwards;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .modal-centered-overlay,
+  .modal-centered-content,
+  .modal-drawer-overlay,
+  .modal-drawer-content,
+  .category-picker-popover {
+    animation: none !important;
   }
 }
 

@@ -1,16 +1,26 @@
 import { cva, type VariantProps } from 'class-variance-authority';
 import type React from 'react';
+import { text as uiTextRecipes, font as uiTypographyRecipes } from '@/ui/recipes';
 import { cn } from './utils';
 
 const requirementVariants = cva(
   [
-    'inline-flex items-center rounded-full px-2.5 py-1 text-[0.7rem] font-medium transition-colors duration-200',
+    uiTypographyRecipes.badge,
+    'inline-flex items-center rounded-full px-2.5 py-1 transition-colors duration-200',
   ],
   {
     variants: {
       status: {
-        pending: 'bg-white/60 text-slate-500 dark:bg-white/5 dark:text-slate-400',
-        met: 'bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-300',
+        pending: [
+          'bg-[color:color-mix(in_srgb,var(--color-surface-card)_60%,transparent)]',
+          'dark:bg-[color:color-mix(in_srgb,var(--color-border-glass)_5%,transparent)]',
+          uiTextRecipes.subtle,
+        ].join(' '),
+        met: [
+          'bg-[color:color-mix(in_srgb,var(--color-status-success-surface)_70%,transparent)]',
+          'dark:bg-[color:color-mix(in_srgb,var(--color-status-success-icon)_10%,transparent)]',
+          uiTextRecipes.success,
+        ].join(' '),
       },
     },
     defaultVariants: {

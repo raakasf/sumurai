@@ -1,143 +1,119 @@
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useState } from 'react';
+import type { ThemeColors, ThemeMode, ThemePreference } from '@/ui/tokens';
+import { getThemeColors } from '@/ui/tokens';
+import { getSessionThemePreference, setSessionThemePreference } from '@/utils/sessionPreferences';
 
-export type ThemeMode = 'light' | 'dark';
-
-export interface ThemeColors {
-  chart: {
-    primary: string[];
-    grid: string;
-    axis: string;
-    tooltipBg: string;
-    tooltipBorder: string;
-    tooltipText: string;
-    dotFill: string;
-  };
-  semantic: {
-    cash: string;
-    investments: string;
-    property: string;
-    credit: string;
-    loan: string;
-    netWorth: string;
-  };
-}
+export type { ThemePreference } from '@/ui/tokens';
 
 interface ThemeContextType {
+  preference: ThemePreference;
   mode: ThemeMode;
   toggle: () => void;
   setMode: (mode: ThemeMode) => void;
+  setPreference: (preference: ThemePreference) => void;
   colors: ThemeColors;
 }
 
-const lightColors: ThemeColors = {
-  chart: {
-    primary: ['#0ea5e9', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#059669'],
-    grid: '#e2e8f0',
-    axis: '#64748b',
-    tooltipBg: '#ffffff',
-    tooltipBorder: '#e2e8f0',
-    tooltipText: '#0f172a',
-    dotFill: '#ffffff',
-  },
-  semantic: {
-    cash: '#10b981',
-    investments: '#06b6d4',
-    property: '#14b8a6',
-    credit: '#fb7185',
-    loan: '#f59e0b',
-    netWorth: '#8b5cf6',
-  },
-};
-
-const darkColors: ThemeColors = {
-  chart: {
-    primary: ['#38bdf8', '#34d399', '#fbbf24', '#f87171', '#a78bfa', '#10b981'],
-    grid: '#334155',
-    axis: '#94a3b8',
-    tooltipBg: '#1e293b',
-    tooltipBorder: '#475569',
-    tooltipText: '#f8fafc',
-    dotFill: '#0b1220',
-  },
-  semantic: {
-    cash: '#34d399',
-    investments: '#22d3ee',
-    property: '#2dd4bf',
-    credit: '#fb7185',
-    loan: '#fbbf24',
-    netWorth: '#a78bfa',
-  },
-};
-
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 
-const getInitialTheme = (): ThemeMode => {
+const getSystemTheme = (): ThemeMode => {
   if (typeof window === 'undefined') return 'dark';
-
-  const stored = localStorage.getItem('theme');
-  if (stored === 'light' || stored === 'dark') {
-    return stored;
-  }
-
-  if (window.matchMedia?.('(prefers-color-scheme: dark)').matches) {
-    return 'dark';
-  }
-
-  return 'dark';
+  return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 };
 
-const applyTheme = (mode: ThemeMode) => {
+const getInitialPreference = (): ThemePreference => {
+  if (typeof window === 'undefined') return 'system';
+
+  return getSessionThemePreference() ?? 'system';
+};
+
+const resolveThemeMode = (preference: ThemePreference, systemMode: ThemeMode): ThemeMode => {
+  return preference === 'system' ? systemMode : preference;
+};
+
+const applyTheme = (resolvedMode: ThemeMode) => {
   if (typeof window === 'undefined') return;
 
-  if (mode === 'dark') {
-    document.documentElement.classList.add('dark');
-  } else {
-    document.documentElement.classList.remove('dark');
-  }
+  document.documentElement.classList.toggle('dark', resolvedMode === 'dark');
+  document.documentElement.style.colorScheme = resolvedMode;
 };
 
 interface ThemeProviderProps {
   children: ReactNode;
+  initialPreference?: ThemePreference;
 }
 
-export function ThemeProvider({ children }: ThemeProviderProps) {
-  const [mode, setModeState] = useState<ThemeMode>(() => getInitialTheme());
+export function ThemeProvider({ children, initialPreference }: ThemeProviderProps) {
+  const [preference, setPreferenceState] = useState<ThemePreference>(() =>
+    initialPreference !== undefined ? initialPreference : getInitialPreference()
+  );
+  const [systemMode, setSystemMode] = useState<ThemeMode>(() => getSystemTheme());
 
   useEffect(() => {
-    applyTheme(mode);
-    localStorage.setItem('theme', mode);
-  }, [mode]);
+    if (initialPreference !== undefined) {
+      setPreferenceState(initialPreference);
+      if (initialPreference === 'system') {
+        setSystemMode(getSystemTheme());
+      }
+    }
+  }, [initialPreference]);
 
   useEffect(() => {
+    if (typeof window === 'undefined') return;
+    setSessionThemePreference(preference);
+  }, [preference]);
+
+  useEffect(() => {
+    if (preference !== 'system') {
+      return;
+    }
+
     if (typeof window === 'undefined' || !window.matchMedia) return;
 
     const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
-
-    const handleChange = (e: MediaQueryListEvent) => {
-      const stored = localStorage.getItem('theme');
-      if (!stored) {
-        setModeState(e.matches ? 'dark' : 'light');
-      }
+    const syncSystemMode = () => {
+      setSystemMode(mediaQuery.matches ? 'dark' : 'light');
     };
 
+    syncSystemMode();
+
     if (mediaQuery.addEventListener) {
-      mediaQuery.addEventListener('change', handleChange);
-      return () => mediaQuery.removeEventListener('change', handleChange);
+      mediaQuery.addEventListener('change', syncSystemMode);
+      return () => mediaQuery.removeEventListener('change', syncSystemMode);
     }
+
+    return undefined;
+  }, [preference]);
+
+  const resolvedMode = resolveThemeMode(preference, systemMode);
+
+  useEffect(() => {
+    applyTheme(resolvedMode);
+  }, [resolvedMode]);
+
+  const setPreference = useCallback((newPreference: ThemePreference) => {
+    setPreferenceState(newPreference);
+    setSystemMode(newPreference === 'system' ? getSystemTheme() : newPreference);
   }, []);
 
-  const setMode = useCallback((newMode: ThemeMode) => {
-    setModeState(newMode);
+  const setMode = useCallback((mode: ThemeMode) => {
+    setPreferenceState(mode);
+    setSystemMode(mode);
   }, []);
 
   const toggle = useCallback(() => {
-    setModeState((prev) => (prev === 'dark' ? 'light' : 'dark'));
-  }, []);
+    setPreferenceState((currentPreference) => {
+      const currentMode = resolveThemeMode(currentPreference, systemMode);
+      return currentMode === 'dark' ? 'light' : 'dark';
+    });
+  }, [systemMode]);
 
-  const colors = mode === 'dark' ? darkColors : lightColors;
+  const colors = getThemeColors(resolvedMode);
 
   return (
-    <ThemeContext.Provider value={{ mode, toggle, setMode, colors }}>
+    <ThemeContext.Provider
+      value={{ preference, mode: resolvedMode, toggle, setMode, setPreference, colors }}
+    >
       {children}
     </ThemeContext.Provider>
   );

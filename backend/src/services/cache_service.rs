@@ -1,5 +1,8 @@
+//! Redis cache for session-scoped API and connection data.
+
 use crate::models::{
     cache::{CachedBankAccounts, CachedBankConnection, CachedTransaction},
+    ip_ban::AuthIpBanPolicy,
     transaction::Transaction,
 };
 use anyhow::Result;
@@ -7,17 +10,25 @@ use async_trait::async_trait;
 use redis::{aio::ConnectionManager, AsyncCommands, Client};
 use uuid::Uuid;
 
-const TRANSACTIONS_KEY: &str = "synced_transactions";
+const SYNCED_TRANSACTIONS_SUFFIX: &str = "_synced_transactions";
 const ACCESS_TOKEN_SUFFIX: &str = "_access_token";
 const SESSION_TOKEN_SUFFIX: &str = "_session_token";
 const BANK_CONNECTION_SUFFIX: &str = "_bank_connection_";
 const BANK_ACCOUNTS_SUFFIX: &str = "_bank_accounts_";
 const SESSION_VALID_SUFFIX: &str = "_session_valid";
+const BUDGETS_SUFFIX: &str = "_budgets";
 
 const ACCESS_TOKEN_TTL: u64 = 3600;
 const TRANSACTIONS_TTL: u64 = 1800;
 const BANK_CONNECTION_TTL: u64 = 7200;
 const BANK_ACCOUNTS_TTL: u64 = 7200;
+const BUDGETS_TTL: u64 = 300;
+pub const WEBAUTHN_CHALLENGE_TTL: u64 = 300;
+const WEBAUTHN_CHALLENGE_SUFFIX: &str = "_webauthn_challenge";
+
+pub fn synced_transactions_key(jwt_id: &str) -> String {
+    format!("{}{}", jwt_id, SYNCED_TRANSACTIONS_SUFFIX)
+}
 
 #[async_trait]
 #[cfg_attr(test, mockall::automock)]
@@ -26,12 +37,14 @@ pub trait CacheService: Send + Sync {
     async fn set_access_token(&self, jwt_id: &str, item_id: &str, access_token: &str)
         -> Result<()>;
     async fn delete_access_token(&self, jwt_id: &str, item_id: &str) -> Result<()>;
-    async fn add_transaction(&self, transaction: &Transaction) -> Result<()>;
-    async fn clear_transactions(&self) -> Result<()>;
+    async fn add_transaction(&self, jwt_id: &str, transaction: &Transaction) -> Result<()>;
+    async fn clear_transactions(&self, jwt_id: &str) -> Result<()>;
 
     async fn invalidate_pattern(&self, pattern: &str) -> Result<()>;
     async fn set_with_ttl(&self, key: &str, value: &str, ttl_seconds: u64) -> Result<()>;
     async fn get_string(&self, key: &str) -> Result<Option<String>>;
+    async fn get_counter(&self, key: &str) -> Result<Option<i64>>;
+    async fn increment_counter(&self, key: &str, ttl_seconds: u64) -> Result<i64>;
 
     async fn set_jwt_token(&self, jwt_id: &str, token: &str, ttl_seconds: u64) -> Result<()>;
     async fn get_jwt_token(&self, jwt_id: &str) -> Result<Option<String>>;
@@ -60,6 +73,17 @@ pub trait CacheService: Send + Sync {
     async fn invalidate_session(&self, jwt_id: &str) -> Result<()>;
 
     async fn clear_jwt_scoped_data(&self, jwt_id: &str) -> Result<()>;
+
+    async fn is_auth_ip_banned(&self, ip: &str) -> Result<bool>;
+
+    async fn record_auth_rate_limit_exceeded(&self, ip: &str) -> Result<()>;
+
+    async fn get_budgets(&self, jwt_id: &str) -> Result<Option<String>>;
+    async fn set_budgets(&self, jwt_id: &str, budgets_json: &str) -> Result<()>;
+    async fn clear_budgets(&self, jwt_id: &str) -> Result<()>;
+
+    async fn set_webauthn_challenge(&self, session_id: &str, state_json: &str) -> Result<()>;
+    async fn take_webauthn_challenge(&self, session_id: &str) -> Result<Option<String>>;
 }
 
 pub struct RedisCache {
@@ -93,16 +117,16 @@ impl RedisCache {
         format!("{}{}", jwt_id, SESSION_VALID_SUFFIX)
     }
 
-    fn transactions_key(&self) -> String {
-        TRANSACTIONS_KEY.to_string()
-    }
-
     fn jwt_scoped_bank_connection_key(&self, jwt_id: &str, connection_id: Uuid) -> String {
         format!("{}{}{}", jwt_id, BANK_CONNECTION_SUFFIX, connection_id)
     }
 
     fn jwt_scoped_bank_accounts_key(&self, jwt_id: &str, connection_id: Uuid) -> String {
         format!("{}{}{}", jwt_id, BANK_ACCOUNTS_SUFFIX, connection_id)
+    }
+
+    fn budgets_key(&self, jwt_id: &str) -> String {
+        format!("{}{}", jwt_id, BUDGETS_SUFFIX)
     }
 
     pub async fn cache_jwt_scoped_bank_connection(
@@ -167,9 +191,9 @@ impl RedisCache {
         Ok(())
     }
 
-    pub async fn add_transaction(&self, transaction: &Transaction) -> Result<()> {
+    pub async fn add_transaction(&self, jwt_id: &str, transaction: &Transaction) -> Result<()> {
         let mut conn = self.connection_manager.clone();
-        let key = self.transactions_key();
+        let key = synced_transactions_key(jwt_id);
         let result: Option<String> = conn.get(&key).await?;
 
         let mut transactions = match result {
@@ -192,9 +216,9 @@ impl RedisCache {
         Ok(())
     }
 
-    pub async fn clear_transactions(&self) -> Result<()> {
+    pub async fn clear_transactions(&self, jwt_id: &str) -> Result<()> {
         let mut conn = self.connection_manager.clone();
-        let key = self.transactions_key();
+        let key = synced_transactions_key(jwt_id);
         conn.del::<_, ()>(key).await?;
         Ok(())
     }
@@ -218,6 +242,21 @@ impl RedisCache {
         let mut conn = self.connection_manager.clone();
         let result: Option<String> = conn.get(key).await?;
         Ok(result)
+    }
+
+    pub async fn get_counter(&self, key: &str) -> Result<Option<i64>> {
+        let mut conn = self.connection_manager.clone();
+        let result: Option<i64> = conn.get(key).await?;
+        Ok(result)
+    }
+
+    pub async fn increment_counter(&self, key: &str, ttl_seconds: u64) -> Result<i64> {
+        let mut conn = self.connection_manager.clone();
+        let count: i64 = conn.incr(key, 1i64).await?;
+        if count == 1 {
+            conn.expire::<_, ()>(key, ttl_seconds as i64).await?;
+        }
+        Ok(count)
     }
 
     pub async fn set_jwt_token(&self, jwt_id: &str, token: &str, ttl_seconds: u64) -> Result<()> {
@@ -282,6 +321,79 @@ impl RedisCache {
 
         Ok(())
     }
+
+    pub async fn is_auth_ip_banned(&self, ip: &str) -> Result<bool> {
+        let mut conn = self.connection_manager.clone();
+        let key = AuthIpBanPolicy::ban_key(ip);
+        let exists: bool = conn.exists(&key).await?;
+        Ok(exists)
+    }
+
+    pub async fn record_auth_rate_limit_exceeded(&self, ip: &str) -> Result<()> {
+        let mut conn = self.connection_manager.clone();
+        let strike_key = AuthIpBanPolicy::strike_key(ip);
+        let ban_key = AuthIpBanPolicy::ban_key(ip);
+
+        let count: i64 = conn.incr(&strike_key, 1i64).await?;
+
+        if count == 1 {
+            conn.expire::<_, ()>(
+                &strike_key,
+                AuthIpBanPolicy::STRIKE_TRACKING_WINDOW_SECS as i64,
+            )
+            .await?;
+        }
+
+        let lockout_secs = AuthIpBanPolicy::lockout_secs_for_strike_count(count);
+        conn.set_ex::<_, _, ()>(&ban_key, "1", lockout_secs).await?;
+
+        tracing::warn!(
+            ip,
+            strike_count = count,
+            lockout_secs,
+            "Auth endpoint progressive lockout after rate limit"
+        );
+
+        Ok(())
+    }
+
+    pub async fn get_budgets(&self, jwt_id: &str) -> Result<Option<String>> {
+        self.get_string(&self.budgets_key(jwt_id)).await
+    }
+
+    pub async fn set_budgets(&self, jwt_id: &str, budgets_json: &str) -> Result<()> {
+        self.set_with_ttl(&self.budgets_key(jwt_id), budgets_json, BUDGETS_TTL)
+            .await
+    }
+
+    pub async fn clear_budgets(&self, jwt_id: &str) -> Result<()> {
+        let mut conn = self.connection_manager.clone();
+        conn.del::<_, ()>(self.budgets_key(jwt_id)).await?;
+        Ok(())
+    }
+
+    fn webauthn_challenge_key(&self, session_id: &str) -> String {
+        format!("{}{}", session_id, WEBAUTHN_CHALLENGE_SUFFIX)
+    }
+
+    pub async fn set_webauthn_challenge(&self, session_id: &str, state_json: &str) -> Result<()> {
+        self.set_with_ttl(
+            &self.webauthn_challenge_key(session_id),
+            state_json,
+            WEBAUTHN_CHALLENGE_TTL,
+        )
+        .await
+    }
+
+    pub async fn take_webauthn_challenge(&self, session_id: &str) -> Result<Option<String>> {
+        let key = self.webauthn_challenge_key(session_id);
+        let value = self.get_string(&key).await?;
+        if value.is_some() {
+            let mut conn = self.connection_manager.clone();
+            conn.del::<_, ()>(&key).await?;
+        }
+        Ok(value)
+    }
 }
 
 #[async_trait]
@@ -303,12 +415,12 @@ impl CacheService for RedisCache {
         self.delete_access_token(jwt_id, item_id).await
     }
 
-    async fn add_transaction(&self, transaction: &Transaction) -> Result<()> {
-        self.add_transaction(transaction).await
+    async fn add_transaction(&self, jwt_id: &str, transaction: &Transaction) -> Result<()> {
+        self.add_transaction(jwt_id, transaction).await
     }
 
-    async fn clear_transactions(&self) -> Result<()> {
-        self.clear_transactions().await
+    async fn clear_transactions(&self, jwt_id: &str) -> Result<()> {
+        self.clear_transactions(jwt_id).await
     }
 
     async fn invalidate_pattern(&self, pattern: &str) -> Result<()> {
@@ -321,6 +433,14 @@ impl CacheService for RedisCache {
 
     async fn get_string(&self, key: &str) -> Result<Option<String>> {
         self.get_string(key).await
+    }
+
+    async fn get_counter(&self, key: &str) -> Result<Option<i64>> {
+        self.get_counter(key).await
+    }
+
+    async fn increment_counter(&self, key: &str, ttl_seconds: u64) -> Result<i64> {
+        self.increment_counter(key, ttl_seconds).await
     }
 
     async fn set_jwt_token(&self, jwt_id: &str, token: &str, ttl_seconds: u64) -> Result<()> {
@@ -373,5 +493,33 @@ impl CacheService for RedisCache {
 
     async fn clear_jwt_scoped_data(&self, jwt_id: &str) -> Result<()> {
         self.clear_jwt_scoped_data(jwt_id).await
+    }
+
+    async fn is_auth_ip_banned(&self, ip: &str) -> Result<bool> {
+        self.is_auth_ip_banned(ip).await
+    }
+
+    async fn record_auth_rate_limit_exceeded(&self, ip: &str) -> Result<()> {
+        self.record_auth_rate_limit_exceeded(ip).await
+    }
+
+    async fn get_budgets(&self, jwt_id: &str) -> Result<Option<String>> {
+        self.get_budgets(jwt_id).await
+    }
+
+    async fn set_budgets(&self, jwt_id: &str, budgets_json: &str) -> Result<()> {
+        self.set_budgets(jwt_id, budgets_json).await
+    }
+
+    async fn clear_budgets(&self, jwt_id: &str) -> Result<()> {
+        self.clear_budgets(jwt_id).await
+    }
+
+    async fn set_webauthn_challenge(&self, session_id: &str, state_json: &str) -> Result<()> {
+        self.set_webauthn_challenge(session_id, state_json).await
+    }
+
+    async fn take_webauthn_challenge(&self, session_id: &str) -> Result<Option<String>> {
+        self.take_webauthn_challenge(session_id).await
     }
 }

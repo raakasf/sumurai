@@ -1,7 +1,12 @@
 import { MapPin } from 'lucide-react';
-import type React from 'react';
-import { useCurrency } from '@/hooks/useCurrency';
+import React, { type CSSProperties } from 'react';
 import { cn, EmptyState } from '@/ui/primitives';
+import {
+  dashboardCategoryCard,
+  text as uiTextRecipes,
+  font as uiTypographyRecipes,
+} from '@/ui/recipes';
+import { useTheme } from '../../../context/ThemeContext';
 import type { AnalyticsTopMerchantsResponse } from '../../../types/api';
 
 type Props = {
@@ -9,84 +14,45 @@ type Props = {
   className?: string;
 };
 
-export const TopMerchantsList: React.FC<Props> = ({ merchants, className = '' }) => {
-  const { format } = useCurrency();
-  const merchantsToShow = merchants.slice(0, 6);
+const merchantRow = [
+  'flex items-center justify-between p-2',
+  ...dashboardCategoryCard.shellInteractive,
+] as const;
+
+const TopMerchantsListFn: React.FC<Props> = ({ merchants, className = '' }) => {
+  const { colors } = useTheme();
+  const merchantsToShow = merchants.slice(0, 8);
+  const hoverBorderStyle = {
+    '--dashboard-category-card-hover-border': colors.chart.primary[0],
+  } as CSSProperties;
 
   return (
     <div className={cn('h-full', 'flex', 'flex-col', className)}>
       {merchantsToShow.length > 0 ? (
-        <div className={cn('space-y-3')}>
-          {merchantsToShow.map((merchant, index) => (
-            <div
-              key={merchant.name}
-              className={cn(
-                'flex',
-                'items-center',
-                'justify-between',
-                'p-3',
-                'rounded-lg',
-                'border',
-                'border-slate-200',
-                'dark:border-slate-700',
-                'bg-slate-50',
-                'dark:bg-slate-800/50',
-                'transition-all',
-                'duration-300',
-                'hover:border-[#93c5fd]',
-                'dark:hover:border-[#38bdf8]',
-                'hover:-translate-y-[2px]'
-              )}
-            >
-              <div className={cn('flex', 'items-center', 'gap-3', 'min-w-0', 'flex-1')}>
+        <div
+          className={cn(
+            'grid',
+            'grid-cols-[repeat(auto-fill,minmax(max(calc(50%-4px),160px),1fr))]',
+            'gap-[length:var(--spacing-compact-gap)]'
+          )}
+        >
+          {merchantsToShow.map((merchant) => (
+            <div key={merchant.name} className={cn(merchantRow)} style={hoverBorderStyle}>
+              <div className={cn('min-w-0', 'flex-1')}>
                 <div
-                  className={cn(
-                    'flex',
-                    'items-center',
-                    'justify-center',
-                    'w-6',
-                    'h-6',
-                    'rounded-full',
-                    'bg-gradient-to-r',
-                    'from-cyan-400',
-                    'to-emerald-400',
-                    'text-slate-900',
-                    'text-xs',
-                    'font-bold',
-                    'flex-shrink-0'
-                  )}
+                  className={cn(uiTypographyRecipes.bodyStrong, uiTextRecipes.primary, 'truncate')}
                 >
-                  {index + 1}
+                  {merchant.name}
                 </div>
-                <div className="min-w-0">
-                  <div
-                    className={cn(
-                      'text-sm',
-                      'font-medium',
-                      'text-slate-900',
-                      'dark:text-slate-100',
-                      'truncate'
-                    )}
-                  >
-                    {merchant.name}
-                  </div>
-                  <div className={cn('text-xs', 'text-slate-500', 'dark:text-slate-400')}>
-                    {merchant.count} transaction{merchant.count !== 1 ? 's' : ''}
-                  </div>
+                <div className={cn(uiTypographyRecipes.caption, uiTextRecipes.muted)}>
+                  {merchant.count} transaction{merchant.count !== 1 ? 's' : ''}
                 </div>
               </div>
               <div className={cn('text-right', 'flex-shrink-0', 'ml-4')}>
-                <div
-                  className={cn(
-                    'text-sm',
-                    'font-semibold',
-                    'text-slate-900',
-                    'dark:text-slate-100'
-                  )}
-                >
-                  {format(merchant.amount)}
+                <div className={cn(uiTypographyRecipes.bodyStrong, uiTextRecipes.primary)}>
+                  {fmtUSD(merchant.amount)}
                 </div>
-                <div className={cn('text-xs', 'text-slate-500', 'dark:text-slate-400')}>
+                <div className={cn(uiTypographyRecipes.caption, uiTextRecipes.muted)}>
                   {merchant.percentage}%
                 </div>
               </div>
@@ -97,13 +63,13 @@ export const TopMerchantsList: React.FC<Props> = ({ merchants, className = '' })
         <div className={cn('flex', 'items-center', 'justify-center', 'flex-1')}>
           <EmptyState
             icon={MapPin}
-            title="No merchants found"
-            description="No merchant data available for this period"
+            title="No merchants ranked yet"
+            description="No spending recorded for this period."
           />
         </div>
       )}
     </div>
   );
 };
-
+export const TopMerchantsList = React.memo(TopMerchantsListFn);
 export default TopMerchantsList;

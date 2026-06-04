@@ -1,28 +1,47 @@
+import { Search } from 'lucide-react';
 import type React from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { cn } from '@/ui/primitives';
-import { getTagThemeForCategory } from '../../../utils/categories';
+import type { CustomCategory } from '@/types/api';
+import { Button, cn, Input } from '@/ui/primitives';
+import { pillScrollFadeRecipes } from '@/ui/primitives/Pill';
+import {
+  control,
+  placeholder as uiPlaceholderRecipes,
+  text as uiTextRecipes,
+  font as uiTypographyRecipes,
+} from '@/ui/recipes';
+import { formatCategoryName, getTagThemeForCategoryAtIndex } from '../../../utils/categories';
+import DeleteCustomCategoryConfirm from './DeleteCustomCategoryConfirm';
+import { transactionsRowRecipes } from './transactionsRowRecipes';
 
 interface Props {
   search: string;
   onSearch: (s: string) => void;
   categories: string[];
+  customCategories?: CustomCategory[];
   selectedCategory: string | null;
   onSelectCategory: (c: string | null) => void;
   showSearch?: boolean;
   showCategories?: boolean;
+  showFilterLabel?: boolean;
+  scrollFadeSurface?: keyof typeof pillScrollFadeRecipes;
 }
 
 export const TransactionsFilters: React.FC<Props> = ({
   search,
   onSearch,
   categories,
+  customCategories = [],
   selectedCategory,
   onSelectCategory,
   showSearch = true,
   showCategories = true,
+  showFilterLabel = true,
+  scrollFadeSurface = 'card',
 }) => {
+  const scrollFade = pillScrollFadeRecipes[scrollFadeSurface];
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const [deleteTarget, setDeleteTarget] = useState<CustomCategory | null>(null);
   const [showLeftFade, setShowLeftFade] = useState(false);
   const [showRightFade, setShowRightFade] = useState(false);
 
@@ -36,91 +55,94 @@ export const TransactionsFilters: React.FC<Props> = ({
 
   useEffect(() => {
     checkScroll();
-    window.addEventListener('resize', checkScroll);
-    return () => window.removeEventListener('resize', checkScroll);
-  }, [checkScroll]);
 
-  useEffect(() => {
     const el = scrollContainerRef.current;
-    if (!el) return;
+    if (!el) {
+      return;
+    }
 
-    const handleWheel = (event: WheelEvent) => {
-      if (el.scrollWidth <= el.clientWidth) return;
-
-      const delta =
-        Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
-      if (delta === 0) return;
-
-      event.preventDefault();
-      el.scrollLeft += delta;
+    const resizeObserver = new ResizeObserver(() => {
       checkScroll();
-    };
+    });
+    resizeObserver.observe(el);
 
-    el.addEventListener('wheel', handleWheel, { passive: false });
-    return () => el.removeEventListener('wheel', handleWheel);
+    window.addEventListener('resize', checkScroll);
+    return () => {
+      resizeObserver.disconnect();
+      window.removeEventListener('resize', checkScroll);
+    };
   }, [checkScroll]);
 
   useEffect(() => {
-    const frame = window.requestAnimationFrame(checkScroll);
-    return () => window.cancelAnimationFrame(frame);
-  }, [categories, checkScroll]);
+    if (!showCategories) return;
+    const frame = requestAnimationFrame(() => {
+      if (categories.length >= 0) {
+        checkScroll();
+      }
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [categories.length, showCategories, checkScroll]);
+
+  const handleDeleteSuccess = () => {
+    if (deleteTarget && selectedCategory === deleteTarget.display_name) {
+      onSelectCategory(null);
+    }
+    setDeleteTarget(null);
+  };
 
   return (
     <>
       {showSearch && (
-        <div className={cn('relative', 'w-full', 'sm:w-52')}>
-          <input
+        <div className={cn('relative', 'w-full', 'md:w-64')}>
+          <Search
+            className={cn(
+              'pointer-events-none',
+              'absolute',
+              'left-3',
+              'top-1/2',
+              'z-10',
+              control.glyph.md,
+              '-translate-y-1/2',
+              uiTextRecipes.subtle
+            )}
+            aria-hidden
+          />
+          <Input
             value={search}
             onChange={(e) => onSearch(e.target.value)}
-            placeholder="Search transactions..."
-            className={cn(
-              'w-full',
-              'rounded-full',
-              'border',
-              'border-black/10',
-              'bg-white',
-              'px-3.5',
-              'py-1.5',
-              'text-xs',
-              'font-medium',
-              'text-slate-900',
-              'shadow-[0_14px_36px_-28px_rgba(15,23,42,0.45)]',
-              'transition-all',
-              'duration-200',
-              'placeholder:text-slate-400',
-              'focus:outline-none',
-              'focus:ring-2',
-              'focus:ring-sky-400',
-              'focus:ring-offset-2',
-              'focus:ring-offset-white',
-              'dark:border-white/12',
-              'dark:bg-[#111a2f]',
-              'dark:text-white',
-              'dark:placeholder:text-slate-500',
-              'dark:focus:ring-sky-400/80',
-              'dark:focus:ring-offset-[#0f172a]'
-            )}
+            placeholder="Search transactions"
+            variant="default"
+            inputSize="md"
+            className={cn('pl-10', uiPlaceholderRecipes.muted)}
           />
         </div>
       )}
       {showCategories && (
-        <div className={cn('flex', 'w-full', 'items-center', 'gap-3')}>
-          <span
-            className={cn(
-              'flex-shrink-0',
-              'text-[0.65rem]',
-              'font-semibold',
-              'uppercase',
-              'tracking-[0.24em]',
-              'text-slate-500',
-              'transition-colors',
-              'duration-500',
-              'dark:text-slate-400'
-            )}
-          >
-            Filter
-          </span>
-          <div className={cn('relative', 'min-w-0', 'flex-1')}>
+        <div
+          className={cn(
+            'flex',
+            'w-full',
+            'flex-col',
+            'gap-2',
+            'md:flex-row',
+            'md:items-center',
+            'md:gap-3'
+          )}
+        >
+          {showFilterLabel ? (
+            <span
+              className={cn(
+                'flex-shrink-0',
+                uiTypographyRecipes.badge,
+                uiTextRecipes.label,
+                'transition-colors',
+                'duration-500'
+              )}
+            >
+              Filter
+            </span>
+          ) : null}
+          <div className={cn('relative', 'min-w-0', 'w-full', 'md:flex-1', 'overflow-hidden')}>
             <div
               ref={scrollContainerRef}
               onScroll={checkScroll}
@@ -128,11 +150,10 @@ export const TransactionsFilters: React.FC<Props> = ({
                 'scrollbar-hide',
                 'flex',
                 'items-center',
-                'gap-2',
+                'gap-1',
                 'overflow-x-auto',
                 'overscroll-contain',
                 'pb-1',
-                'pl-1',
                 'pt-1'
               )}
               style={{
@@ -141,70 +162,104 @@ export const TransactionsFilters: React.FC<Props> = ({
                 overscrollBehavior: 'contain',
               }}
             >
-              {categories.map((name) => {
+              {categories.map((name, index) => {
                 const isSelected = selectedCategory === name;
-                const theme = getTagThemeForCategory(name);
+                const theme = getTagThemeForCategoryAtIndex(index);
+                const label = formatCategoryName(name);
+                const customCategory = customCategories.find(
+                  (category) => category.display_name === name
+                );
+                const isCustom = Boolean(customCategory);
                 return (
-                  <button
+                  <span
                     key={name}
-                    type="button"
-                    onClick={() => onSelectCategory(isSelected ? null : name)}
-                    className={`inline-flex flex-shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-2 py-0.5 transition-all duration-150 backdrop-blur-sm ring-1 ring-white/60 dark:ring-white/10 ${theme.tag} ${
-                      isSelected
-                        ? `ring-2 ${theme.ring}`
-                        : 'hover:-translate-y-[2px] hover:shadow-lg'
-                    }`}
-                    aria-pressed={isSelected}
-                    title={isSelected ? `Remove filter: ${name}` : `Filter by ${name}`}
+                    className={cn(
+                      'group relative inline-flex items-center',
+                      isCustom && 'transition-all duration-200 ease-out hover:-translate-y-[2px]'
+                    )}
                   >
-                    <span
-                      className={`h-2 w-2 rounded-full shadow-[0_0_0_1px_rgba(255,255,255,0.85)] dark:shadow-[0_0_0_1px_rgba(15,23,42,0.7)] ${theme.dot}`}
-                      aria-hidden="true"
-                    />
-                    {name}
-                  </button>
+                    <Button
+                      type="button"
+                      variant="filterChip"
+                      size="sm"
+                      shape="pill"
+                      onClick={() => onSelectCategory(isSelected ? null : name)}
+                      className={cn(
+                        'whitespace-nowrap',
+                        transactionsRowRecipes.categoryFilterPill,
+                        isCustom &&
+                          'pr-10 hover:translate-y-0 hover:shadow-none group-hover:shadow-lg',
+                        theme.tag,
+                        isSelected
+                          ? ['ring-2', theme.ring]
+                          : 'ring-1 ring-white/60 dark:ring-white/10'
+                      )}
+                      aria-pressed={isSelected}
+                      title={isSelected ? `Remove filter: ${label}` : `Filter by ${label}`}
+                    >
+                      {label}
+                    </Button>
+                    {isCustom && customCategory ? (
+                      <button
+                        type="button"
+                        aria-label={`Delete ${label}`}
+                        title={`Delete ${label}`}
+                        className={cn(
+                          'absolute',
+                          'right-0.5',
+                          'top-1/2',
+                          '-translate-y-1/2',
+                          'inline-flex',
+                          'h-6',
+                          'w-6',
+                          'items-center',
+                          'justify-center',
+                          'border-0',
+                          'bg-transparent',
+                          'p-0',
+                          'text-slate-500',
+                          'text-sm',
+                          'leading-none',
+                          'shadow-none',
+                          'transition-colors',
+                          'duration-200',
+                          'hover:bg-transparent',
+                          'hover:text-slate-700',
+                          'dark:hover:text-slate-300',
+                          'focus-visible:outline-none',
+                          'focus-visible:ring-2',
+                          'focus-visible:ring-[var(--color-border-focus-active)]',
+                          'focus-visible:ring-offset-2',
+                          'focus-visible:ring-offset-white',
+                          'dark:focus-visible:ring-offset-slate-900'
+                        )}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setDeleteTarget(customCategory);
+                        }}
+                      >
+                        <span aria-hidden="true" className={cn('relative', '-top-px')}>
+                          ×
+                        </span>
+                      </button>
+                    ) : null}
+                  </span>
                 );
               })}
             </div>
-            {showLeftFade && (
-              <div
-                className={cn(
-                  'pointer-events-none',
-                  'absolute',
-                  'bottom-0',
-                  'left-0',
-                  'top-0',
-                  'w-8',
-                  'bg-gradient-to-r',
-                  'from-white',
-                  'to-transparent',
-                  'transition-opacity',
-                  'duration-200',
-                  'dark:from-[#0f172a]'
-                )}
-              />
-            )}
-            {showRightFade && (
-              <div
-                className={cn(
-                  'pointer-events-none',
-                  'absolute',
-                  'bottom-0',
-                  'right-0',
-                  'top-0',
-                  'w-8',
-                  'bg-gradient-to-l',
-                  'from-white',
-                  'to-transparent',
-                  'transition-opacity',
-                  'duration-200',
-                  'dark:from-[#0f172a]'
-                )}
-              />
-            )}
+            {showLeftFade ? <div className={scrollFade.left} /> : null}
+            {showRightFade ? <div className={scrollFade.right} /> : null}
           </div>
         </div>
       )}
+      {deleteTarget ? (
+        <DeleteCustomCategoryConfirm
+          open
+          category={deleteTarget}
+          onRequestClose={() => setDeleteTarget(null)}
+          onSuccess={handleDeleteSuccess}
+        />
+      ) : null}
     </>
   );
 };

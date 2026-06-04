@@ -1,8 +1,10 @@
+import { expect } from 'bun:test';
 import {
   ApiClient,
   ApiError,
   AuthenticationError,
   ConflictError,
+  DEFAULT_API_BASE,
   ForbiddenError,
   NetworkError,
   NotFoundError,
@@ -12,17 +14,43 @@ import {
 import { AuthService } from '@/services/authService';
 import { setupTestBoundaries } from '../setup/setupTestBoundaries';
 
+expect.extend({
+  toHaveBeenCalledOnce(received: jest.Mock | jest.Spied<any>) {
+    const calls = (received as jest.Mock).mock?.calls?.length ?? 0;
+    const pass = calls === 1;
+    return {
+      pass,
+      message: () => `expected mock to have been called once, but was called ${calls} times`,
+    };
+  },
+});
+
 describe('ApiClient with Injected IHttpClient', () => {
   let mockHttp: any;
+  let setTimeoutSpy: ReturnType<typeof jest.spyOn>;
 
   beforeEach(() => {
     jest.clearAllMocks();
+    setTimeoutSpy = jest.spyOn(globalThis, 'setTimeout').mockImplementation(((
+      handler: TimerHandler
+    ) => {
+      if (typeof handler === 'function') {
+        handler();
+      }
+      return 0 as unknown as ReturnType<typeof setTimeout>;
+    }) as unknown as typeof setTimeout);
     const boundaries = setupTestBoundaries();
     mockHttp = boundaries.http;
-    jest.spyOn(AuthService, 'getToken').mockReturnValue('mock-token');
-    jest.spyOn(AuthService, 'storeToken');
     jest.spyOn(AuthService, 'clearToken');
     ApiClient.setTestMaxRetries(0);
+  });
+
+  it('defaults to same-origin api routing when no override is provided', () => {
+    expect(DEFAULT_API_BASE).toBe('/api');
+  });
+
+  afterEach(() => {
+    setTimeoutSpy.mockRestore();
   });
 
   describe('Basic HTTP Methods', () => {
@@ -44,6 +72,21 @@ describe('ApiClient with Injected IHttpClient', () => {
       expect(mockHttp.post).toHaveBeenCalledWith('/test', { data: 'test' }, expect.any(Object));
     });
 
+    it('should make multipart POST requests successfully', async () => {
+      mockHttp.postFormData.mockResolvedValueOnce({ imported: true });
+      const formData = new FormData();
+      formData.append('account_id', 'account-123');
+
+      const result = await ApiClient.postFormData('/transactions/import', formData);
+
+      expect(result).toEqual({ imported: true });
+      expect(mockHttp.postFormData).toHaveBeenCalledWith(
+        '/transactions/import',
+        formData,
+        expect.any(Object)
+      );
+    });
+
     it('should make PUT requests successfully', async () => {
       mockHttp.put.mockResolvedValueOnce({ updated: true });
 
@@ -61,12 +104,24 @@ describe('ApiClient with Injected IHttpClient', () => {
       expect(result).toEqual({});
       expect(mockHttp.delete).toHaveBeenCalledWith('/test', expect.any(Object));
     });
+
+    it('should make GET blob requests successfully', async () => {
+      const blob = new Blob(['exported'], { type: 'text/csv' });
+      mockHttp.getBlob.mockResolvedValueOnce({ blob, filename: 'sumurai-export-20240601.csv' });
+
+      const result = await ApiClient.getBlob('/export?format=csv');
+
+      expect(result).toEqual({ blob, filename: 'sumurai-export-20240601.csv' });
+      expect(mockHttp.getBlob).toHaveBeenCalledWith('/export?format=csv', expect.any(Object));
+    });
   });
 
   describe('Authentication Integration', () => {
     it('should handle 401 responses with token refresh', async () => {
       jest.spyOn(AuthService, 'refreshToken').mockResolvedValueOnce({
-        token: 'new-token',
+        user_id: 'user-123',
+        expires_at: '2025-12-31T00:00:00Z',
+        onboarding_completed: true,
       });
 
       mockHttp.get
@@ -77,7 +132,6 @@ describe('ApiClient with Injected IHttpClient', () => {
 
       expect(result).toEqual({ data: 'success' });
       expect(AuthService.refreshToken).toHaveBeenCalledOnce();
-      expect(AuthService.storeToken).toHaveBeenCalledWith('new-token');
     });
 
     it('should clear token when refresh fails', async () => {
@@ -87,6 +141,53 @@ describe('ApiClient with Injected IHttpClient', () => {
 
       await expect(ApiClient.get('/test')).rejects.toThrow(AuthenticationError);
       expect(AuthService.clearToken).toHaveBeenCalledOnce();
+    });
+
+    it('should not refresh token when passkey login finish returns 401', async () => {
+      const refreshSpy = jest.spyOn(AuthService, 'refreshToken');
+      mockHttp.post.mockRejectedValueOnce(new AuthenticationError());
+
+      await expect(
+        ApiClient.post('/auth/passkey/login/finish', {
+          session_id: 'session-1',
+          response: {},
+        })
+      ).rejects.toThrow(AuthenticationError);
+
+      expect(refreshSpy).not.toHaveBeenCalled();
+    });
+
+    it('should clear token when retry after refresh receives another 401', async () => {
+      jest.spyOn(AuthService, 'refreshToken').mockResolvedValueOnce({
+        user_id: 'user-123',
+        expires_at: '2025-12-31T00:00:00Z',
+        onboarding_completed: true,
+      });
+
+      mockHttp.get
+        .mockRejectedValueOnce(new AuthenticationError())
+        .mockRejectedValueOnce(new AuthenticationError());
+
+      await expect(ApiClient.get('/test')).rejects.toThrow(AuthenticationError);
+      expect(AuthService.clearToken).toHaveBeenCalledOnce();
+    });
+
+    it('should refresh token for blob requests after a 401 response', async () => {
+      jest.spyOn(AuthService, 'refreshToken').mockResolvedValueOnce({
+        user_id: 'user-123',
+        expires_at: '2025-12-31T00:00:00Z',
+        onboarding_completed: true,
+      });
+
+      const blob = new Blob(['exported'], { type: 'text/csv' });
+      mockHttp.getBlob
+        .mockRejectedValueOnce(new AuthenticationError())
+        .mockResolvedValueOnce({ blob, filename: 'sumurai-export-20240601.csv' });
+
+      const result = await ApiClient.getBlob('/export?format=csv');
+
+      expect(result).toEqual({ blob, filename: 'sumurai-export-20240601.csv' });
+      expect(AuthService.refreshToken).toHaveBeenCalledOnce();
     });
   });
 
@@ -175,6 +276,25 @@ describe('ApiClient with Injected IHttpClient', () => {
       }
     });
 
+    it('dispatches enrollment-required event when passkey enrollment is needed', async () => {
+      const dispatched: Event[] = [];
+      const handler = (event: Event) => dispatched.push(event);
+      window.addEventListener('sumurai:enrollment-required', handler);
+
+      mockHttp.get.mockRejectedValueOnce(
+        new ForbiddenError(
+          'Passkey enrollment is required before continuing',
+          'passkey_enrollment_required'
+        )
+      );
+
+      await expect(ApiClient.get('/budgets')).rejects.toBeInstanceOf(ForbiddenError);
+      expect(dispatched).toHaveLength(1);
+      expect(dispatched[0].type).toBe('sumurai:enrollment-required');
+
+      window.removeEventListener('sumurai:enrollment-required', handler);
+    });
+
     it('should throw NetworkError for network failures', async () => {
       mockHttp.get
         .mockRejectedValueOnce(new Error('Failed to fetch'))
@@ -206,21 +326,71 @@ describe('ApiClient with Injected IHttpClient', () => {
       expect(result).toEqual({ data: 'success' });
       expect(mockHttp.get).toHaveBeenCalledTimes(2);
     });
+
+    it('should not retry non-retryable client errors', async () => {
+      mockHttp.get.mockRejectedValueOnce(new ApiError(400, 'Invalid request'));
+
+      await expect(ApiClient.get('/test')).rejects.toThrow(ApiError);
+      expect(mockHttp.get).toHaveBeenCalledOnce();
+    });
+
+    it('should not retry rate-limited responses', async () => {
+      mockHttp.post.mockRejectedValueOnce(new ApiError(429, 'Sync is rate-limited'));
+
+      await expect(ApiClient.post('/providers/sync-transactions', {})).rejects.toThrow(ApiError);
+      expect(mockHttp.post).toHaveBeenCalledOnce();
+    });
+
+    it('should retry POST requests on transient errors', async () => {
+      mockHttp.post
+        .mockRejectedValueOnce(new Error('Request timeout'))
+        .mockResolvedValueOnce({ success: true });
+
+      const result = await ApiClient.post('/test', { data: 'test' });
+
+      expect(result).toEqual({ success: true });
+      expect(mockHttp.post).toHaveBeenCalledTimes(2);
+    });
+
+    it('should retry multipart POST requests on transient errors', async () => {
+      const formData = new FormData();
+      mockHttp.postFormData
+        .mockRejectedValueOnce(new Error('Request timeout'))
+        .mockResolvedValueOnce({ success: true });
+
+      const result = await ApiClient.postFormData('/transactions/import', formData);
+
+      expect(result).toEqual({ success: true });
+      expect(mockHttp.postFormData).toHaveBeenCalledTimes(2);
+    });
+
+    it('should throw NetworkError after exhausting retries', async () => {
+      mockHttp.get
+        .mockRejectedValueOnce(new Error('Network error'))
+        .mockRejectedValueOnce(new Error('Network error'))
+        .mockRejectedValueOnce(new Error('Network error'));
+
+      await expect(ApiClient.get('/test')).rejects.toThrow(NetworkError);
+      expect(mockHttp.get).toHaveBeenCalledTimes(3);
+    });
   });
 
   describe('Request Authorization', () => {
-    it('should include auth token in requests', async () => {
+    it('should not inject auth tokens into requests', async () => {
       mockHttp.get.mockResolvedValueOnce({ data: 'success' });
-      jest.spyOn(AuthService, 'getToken').mockReturnValue('my-token');
 
       await ApiClient.get('/protected');
 
-      expect(mockHttp.get).toHaveBeenCalledWith('/protected', expect.any(Object));
+      expect(mockHttp.get).toHaveBeenCalledWith(
+        '/protected',
+        expect.objectContaining({
+          headers: expect.not.objectContaining({ Authorization: expect.any(String) }),
+        })
+      );
     });
 
     it('should handle requests without auth token', async () => {
       mockHttp.get.mockResolvedValueOnce({ data: 'success' });
-      jest.spyOn(AuthService, 'getToken').mockReturnValue(null);
 
       await ApiClient.get('/public');
 

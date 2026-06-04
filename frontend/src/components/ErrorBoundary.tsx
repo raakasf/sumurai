@@ -4,6 +4,7 @@ import type React from 'react';
 import { Component, type ErrorInfo, type ReactNode } from 'react';
 import { Button, GlassCard } from '@/ui/primitives';
 import { cn } from '@/ui/primitives/utils';
+import { text as uiTextRecipes, font as uiTypographyRecipes } from '@/ui/recipes';
 import { ApiError, AuthenticationError } from '../services/ApiClient';
 
 interface Props {
@@ -52,7 +53,9 @@ export class ErrorBoundary extends Component<Props, State> {
       });
     }
 
-    console.error('ErrorBoundary caught an error:', error, errorInfo);
+    if (!import.meta.env?.VITEST) {
+      console.error('ErrorBoundary caught an error:', error, errorInfo);
+    }
   }
 
   private getErrorType(error: Error): ErrorTone {
@@ -132,13 +135,11 @@ export class ErrorBoundary extends Component<Props, State> {
         className={cn('space-y-5', 'text-center')}
       >
         <div className={cn('flex', 'justify-center')}>
-          <Icon className={cn('h-10', 'w-10', 'text-slate-600', 'dark:text-slate-400')} />
+          <Icon className={cn('h-10', 'w-10', uiTextRecipes.muted)} />
         </div>
         <div className="space-y-2">
-          <h2 className={cn('text-xl', 'font-semibold', 'text-slate-900', 'dark:text-white')}>
-            {title}
-          </h2>
-          <p className={cn('text-sm', 'text-slate-600', 'dark:text-slate-300')}>{message}</p>
+          <h2 className={cn(uiTypographyRecipes.cardTitle, uiTextRecipes.primary)}>{title}</h2>
+          <p className={cn(uiTypographyRecipes.body, uiTextRecipes.body)}>{message}</p>
         </div>
         {actions && (
           <div className={cn('flex', 'flex-wrap', 'justify-center', 'gap-3')}>{actions}</div>
@@ -218,7 +219,13 @@ export class ErrorBoundary extends Component<Props, State> {
   render() {
     if (this.state.hasError) {
       return (
-        <div className={cn('min-h-screen p-4', 'bg-slate-100 dark:bg-slate-900')}>
+        <div
+          className={cn(
+            'min-h-screen p-4',
+            'bg-slate-100 dark:bg-slate-900',
+            uiTextRecipes.primary
+          )}
+        >
           <div className={cn('flex', 'h-full', 'items-center', 'justify-center')}>
             {this.renderErrorContent()}
           </div>

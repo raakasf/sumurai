@@ -12,6 +12,7 @@ use serde_json::json;
     "id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
     "user_id": "ffffffff-1111-2222-3333-444444444444",
     "item_id": "item-123",
+    "provider": "plaid",
     "is_connected": true,
     "last_sync_at": "2024-01-15T12:00:00Z",
     "connected_at": "2024-01-10T09:00:00Z",
@@ -29,6 +30,7 @@ pub struct ProviderConnection {
     pub id: Uuid,
     pub user_id: Uuid,
     pub item_id: String,
+    pub provider: String,
     pub is_connected: bool,
     pub last_sync_at: Option<DateTime<Utc>>,
     pub connected_at: Option<DateTime<Utc>>,
@@ -54,27 +56,15 @@ pub struct ExchangeTokenRequest {
     pub public_token: String,
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
-#[schema(example = json!({
-    "provider": "teller",
-    "access_token": "access-sandbox-xyz",
-    "enrollment_id": "enroll-123",
-    "institution_name": "Teller Demo Bank"
-}))]
-pub struct ProviderConnectRequest {
-    pub provider: String,
-    pub access_token: String,
-    pub enrollment_id: String,
-    pub institution_name: Option<String>,
-}
-
 #[derive(Deserialize, Serialize, ToSchema)]
 #[schema(example = json!({"connection_id": "connection-uuid"}))]
 pub struct SyncTransactionsRequest {
     pub connection_id: Option<String>,
+    pub client_date: String,
+    pub client_timezone: String,
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize, Serialize, ToSchema)]
 #[schema(example = json!({"connection_id": "connection-uuid"}))]
 pub struct DisconnectRequest {
     pub connection_id: String,
@@ -101,16 +91,15 @@ pub struct ProviderSelectResponse {
 
 #[derive(Debug, Serialize, ToSchema)]
 #[schema(example = json!({
-    "available_providers": ["plaid", "teller"],
-    "default_provider": "teller",
+    "available_providers": ["plaid", "teller", "simplefin"],
     "user_provider": "teller",
     "teller_application_id": "app-123",
     "teller_environment": "sandbox"
 }))]
 pub struct ProviderInfoResponse {
     pub available_providers: Vec<String>,
-    pub default_provider: String,
-    pub user_provider: String,
+    #[schema(value_type = Option<String>)]
+    pub user_provider: Option<String>,
     #[schema(value_type = Option<String>)]
     pub teller_application_id: Option<String>,
     pub teller_environment: String,
@@ -131,6 +120,7 @@ impl ProviderConnection {
             id: Uuid::new_v4(),
             user_id,
             item_id: item_id.to_string(),
+            provider: String::new(),
             is_connected: false,
             last_sync_at: None,
             connected_at: None,
@@ -177,6 +167,7 @@ pub struct ProviderConnectionStatus {
     pub last_sync_at: Option<String>,
     pub institution_name: Option<String>,
     pub connection_id: Option<String>,
+    pub item_id: Option<String>,
     pub transaction_count: i32,
     pub account_count: i32,
     pub sync_in_progress: bool,
@@ -200,11 +191,14 @@ pub struct ProviderStatusResponse {
     pub connections: Vec<ProviderConnectionStatus>,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Deserialize, Serialize, ToSchema)]
 #[schema(example = json!({"connection_id": "connection-uuid", "institution_name": "Demo Bank"}))]
 pub struct ProviderConnectResponse {
     pub connection_id: String,
     pub institution_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub simplefin_institutions_requiring_auth:
+        Option<Vec<crate::models::simplefin::SimpleFinInstitutionAuthRequired>>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -212,13 +206,15 @@ pub struct ProviderConnectResponse {
     "access_token": "access-sandbox-xyz",
     "item_id": "item-123",
     "institution_id": "ins_123",
-    "institution_name": "Demo Bank"
+    "institution_name": "Demo Bank",
+    "connection_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 }))]
 pub struct ExchangeTokenResponse {
     pub access_token: String,
     pub item_id: String,
     pub institution_id: Option<String>,
     pub institution_name: String,
+    pub connection_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -249,7 +245,7 @@ pub struct DataCleared {
     pub cache_keys: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct LatestAccountBalance {
     pub account_id: Uuid,
     pub institution_id: String,

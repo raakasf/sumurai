@@ -1,6 +1,7 @@
 import { AlertTriangle, Loader2 } from 'lucide-react';
 import type React from 'react';
 import { cn } from '@/ui/primitives';
+import { text as uiTextRecipes, font as uiTypographyRecipes } from '@/ui/recipes';
 import { Alert, Button, GlassCard, Modal } from '../ui/primitives';
 
 interface Account {
@@ -55,7 +56,7 @@ export const DisconnectModal: React.FC<DisconnectModalProps> = ({
           icon={<AlertTriangle className={cn('h-5', 'w-5')} />}
           className="text-left"
         >
-          <p className={cn('text-sm', 'text-slate-600', 'dark:text-slate-300')}>
+          <p className={cn(uiTypographyRecipes.body, uiTextRecipes.body)}>
             This will remove {accountText} and related transactions from your dashboard. This action
             cannot be undone.
           </p>

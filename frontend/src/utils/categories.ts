@@ -1,117 +1,190 @@
+/**
+ * Helpers for working with transaction categories.
+ */
+
+import type { CustomCategory } from '@/types/api';
+import { getCategoryAccent, getCategoryAccentByIndex } from '@/ui/tokens';
+
+const SYSTEM_CATEGORY_LABELS: Record<string, string> = {
+  BANK_FEES: 'Bank Fees',
+  ENTERTAINMENT: 'Entertainment',
+  FOOD_AND_DRINK: 'Food & Drink',
+  GENERAL_MERCHANDISE: 'Merch',
+  GENERAL_SERVICES: 'Services',
+  GOVERNMENT_AND_NON_PROFIT: 'Govt & Non Profit',
+  HOME_IMPROVEMENT: 'Home',
+  INCOME: 'Income',
+  LOAN_PAYMENTS: 'Loan Payments',
+  MEDICAL: 'Medical',
+  OTHER: 'Other',
+  PERSONAL_CARE: 'Personal Care',
+  RENT_AND_UTILITIES: 'Bills',
+  SHOPPING: 'Shopping',
+  TRANSFER_IN: 'Transfer In',
+  TRANSFER_OUT: 'Transfer Out',
+  TRANSPORTATION: 'Transport',
+  TRAVEL: 'Travel',
+};
+
+export const SYSTEM_CATEGORY_SLUGS = [
+  'BANK_FEES',
+  'ENTERTAINMENT',
+  'FOOD_AND_DRINK',
+  'GENERAL_MERCHANDISE',
+  'GENERAL_SERVICES',
+  'GOVERNMENT_AND_NON_PROFIT',
+  'HOME_IMPROVEMENT',
+  'INCOME',
+  'LOAN_PAYMENTS',
+  'MEDICAL',
+  'OTHER',
+  'PERSONAL_CARE',
+  'RENT_AND_UTILITIES',
+  'SHOPPING',
+  'TRANSFER_IN',
+  'TRANSFER_OUT',
+  'TRANSPORTATION',
+  'TRAVEL',
+] as const;
+
 export function formatCategoryName(categoryPrimary: string | undefined | null): string {
   if (!categoryPrimary) return 'Other';
+  const key = categoryPrimary.trim().replace(/\s+/g, '_').toUpperCase();
+  const override = SYSTEM_CATEGORY_LABELS[key];
+  if (override) {
+    return override;
+  }
   return categoryPrimary
     .trim()
     .split(/[_\s]+/)
-    .filter(Boolean)
     .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
     .join(' ');
 }
 
-export function isSpendingExcludedCategory(category: string | undefined | null): boolean {
-  const key = (category || '')
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]/g, '');
-
-  return [
-    'creditcardbill',
-    'creditcardbills',
-    'creditcardpayment',
-    'creditcardpayments',
-    'investment',
-    'investments',
-    'transferin',
-    'transferout',
-  ].includes(key);
+export function longestFormattedCategoryLabel(
+  names: readonly string[] = SYSTEM_CATEGORY_SLUGS
+): string {
+  return names.reduce((longest, name) => {
+    const label = formatCategoryName(name);
+    return label.length > longest.length ? label : longest;
+  }, '');
 }
 
-const PILL_TYPOGRAPHY = 'text-[0.6rem] font-bold uppercase tracking-[0.18em]';
+export function mobileCategoryChipWidthRem(longestLabel: string): string {
+  const contentRem = longestLabel.length * 0.48;
+  const chromeRem = 1.65;
+  return `${(contentRem + chromeRem).toFixed(2)}rem`;
+}
 
-const TAG_THEMES = [
-  {
-    key: 'sky',
-    tag: `${PILL_TYPOGRAPHY} text-slate-800 dark:text-sky-100 border border-sky-200/70 dark:border-sky-400/30 shadow-[0_18px_52px_-34px_rgba(14,165,233,0.55)] bg-[linear-gradient(130deg,_rgba(14,165,233,0.24),_rgba(14,165,233,0.08))] dark:bg-[linear-gradient(130deg,_rgba(56,189,248,0.18),_rgba(56,189,248,0.06))]`,
-    dot: 'bg-sky-500/90 dark:bg-sky-300/85',
-    ring: 'ring-sky-400',
-    ringHex: '#38bdf8',
-  },
-  {
-    key: 'emerald',
-    tag: `${PILL_TYPOGRAPHY} text-slate-800 dark:text-emerald-100 border border-emerald-200/70 dark:border-emerald-400/30 shadow-[0_18px_52px_-34px_rgba(16,185,129,0.55)] bg-[linear-gradient(130deg,_rgba(16,185,129,0.26),_rgba(16,185,129,0.08))] dark:bg-[linear-gradient(130deg,_rgba(34,197,94,0.2),_rgba(34,197,94,0.07))]`,
-    dot: 'bg-emerald-500/90 dark:bg-emerald-300/80',
-    ring: 'ring-emerald-400',
-    ringHex: '#34d399',
-  },
-  {
-    key: 'cyan',
-    tag: `${PILL_TYPOGRAPHY} text-slate-800 dark:text-cyan-100 border border-cyan-200/70 dark:border-cyan-400/30 shadow-[0_18px_52px_-34px_rgba(6,182,212,0.52)] bg-[linear-gradient(130deg,_rgba(6,182,212,0.25),_rgba(6,182,212,0.08))] dark:bg-[linear-gradient(130deg,_rgba(34,211,238,0.18),_rgba(34,211,238,0.06))]`,
-    dot: 'bg-cyan-500/90 dark:bg-cyan-300/80',
-    ring: 'ring-cyan-400',
-    ringHex: '#22d3ee',
-  },
-  {
-    key: 'violet',
-    tag: `${PILL_TYPOGRAPHY} text-slate-800 dark:text-violet-100 border border-violet-200/70 dark:border-violet-400/30 shadow-[0_18px_52px_-34px_rgba(139,92,246,0.54)] bg-[linear-gradient(130deg,_rgba(139,92,246,0.24),_rgba(139,92,246,0.08))] dark:bg-[linear-gradient(130deg,_rgba(167,139,250,0.2),_rgba(167,139,250,0.06))]`,
-    dot: 'bg-violet-500/90 dark:bg-violet-300/80',
-    ring: 'ring-violet-400',
-    ringHex: '#a78bfa',
-  },
-  {
-    key: 'amber',
-    tag: `${PILL_TYPOGRAPHY} text-slate-800 dark:text-amber-100 border border-amber-200/70 dark:border-amber-400/30 shadow-[0_18px_52px_-34px_rgba(245,158,11,0.5)] bg-[linear-gradient(130deg,_rgba(245,158,11,0.26),_rgba(245,158,11,0.1))] dark:bg-[linear-gradient(130deg,_rgba(251,191,36,0.24),_rgba(251,191,36,0.08))]`,
-    dot: 'bg-amber-500/90 dark:bg-amber-300/85',
-    ring: 'ring-amber-400',
-    ringHex: '#fbbf24',
-  },
-  {
-    key: 'rose',
-    tag: `${PILL_TYPOGRAPHY} text-slate-800 dark:text-rose-100 border border-rose-200/70 dark:border-rose-400/30 shadow-[0_18px_52px_-34px_rgba(244,63,94,0.5)] bg-[linear-gradient(130deg,_rgba(244,63,94,0.26),_rgba(244,63,94,0.1))] dark:bg-[linear-gradient(130deg,_rgba(251,113,133,0.22),_rgba(251,113,133,0.07))]`,
-    dot: 'bg-rose-500/90 dark:bg-rose-300/80',
-    ring: 'ring-rose-400',
-    ringHex: '#fb7185',
-  },
-  {
-    key: 'indigo',
-    tag: `${PILL_TYPOGRAPHY} text-slate-800 dark:text-indigo-100 border border-indigo-200/70 dark:border-indigo-400/30 shadow-[0_18px_52px_-34px_rgba(99,102,241,0.5)] bg-[linear-gradient(130deg,_rgba(99,102,241,0.26),_rgba(99,102,241,0.08))] dark:bg-[linear-gradient(130deg,_rgba(129,140,248,0.2),_rgba(129,140,248,0.06))]`,
-    dot: 'bg-indigo-500/90 dark:bg-indigo-300/80',
-    ring: 'ring-indigo-400',
-    ringHex: '#818cf8',
-  },
-  {
-    key: 'fuchsia',
-    tag: `${PILL_TYPOGRAPHY} text-slate-800 dark:text-fuchsia-100 border border-fuchsia-200/70 dark:border-fuchsia-400/30 shadow-[0_18px_52px_-34px_rgba(232,121,249,0.5)] bg-[linear-gradient(130deg,_rgba(232,121,249,0.26),_rgba(232,121,249,0.1))] dark:bg-[linear-gradient(130deg,_rgba(217,70,239,0.2),_rgba(217,70,239,0.06))]`,
-    dot: 'bg-fuchsia-500/90 dark:bg-fuchsia-300/80',
-    ring: 'ring-fuchsia-400',
-    ringHex: '#e879f9',
-  },
-  {
-    key: 'teal',
-    tag: `${PILL_TYPOGRAPHY} text-slate-800 dark:text-teal-100 border border-teal-200/70 dark:border-teal-400/30 shadow-[0_18px_52px_-34px_rgba(20,184,166,0.5)] bg-[linear-gradient(130deg,_rgba(20,184,166,0.25),_rgba(20,184,166,0.09))] dark:bg-[linear-gradient(130deg,_rgba(45,212,191,0.2),_rgba(45,212,191,0.06))]`,
-    dot: 'bg-teal-500/90 dark:bg-teal-300/80',
-    ring: 'ring-teal-400',
-    ringHex: '#2dd4bf',
-  },
-  {
-    key: 'lime',
-    tag: `${PILL_TYPOGRAPHY} text-slate-800 dark:text-lime-100 border border-lime-200/70 dark:border-lime-400/30 shadow-[0_18px_52px_-34px_rgba(132,204,22,0.48)] bg-[linear-gradient(130deg,_rgba(132,204,22,0.26),_rgba(132,204,22,0.1))] dark:bg-[linear-gradient(130deg,_rgba(163,230,53,0.2),_rgba(163,230,53,0.06))]`,
-    dot: 'bg-lime-500/90 dark:bg-lime-300/80',
-    ring: 'ring-lime-400',
-    ringHex: '#a3e635',
-  },
-];
+export function sortCategoryNamesAlphabetically(names: string[]): string[] {
+  return [...names].sort((a, b) =>
+    formatCategoryName(a).localeCompare(formatCategoryName(b), undefined, { sensitivity: 'base' })
+  );
+}
 
-function hashString(str: string): number {
-  let h = 0;
-  for (let i = 0; i < str.length; i++) {
-    h = (h << 5) - h + str.charCodeAt(i);
-    h |= 0;
+export function buildCategoryAccentIndex(names: readonly string[]): ReadonlyMap<string, number> {
+  return new Map(names.map((name, index) => [name, index]));
+}
+
+export function getTagThemeForCategory(
+  name?: string | null,
+  accentIndex?: ReadonlyMap<string, number>
+) {
+  if (accentIndex && name != null) {
+    const index = accentIndex.get(name);
+    if (index !== undefined) {
+      return getCategoryAccentByIndex(index);
+    }
   }
-  return Math.abs(h);
+  return getCategoryAccent(name);
 }
 
-export function getTagThemeForCategory(name?: string | null) {
-  const key = (name || 'Uncategorized').toLowerCase();
-  const idx = hashString(key) % TAG_THEMES.length;
-  return TAG_THEMES[idx];
+export function getTagThemeForCategoryAtIndex(index: number) {
+  return getCategoryAccentByIndex(index);
+}
+
+export function categoryLookupKey(raw: string): string {
+  return raw
+    .toLowerCase()
+    .trim()
+    .split(/\s+/)
+    .map((word) => (word.endsWith('s') ? word.slice(0, -1) : word))
+    .join(' ');
+}
+
+export function formatCustomCategoryDisplay(raw: string): string {
+  return raw
+    .trim()
+    .split(/\s+/)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join(' ');
+}
+
+export type ValidateCustomCategoryNameError =
+  | 'too_long'
+  | 'too_many_words'
+  | 'empty'
+  | 'invalid_characters'
+  | 'collides_system'
+  | 'collides_custom';
+
+export interface ValidateCustomCategoryNameResult {
+  ok: boolean;
+  display?: string;
+  code?: ValidateCustomCategoryNameError;
+}
+
+export function validateCustomCategoryName(
+  raw: string,
+  existing: { system: string[]; custom: CustomCategory[] }
+): ValidateCustomCategoryNameResult {
+  if (!raw || !raw.trim()) {
+    return { ok: false, code: 'empty' };
+  }
+
+  if (!/^[a-zA-Z\s]+$/.test(raw)) {
+    return { ok: false, code: 'invalid_characters' };
+  }
+
+  const display = formatCustomCategoryDisplay(raw);
+  const trimmed = raw.trim();
+
+  if (trimmed.length > 30) {
+    return { ok: false, code: 'too_long' };
+  }
+
+  const words = trimmed.split(/\s+/);
+  if (words.length > 3) {
+    return { ok: false, code: 'too_many_words' };
+  }
+
+  const lookupKey = categoryLookupKey(raw);
+
+  for (const systemCategory of existing.system) {
+    const systemLookup = systemCategory
+      .toLowerCase()
+      .split('_')
+      .join(' ')
+      .trim()
+      .split(/\s+/)
+      .map((word) => (word.endsWith('s') ? word.slice(0, -1) : word))
+      .join(' ');
+    if (lookupKey === systemLookup) {
+      return { ok: false, code: 'collides_system' };
+    }
+
+    const displayLookup = categoryLookupKey(formatCategoryName(systemCategory));
+    if (lookupKey === displayLookup) {
+      return { ok: false, code: 'collides_system' };
+    }
+  }
+
+  for (const customCategory of existing.custom) {
+    const customLookup = categoryLookupKey(customCategory.display_name);
+    if (lookupKey === customLookup) {
+      return { ok: false, code: 'collides_custom' };
+    }
+  }
+
+  return { ok: true, display };
 }

@@ -1,20 +1,22 @@
 use anyhow::Context;
 use axum::{
     body::Body,
-    extract::{Path, Query, Request, State},
+    extract::{DefaultBodyLimit, Multipart, Query, Request, State},
     http::{
-        header::{AUTHORIZATION, CONTENT_TYPE},
-        HeaderMap, HeaderValue, Method, StatusCode, Uri,
+        header::{AUTHORIZATION, CONTENT_TYPE, COOKIE, SET_COOKIE},
+        HeaderMap, HeaderValue, Method, StatusCode,
     },
-    middleware::{from_fn, Next},
+    middleware::{from_fn, from_fn_with_state, Next},
     response::{IntoResponse, Json, Response},
     routing::{delete, get, post, put},
     Router,
 };
 use axum_tracing_opentelemetry::middleware::{OtelAxumLayer, OtelInResponseLayer};
 use axum_tracing_opentelemetry::tracing_opentelemetry_instrumentation_sdk as otel_sdk;
+use chrono::NaiveDate;
 use chrono::Utc;
-use serde::{Deserialize, Serialize};
+use csv::StringRecord;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tower::ServiceBuilder;
@@ -30,20 +32,32 @@ mod middleware;
 mod models;
 mod openapi;
 
+#[path = "../connection_pool.rs"]
+pub mod connection_pool;
+#[cfg(test)]
+#[path = "../db_compat.rs"]
+mod db;
+mod handlers;
 pub mod providers;
+mod seed;
 mod services;
 #[cfg(test)]
 mod tests;
 mod utils;
 #[cfg(test)]
 pub use tests::test_fixtures;
+use utils::seed_password_fallback::seed_user_password_fallback;
+use utils::webauthn_credentials::{
+    count_usable_credentials, has_usable_passkey, is_usable_credential, usable_passkeys,
+};
 
 use crate::models::analytics::{
-    BalanceCategory, BalancesOverviewResponse, CategoryMonthlySpending, CategorySpending,
-    DailySpending, MonthlySpending, NetWorthOverTimeResponse, TopMerchant,
+    BalanceCategory, BalancesOverviewQuery, BalancesOverviewResponse, CashFlowResponse,
+    CategorySpending, DailySpending, MonthlySpending, NetWorthOverTimeResponse, TopMerchant,
 };
 use crate::models::app_state::AppState;
 use crate::models::auth::{AuthContext, AuthMiddlewareState};
+use crate::models::auto_categorization_job::AutoCategorizationJobState;
 use crate::models::{
     account::{
         Account, AccountResponse, CreateManualAssetAccountRequest,
@@ -53,41 +67,140 @@ use crate::models::{
     analytics::{DateRangeQuery, MonthlyTotalsQuery},
     auth as auth_models,
     budget::{Budget, CreateBudgetRequest, DeleteBudgetResponse, UpdateBudgetRequest},
-    category::{
-        CategoryRule, CreateCategoryRequest, CreateCategoryRuleRequest, DeleteCategoryResponse,
-        DeleteCategoryRuleResponse, UpdateCategoryRuleRequest, UpdateTransactionCategoryRequest,
-        UserCategory,
+    export::{ExportFormat, ExportQuery},
+    import::{
+        CsvColumnMapping, ImportFileFormat, ImportMultipartRequest, ImportResponse,
+        ValidateResponse,
     },
     plaid::{
         ClearSyncedDataResponse, DisconnectRequest, DisconnectResult, ExchangeTokenRequest,
-        ExchangeTokenResponse, LinkTokenRequest, LinkTokenResponse, ProviderConnectRequest,
-        ProviderConnectResponse, ProviderConnectionStatus, ProviderInfoResponse,
-        ProviderSelectRequest, ProviderSelectResponse, ProviderStatusResponse,
-        SyncTransactionsRequest,
+        ExchangeTokenResponse, LinkTokenRequest, LinkTokenResponse, ProviderConnectResponse,
+        ProviderConnectionStatus, ProviderInfoResponse, ProviderSelectRequest,
+        ProviderSelectResponse, ProviderStatusResponse, SyncTransactionsRequest,
     },
-    transaction::{SyncTransactionsResponse, TransactionWithAccount, TransactionsQuery},
+    provider_connect::ProviderConnectRequest,
+    transaction::{
+        PaginatedTransactionsResponse, SyncTransactionsResponse, TransactionsInsightsResponse,
+        TransactionsQuery,
+    },
 };
 use crate::models::{
     api_error::ApiErrorResponse,
-    auth::{
-        ChangePasswordRequest, ChangePasswordResponse, DeleteAccountResponse, LogoutResponse,
-        OnboardingCompleteResponse, User,
-    },
+    auth::{DeleteAccountResponse, LogoutResponse, OnboardingCompleteResponse, User},
 };
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct LoginChallengePayload {
+    user_id: Uuid,
+    state: serde_json::Value,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct RegistrationChallengePayload {
+    user_id: Uuid,
+    email: String,
+    display_name: String,
+    state: serde_json::Value,
+    #[serde(default)]
+    existing_user_recovery: bool,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct AuthenticatedEnrollmentChallengePayload {
+    user_id: Uuid,
+    state: serde_json::Value,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/export",
+    description = "Downloads the current user's stored accounts and transactions as CSV or OFX.",
+    params(
+        ("format" = ExportFormat, Query, description = "Export format"),
+        ("connection_id" = Option<Uuid>, Query, description = "Optional provider connection filter")
+    ),
+    responses(
+        (status = 200, description = "Downloaded export file", body = String),
+        (status = 401, description = "Unauthorized"),
+        (status = 500, description = "Internal server error")
+    ),
+    security(("auth_cookie" = [])),
+    tag = "Transactions"
+)]
+pub async fn get_authenticated_export(
+    State(state): State<AppState>,
+    auth_context: AuthContext,
+    Query(query): Query<ExportQuery>,
+) -> Result<axum::response::Response, StatusCode> {
+    build_authenticated_export_response(State(state), auth_context, Query(query)).await
+}
+
+use crate::providers::{
+    PlaidCredentialResolver, SimpleFinCredentialResolver, TellerCredentialResolver,
+};
+use crate::utils::encryption_key::parse_encryption_key_hex;
 use auth_middleware::auth_middleware;
 use config::Config;
-use middleware::telemetry_middleware::{
-    self, attach_encrypted_token_to_current_span, hash_token, request_tracing_middleware,
-    with_bearer_token_attribute, TelemetryConfig,
+use handlers::export::build_authenticated_export_response;
+use middleware::auth_ip_ban::auth_ip_ban_middleware;
+use middleware::passkey_enrollment::{
+    passkey_enrollment_middleware, PasskeyEnrollmentMiddlewareState,
 };
+use middleware::resource_authorization::{
+    AuthorizedBudgetId, AuthorizedConnectionRequest, AuthorizedQuery,
+};
+use middleware::telemetry_middleware::{self, request_tracing_middleware, TelemetryConfig};
+use migration::MigratorTrait;
+use sea_orm::{ConnectOptions, ConnectionTrait, Database, DbBackend, Statement};
+use services::auto_categorization::service::AutoCategorizationError;
+use services::categorization::category_descriptors::SYSTEM_CATEGORY_SLUGS;
+use services::category_management::service::CategoryManagementService;
+use services::import_service::ImportService;
 use services::repository_service::{DatabaseRepository, PostgresRepository};
-use services::{AnalyticsService, RealPlaidClient};
+use services::sync_service_dispatcher::provider_sync_error_to_response;
 use services::{
-    AuthService, BudgetService, CacheService, ConnectionService, ExchangeTokenError,
-    LinkTokenError, PlaidService, ProviderSyncError, RedisCache, SyncConnectionParams, SyncService,
-    TellerConnectError, TellerSyncError,
+    otel_traces_relay::OtlpTracesRelay,
+    rate_limit_service::{
+        auth_login_governor_layer, auth_register_governor_layer, spawn_auth_rate_limit_cleanup,
+        telemetry_public_browser_governor_layer,
+    },
+    AuthService, AuthorizationService, BudgetService, CacheService, CategorizationService,
+    Categorizer, ConnectionService, ExchangeTokenError, LinkTokenError, PlaidService,
+    ProviderSyncRateLimitService, RedisCache, SimpleFinConnectError, SyncConnectionParams,
+    SyncService, SyncServiceFactory, TellerConnectError,
 };
-use sqlx::PgPool;
+use services::{AnalyticsService, RealPlaidClient};
+use utils::auth_cookie::{build_auth_cookie, build_clearing_auth_cookie, extract_auth_cookie};
+
+pub(crate) fn build_provider_registry(
+    plaid_provider: Option<Arc<dyn providers::FinancialDataProvider>>,
+    teller_provider: anyhow::Result<Arc<dyn providers::FinancialDataProvider>>,
+    simplefin_provider: Arc<dyn providers::FinancialDataProvider>,
+) -> providers::ProviderRegistry {
+    let mut provider_registry = providers::ProviderRegistry::new();
+
+    if let Some(plaid_provider) = plaid_provider {
+        provider_registry.register("plaid", plaid_provider);
+    } else {
+        tracing::warn!("Plaid provider not configured; skipping Plaid initialization");
+    }
+
+    match teller_provider {
+        Ok(teller_provider) => {
+            provider_registry.register("teller", teller_provider);
+        }
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "Teller provider not configured; skipping Teller initialization"
+            );
+        }
+    }
+
+    provider_registry.register("simplefin", simplefin_provider);
+
+    provider_registry
+}
 
 #[derive(Debug, Deserialize)]
 struct CurrencyRateQuery {
@@ -110,40 +223,94 @@ struct FrankfurterLatestResponse {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let telemetry_config = TelemetryConfig::from_env();
+    let telemetry_config = TelemetryConfig::from_env()?;
     let telemetry = telemetry_middleware::init(&telemetry_config)?;
 
     let config = Config::from_env()?;
 
-    let plaid_client = Arc::new(RealPlaidClient::new(
-        std::env::var("PLAID_CLIENT_ID").unwrap_or_else(|_| "test_client_id".to_string()),
-        std::env::var("PLAID_SECRET").unwrap_or_else(|_| "test_secret".to_string()),
-        std::env::var("PLAID_ENV").unwrap_or_else(|_| "sandbox".to_string()),
+    let plaid_client_id = std::env::var("PLAID_CLIENT_ID").ok();
+    let plaid_secret = std::env::var("PLAID_SECRET").ok();
+    let plaid_env = std::env::var("PLAID_ENV").ok();
+
+    let plaid_configured = plaid_client_id
+        .as_ref()
+        .is_some_and(|v| !v.trim().is_empty())
+        && plaid_secret.as_ref().is_some_and(|v| !v.trim().is_empty())
+        && plaid_env.as_ref().is_some_and(|v| !v.trim().is_empty());
+
+    let plaid_client = if plaid_configured {
+        Arc::new(RealPlaidClient::new(
+            plaid_client_id.clone().unwrap(),
+            plaid_secret.clone().unwrap(),
+            plaid_env.clone().unwrap(),
+        ))
+    } else {
+        Arc::new(RealPlaidClient::new(
+            "test_client_id".to_string(),
+            "test_secret".to_string(),
+            "sandbox".to_string(),
+        ))
+    };
+
+    let plaid_provider = if plaid_configured {
+        Some(
+            Arc::new(providers::PlaidProvider::new(plaid_client.clone()))
+                as Arc<dyn providers::FinancialDataProvider>,
+        )
+    } else {
+        None
+    };
+
+    let teller_provider = providers::TellerProvider::new()
+        .map(|provider| Arc::new(provider) as Arc<dyn providers::FinancialDataProvider>);
+
+    let simplefin_provider: Arc<dyn providers::FinancialDataProvider> =
+        Arc::new(providers::SimpleFinProvider::new_with_real_client().await?);
+
+    let provider_registry = Arc::new(build_provider_registry(
+        plaid_provider,
+        teller_provider,
+        simplefin_provider,
     ));
+
     let plaid_service = Arc::new(PlaidService::new(plaid_client.clone()));
-    let plaid_provider: Arc<dyn providers::FinancialDataProvider> =
-        Arc::new(providers::PlaidProvider::new(plaid_client.clone()));
-    let teller_provider: Arc<dyn providers::FinancialDataProvider> =
-        Arc::new(providers::TellerProvider::new()?);
 
-    let provider_registry = Arc::new(providers::ProviderRegistry::from_providers([
-        ("plaid", Arc::clone(&plaid_provider)),
-        ("teller", Arc::clone(&teller_provider)),
-    ]));
-
-    let sync_service = Arc::new(SyncService::new(
-        provider_registry.clone(),
-        config.get_default_provider(),
-    ));
+    let sync_service = Arc::new(SyncService::new(provider_registry.clone()));
 
     let analytics_service = Arc::new(AnalyticsService::new());
     let budget_service = Arc::new(BudgetService::new());
+    let authorization_service = Arc::new(AuthorizationService::new());
 
     let database_url = std::env::var("DATABASE_URL")
         .unwrap_or_else(|_| "postgresql://postgres:password@localhost:5432/accounting".to_string());
 
-    let pool = PgPool::connect(&database_url).await?;
-    let db_repository: Arc<dyn DatabaseRepository> = Arc::new(PostgresRepository::new(pool)?);
+    let encryption_key_raw = std::env::var("ENCRYPTION_KEY").context(
+        "ENCRYPTION_KEY environment variable is required. Generate one with `openssl rand -hex 32`.",
+    )?;
+    let encryption_key = parse_encryption_key_hex(&encryption_key_raw)?;
+
+    let mut connect_options = ConnectOptions::new(&database_url);
+    connect_options.max_connections(10).min_connections(0);
+    let db = Database::connect(connect_options).await?;
+
+    db.execute(Statement::from_string(
+        DbBackend::Postgres,
+        "SELECT pg_advisory_lock(7329481923)",
+    ))
+    .await?;
+    let migration_result = migration::Migrator::up(&db, None).await;
+    let _ = db
+        .execute(Statement::from_string(
+            DbBackend::Postgres,
+            "SELECT pg_advisory_unlock(7329481923)",
+        ))
+        .await;
+    migration_result?;
+    tracing::info!("Database migrations applied");
+
+    tracing::info!("ENCRYPTION_KEY loaded and validated for token encryption");
+    let db_repository: Arc<dyn DatabaseRepository> =
+        Arc::new(PostgresRepository::from_database(&db, encryption_key));
 
     let redis_url =
         std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://localhost:6379".to_string());
@@ -157,25 +324,19 @@ async fn main() -> anyhow::Result<()> {
     })?;
     tracing::info!("Redis connection verified successfully");
 
-    // Clear all cached sessions on app startup for security
-    if let Err(e) = cache_service.invalidate_pattern("*_session_valid").await {
-        tracing::warn!("Failed to clear cached sessions on startup: {}", e);
-    } else {
-        tracing::info!("Cleared all cached sessions on app startup");
-    }
+    if config.should_clear_sessions_on_boot() {
+        if let Err(e) = cache_service.invalidate_pattern("*_session_valid").await {
+            tracing::warn!("Failed to clear cached sessions on startup: {}", e);
+        } else {
+            tracing::info!("Cleared all cached sessions on app startup");
+        }
 
-    // Clear all JWT tokens on startup for security
-    if let Err(e) = cache_service.invalidate_pattern("*_session_token").await {
-        tracing::warn!("Failed to clear JWT tokens on startup: {}", e);
-    } else {
-        tracing::info!("Cleared all JWT tokens on app startup");
+        if let Err(e) = cache_service.invalidate_pattern("*_session_token").await {
+            tracing::warn!("Failed to clear JWT tokens on startup: {}", e);
+        } else {
+            tracing::info!("Cleared all JWT tokens on app startup");
+        }
     }
-
-    let connection_service = Arc::new(ConnectionService::new(
-        db_repository.clone(),
-        cache_service.clone(),
-        provider_registry.clone(),
-    ));
 
     let jwt_secret = std::env::var("JWT_SECRET").context(
         "JWT_SECRET environment variable is required. Generate one with `openssl rand -hex 32`.",
@@ -183,25 +344,154 @@ async fn main() -> anyhow::Result<()> {
 
     let auth_service = Arc::new(AuthService::new(jwt_secret)?);
 
+    seed::maybe_seed_demo_user(&db_repository, &auth_service).await?;
+
+    let model_dir = CategorizationService::model_dir();
+    tracing::info!(
+        model_dir = %model_dir.display(),
+        "loading transaction categorization model"
+    );
+    let categorizer: Arc<dyn Categorizer> = match CategorizationService::new(&model_dir).await {
+        Ok(service) => Arc::new(service),
+        Err(err) => {
+            tracing::error!(
+                error = %err,
+                model_dir = %model_dir.display(),
+                "failed to initialize transaction categorization"
+            );
+            return Err(err);
+        }
+    };
+
+    let mut credential_resolvers = std::collections::HashMap::new();
+    credential_resolvers.insert(
+        "simplefin".to_string(),
+        Arc::new(SimpleFinCredentialResolver::new(db_repository.clone()))
+            as Arc<dyn crate::providers::ProviderCredentialResolver>,
+    );
+    credential_resolvers.insert(
+        "plaid".to_string(),
+        Arc::new(PlaidCredentialResolver::new(db_repository.clone()))
+            as Arc<dyn crate::providers::ProviderCredentialResolver>,
+    );
+    credential_resolvers.insert(
+        "teller".to_string(),
+        Arc::new(TellerCredentialResolver::new(db_repository.clone()))
+            as Arc<dyn crate::providers::ProviderCredentialResolver>,
+    );
+
+    let simplefin_org_service = Arc::new(
+        crate::services::simplefin_org_service::SimpleFinOrganizationService::new(
+            db_repository.clone(),
+            cache_service.clone(),
+        ),
+    );
+
+    let provider_sync_rate_limit_service =
+        Arc::new(ProviderSyncRateLimitService::new(cache_service.clone()));
+
+    let simplefin_connection_service = Arc::new(
+        crate::services::simplefin_connection_service::SimpleFinConnectionService::new(
+            db_repository.clone(),
+            cache_service.clone(),
+            provider_registry.clone(),
+            credential_resolvers.clone(),
+            simplefin_org_service,
+        ),
+    );
+
+    let connection_service = Arc::new(
+        ConnectionService::new(
+            db_repository.clone(),
+            cache_service.clone(),
+            provider_registry.clone(),
+            categorizer.clone(),
+            credential_resolvers,
+        )
+        .with_simplefin_connection_service(simplefin_connection_service),
+    );
+
+    let sync_service_factory = Arc::new(SyncServiceFactory::new(
+        connection_service.clone(),
+        sync_service.clone(),
+    ));
+
+    let otlp_traces_relay = Arc::new(OtlpTracesRelay::from_config(&telemetry_config)?);
+
+    let category_management_service =
+        Arc::new(CategoryManagementService::new(SYSTEM_CATEGORY_SLUGS));
+
+    let auto_categorization_service = Arc::new(
+        crate::services::auto_categorization::AutoCategorizationService::new(
+            db_repository.clone(),
+            cache_service.clone(),
+            categorizer.clone(),
+        ),
+    );
+
+    let webauthn_service = {
+        let origins: Vec<url::Url> = config
+            .app_origins()
+            .iter()
+            .map(|origin| {
+                url::Url::parse(origin)
+                    .map_err(|e| anyhow::anyhow!("Invalid origin '{}': {}", origin, e))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let rp_id = origins
+            .first()
+            .and_then(|origin| origin.host_str())
+            .ok_or_else(|| anyhow::anyhow!("Configured app origins have no host"))?
+            .to_string();
+
+        for origin in origins.iter().skip(1) {
+            if origin.host_str() != Some(rp_id.as_str()) {
+                return Err(anyhow::anyhow!(
+                    "All configured app origins must share the same host (rp_id)"
+                ));
+            }
+        }
+
+        Arc::new(
+            crate::services::webauthn_service::WebAuthnService::new(&rp_id, &origins)
+                .map_err(|e| anyhow::anyhow!("Failed to build WebAuthnService: {}", e))?,
+        )
+    };
+
     let state = AppState {
         plaid_service,
         plaid_client,
         sync_service,
+        sync_service_factory,
         analytics_service,
         budget_service,
+        authorization_service,
         config,
         db_repository,
         cache_service,
+        provider_sync_rate_limit_service,
+        categorizer,
         connection_service,
         auth_service,
         provider_registry,
+        otlp_traces_relay,
+        category_management_service,
+        auto_categorization_service,
+        webauthn_service,
     };
 
     let app = create_app(state);
 
+    spawn_auth_rate_limit_cleanup();
+
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
     tracing::info!("Server running on http://0.0.0.0:3000");
-    axum::serve(listener, app).await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await?;
 
     telemetry.shutdown()?;
 
@@ -209,10 +499,55 @@ async fn main() -> anyhow::Result<()> {
 }
 
 pub fn create_app(state: AppState) -> Router {
+    let passkey_login = Router::new()
+        .route("/api/auth/login/password", post(login_with_password))
+        .route("/api/auth/passkey/login/begin", post(begin_passkey_login))
+        .route("/api/auth/passkey/login/finish", post(finish_passkey_login))
+        .layer(auth_login_governor_layer())
+        .layer(from_fn_with_state(state.clone(), auth_ip_ban_middleware))
+        .with_state(state.clone());
+
+    let auth_register = Router::new()
+        .route("/", post(register_user))
+        .layer(auth_register_governor_layer())
+        .layer(from_fn_with_state(state.clone(), auth_ip_ban_middleware))
+        .with_state(state.clone());
+
+    let passkey_register_finish = Router::new()
+        .route(
+            "/api/auth/passkey/register/finish",
+            post(finish_passkey_registration),
+        )
+        .layer(auth_register_governor_layer())
+        .layer(from_fn_with_state(state.clone(), auth_ip_ban_middleware))
+        .with_state(state.clone());
+
+    let public_browser_traces = Router::new()
+        .route(
+            "/telemetry",
+            post(handlers::otel_browser::post_browser_traces),
+        )
+        .layer(DefaultBodyLimit::max(10 * 1024 * 1024))
+        .layer(telemetry_public_browser_governor_layer());
+
+    let protected_browser_traces = Router::new()
+        .route(
+            "/telemetry",
+            post(handlers::otel_browser::post_browser_traces),
+        )
+        .layer(DefaultBodyLimit::max(10 * 1024 * 1024));
+
+    let transaction_import_routes = Router::new()
+        .route("/validate", post(validate_authenticated_transaction_import))
+        .route("/", post(import_authenticated_transactions))
+        .layer(DefaultBodyLimit::max(10 * 1024 * 1024));
+
     let public_routes = Router::new()
         .route("/health", get(health_check))
-        .route("/api/auth/register", post(register_user))
-        .route("/api/auth/login", post(login_user))
+        .nest("/api/v1/public", public_browser_traces)
+        .merge(passkey_login)
+        .merge(passkey_register_finish)
+        .nest("/api/auth/register", auth_register)
         .route("/api/auth/refresh", post(refresh_user_session))
         .route("/api/auth/logout", post(logout_user));
 
@@ -221,7 +556,33 @@ pub fn create_app(state: AppState) -> Router {
             "/api/auth/onboarding/complete",
             put(complete_user_onboarding),
         )
+        .route(
+            "/api/transactions/categories",
+            get(get_authenticated_transaction_categories),
+        )
+        .route("/api/categories", get(list_categories))
+        .route("/api/categories/custom", post(create_custom_category))
+        .route(
+            "/api/categories/custom/{id}",
+            delete(delete_custom_category),
+        )
+        .nest("/api/transactions/import", transaction_import_routes)
+        .route("/api/export", get(get_authenticated_export))
         .route("/api/transactions", get(get_authenticated_transactions))
+        .route(
+            "/api/transactions/{id}/category",
+            put(set_transaction_category),
+        )
+        .route(
+            "/api/transactions/insights",
+            get(get_authenticated_transactions_insights),
+        )
+        .route(
+            "/api/transactions/auto-categorize",
+            post(start_auto_categorization)
+                .get(get_auto_categorization_status)
+                .delete(cancel_auto_categorization),
+        )
         .route("/api/providers/info", get(get_authenticated_provider_info))
         .route("/api/providers/select", post(select_authenticated_provider))
         .route(
@@ -258,28 +619,9 @@ pub fn create_app(state: AppState) -> Router {
             post(disconnect_authenticated_connection),
         )
         .route(
-            "/api/manual-investments",
-            post(create_authenticated_manual_investment_account),
-        )
-        .route(
-            "/api/manual-investments/{id}",
-            put(update_authenticated_manual_investment_account),
-        )
-        .route(
-            "/api/manual-investments/{id}",
-            delete(delete_authenticated_manual_investment_account),
-        )
-        .route(
-            "/api/manual-assets",
-            post(create_authenticated_manual_asset_account),
-        )
-        .route(
-            "/api/manual-assets/{id}",
-            put(update_authenticated_manual_asset_account),
-        )
-        .route(
-            "/api/manual-assets/{id}",
-            delete(delete_authenticated_manual_asset_account),
+            "/api/providers/simplefin/ignored-institutions",
+            get(get_authenticated_simplefin_ignored_institutions)
+                .post(restore_authenticated_simplefin_ignored_institution),
         )
         .route(
             "/api/plaid/clear-synced-data",
@@ -305,6 +647,7 @@ pub fn create_app(state: AppState) -> Router {
             "/api/analytics/monthly-totals",
             get(get_authenticated_monthly_totals),
         )
+        .route("/api/analytics/cash-flow", get(get_authenticated_cash_flow))
         .route(
             "/api/analytics/category-trends",
             get(get_authenticated_category_trends),
@@ -325,32 +668,21 @@ pub fn create_app(state: AppState) -> Router {
         .route("/api/budgets", post(create_authenticated_budget))
         .route("/api/budgets/{id}", put(update_authenticated_budget))
         .route("/api/budgets/{id}", delete(delete_authenticated_budget))
-        .route("/api/categories", get(get_authenticated_user_categories))
-        .route("/api/categories", post(create_authenticated_user_category))
-        .route(
-            "/api/categories/{id}",
-            delete(delete_authenticated_user_category),
-        )
-        .route(
-            "/api/transactions/{id}/category",
-            put(set_authenticated_transaction_category),
-        )
-        .route(
-            "/api/transactions/{id}/category",
-            delete(remove_authenticated_transaction_category),
-        )
-        .route("/api/category-rules", get(get_authenticated_category_rules))
-        .route("/api/category-rules", post(create_authenticated_category_rule))
-        .route(
-            "/api/category-rules/{id}",
-            put(update_authenticated_category_rule),
-        )
-        .route(
-            "/api/category-rules/{id}",
-            delete(delete_authenticated_category_rule),
-        )
-        .route("/api/auth/change-password", put(change_user_password))
         .route("/api/auth/account", delete(delete_user_account))
+        .route("/api/auth/passkey/enroll/begin", post(begin_passkey_enroll))
+        .route(
+            "/api/auth/passkey/enroll/finish",
+            post(finish_passkey_enroll),
+        )
+        .route("/api/auth/passkey", get(list_user_passkeys))
+        .route("/api/auth/passkey/{id}", delete(delete_user_passkey))
+        .nest("/api/v1/private", protected_browser_traces)
+        .layer(axum::middleware::from_fn_with_state(
+            PasskeyEnrollmentMiddlewareState {
+                db_repository: state.db_repository.clone(),
+            },
+            passkey_enrollment_middleware,
+        ))
         .layer(axum::middleware::from_fn_with_state(
             AuthMiddlewareState {
                 auth_service: state.auth_service.clone(),
@@ -398,14 +730,13 @@ pub fn create_app(state: AppState) -> Router {
             Method::DELETE,
             Method::OPTIONS,
         ])
-        .allow_headers([AUTHORIZATION, CONTENT_TYPE])
+        .allow_headers([AUTHORIZATION, CONTENT_TYPE, COOKIE])
         .allow_credentials(true);
 
     let middleware_stack = ServiceBuilder::new()
         .layer(cors_layer)
         .layer(OtelAxumLayer::default().try_extract_client_ip(true))
         .layer(OtelInResponseLayer)
-        .layer(from_fn(with_bearer_token_attribute))
         .layer(from_fn(request_tracing_middleware))
         .layer(from_fn(error_handling_middleware))
         .into_inner();
@@ -416,6 +747,20 @@ pub fn create_app(state: AppState) -> Router {
         .merge(docs_routes)
         .layer(middleware_stack)
         .with_state(state)
+}
+
+fn auth_cookie_headers(cookie: String) -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        SET_COOKIE,
+        HeaderValue::from_str(&cookie).expect("valid auth cookie header"),
+    );
+    headers
+}
+
+fn extract_auth_cookie_token(headers: &HeaderMap) -> Option<String> {
+    let cookie_header = headers.get(COOKIE)?.to_str().ok()?;
+    extract_auth_cookie(Some(cookie_header), "auth_token")
 }
 
 fn log_provider_credential_outcome(provider: &str, status: StatusCode, endpoint: &str) {
@@ -548,11 +893,14 @@ async fn error_handling_middleware(request: Request<Body>, next: Next) -> Respon
 #[utoipa::path(
     post,
     path = "/api/auth/register",
-    description = "Registers a new user and seeds default provider metadata.",
+    description = "Creates a new user and begins passkey enrollment. No auth cookie is issued until passkey registration completes.",
     request_body = auth_models::RegisterRequest,
     responses(
-        (status = 200, description = "User registered successfully", body = auth_models::AuthResponse),
+        (status = 200, description = "Registration challenge issued", body = auth_models::RegisterBeginResponse),
+        (status = 400, description = "Invalid request body", body = ApiErrorResponse),
         (status = 409, description = "Email already registered", body = ApiErrorResponse),
+        (status = 429, description = "Too many requests", body = ApiErrorResponse),
+        (status = 403, description = "IP temporarily banned after repeated abuse", body = ApiErrorResponse),
         (status = 500, description = "Internal server error", body = ApiErrorResponse),
     ),
     tag = "Authentication"
@@ -560,164 +908,75 @@ async fn error_handling_middleware(request: Request<Body>, next: Next) -> Respon
 async fn register_user(
     State(state): State<AppState>,
     Json(req): Json<auth_models::RegisterRequest>,
-) -> Result<Json<auth_models::AuthResponse>, (StatusCode, Json<ApiErrorResponse>)> {
-    let password_hash = state
-        .auth_service
-        .hash_password(&req.password)
-        .map_err(|e| {
-            tracing::error!("Password hashing failed: {}", e);
-            ApiErrorResponse::internal_server_error("Failed to process password")
-        })?;
+) -> Result<Json<auth_models::RegisterBeginResponse>, (StatusCode, Json<ApiErrorResponse>)> {
+    if req.password.is_some() {
+        return Err(ApiErrorResponse::bad_request(
+            "Password registration is no longer supported; enroll a passkey instead",
+        ));
+    }
 
-    let user_id = Uuid::new_v4();
-    let user = User {
-        id: user_id,
-        email: req.email.clone(),
-        password_hash,
-        provider: state.config.get_default_provider().to_string(),
-        created_at: Utc::now(),
-        updated_at: Utc::now(),
-        onboarding_completed: false,
-    };
+    let email = req.email.trim().to_lowercase();
+    let display_name = req.name.trim().to_string();
 
-    if let Err(e) = state.db_repository.create_user(&user).await {
-        tracing::error!("User creation failed for email {}: {}", req.email, e);
+    if let Ok(Some(_)) = state.db_repository.get_user_by_email(&email).await {
         return Err(ApiErrorResponse::conflict(
             "Email address is already registered",
         ));
     }
 
-    let auth_token = state.auth_service.generate_token(user_id).map_err(|e| {
-        tracing::error!("Token generation failed for user {}: {}", user_id, e);
-        ApiErrorResponse::internal_server_error("Failed to generate authentication token")
-    })?;
+    let user_id = Uuid::new_v4();
 
-    let encrypted_token = hash_token(&auth_token.token);
-    attach_encrypted_token_to_current_span(&encrypted_token);
-
-    let ttl = (auth_token.expires_at - Utc::now()).num_seconds().max(0) as u64;
-    if ttl > 0 {
-        // Set session validity flag in cache with JWT TTL
-        if let Err(e) = state
-            .cache_service
-            .set_session_valid(&auth_token.jwt_id, ttl)
-            .await
-        {
-            tracing::warn!("Failed to set session validity in cache: {}", e);
-        }
-
-        // Cache JWT token for reuse
-        if let Err(e) = state
-            .cache_service
-            .set_jwt_token(&auth_token.jwt_id, &auth_token.token, ttl)
-            .await
-        {
-            tracing::warn!("Failed to cache JWT token: {}", e);
-        }
-    }
-
-    let expires_at = auth_token.expires_at.to_rfc3339();
-
-    tracing::info!(
-        encrypted_token = %encrypted_token,
-        "User registered successfully"
-    );
-
-    Ok(Json(auth_models::AuthResponse {
-        token: auth_token.token,
-        user_id: user_id.to_string(),
-        expires_at,
-        onboarding_completed: false,
-    }))
-}
-
-#[utoipa::path(
-    post,
-    path = "/api/auth/login",
-    description = "Authenticates a user and returns a signed JWT for subsequent requests.",
-    request_body = auth_models::LoginRequest,
-    responses(
-        (status = 200, description = "Login successful", body = auth_models::AuthResponse),
-        (status = 401, description = "Invalid credentials", body = ApiErrorResponse),
-        (status = 500, description = "Internal server error", body = ApiErrorResponse),
-    ),
-    tag = "Authentication"
-)]
-async fn login_user(
-    State(state): State<AppState>,
-    Json(req): Json<auth_models::LoginRequest>,
-) -> Result<Json<auth_models::AuthResponse>, (StatusCode, Json<ApiErrorResponse>)> {
-    let user = match state.db_repository.get_user_by_email(&req.email).await {
-        Ok(Some(user)) => user,
-        Ok(None) => {
-            tracing::info!("Login attempt with non-existent email: {}", req.email);
-            return Err(ApiErrorResponse::unauthorized("Invalid email or password"));
-        }
-        Err(e) => {
-            tracing::error!("Database error during login for email {}: {}", req.email, e);
-            return Err(ApiErrorResponse::internal_server_error(
-                "Authentication service temporarily unavailable",
-            ));
-        }
-    };
-
-    let is_valid = state
-        .auth_service
-        .verify_password(&req.password, &user.password_hash)
+    let (challenge, reg_state) = state
+        .webauthn_service
+        .begin_registration(user_id, &email, &display_name, &[])
         .map_err(|e| {
-            tracing::error!("Password verification failed for user {}: {}", user.id, e);
-            ApiErrorResponse::internal_server_error("Authentication service error")
+            tracing::error!("begin_registration failed for user {}: {}", user_id, e);
+            ApiErrorResponse::internal_server_error("Failed to begin passkey registration")
         })?;
 
-    if !is_valid {
-        tracing::info!(
-            "Login attempt with invalid password for email: {}",
-            req.email
-        );
-        return Err(ApiErrorResponse::unauthorized("Invalid email or password"));
-    }
-
-    let auth_token = state.auth_service.generate_token(user.id).map_err(|e| {
-        tracing::error!("Token generation failed for user {}: {}", user.id, e);
-        ApiErrorResponse::internal_server_error("Failed to generate authentication token")
+    let state_value = serde_json::to_value(&reg_state).map_err(|e| {
+        tracing::error!("Failed to serialize registration state: {}", e);
+        ApiErrorResponse::internal_server_error("Failed to serialize registration state")
     })?;
 
-    let encrypted_token = hash_token(&auth_token.token);
-    attach_encrypted_token_to_current_span(&encrypted_token);
+    let payload = serde_json::to_string(&RegistrationChallengePayload {
+        user_id,
+        email: email.clone(),
+        display_name: display_name.clone(),
+        state: state_value,
+        existing_user_recovery: false,
+    })
+    .map_err(|e| {
+        tracing::error!("Failed to serialize registration challenge payload: {}", e);
+        ApiErrorResponse::internal_server_error("Failed to store registration challenge")
+    })?;
 
-    let ttl = (auth_token.expires_at - Utc::now()).num_seconds().max(0) as u64;
-    if ttl > 0 {
-        // Set session validity flag in cache with JWT TTL
-        if let Err(e) = state
-            .cache_service
-            .set_session_valid(&auth_token.jwt_id, ttl)
-            .await
-        {
-            tracing::warn!("Failed to set session validity in cache: {}", e);
-        }
+    let session_id = Uuid::new_v4().to_string();
 
-        // Cache JWT token for reuse
-        if let Err(e) = state
-            .cache_service
-            .set_jwt_token(&auth_token.jwt_id, &auth_token.token, ttl)
-            .await
-        {
-            tracing::warn!("Failed to cache JWT token: {}", e);
-        }
-    }
+    state
+        .cache_service
+        .set_webauthn_challenge(&session_id, &payload)
+        .await
+        .map_err(|e| {
+            tracing::error!(
+                "Failed to store challenge for session {}: {}",
+                session_id,
+                e
+            );
+            ApiErrorResponse::internal_server_error("Failed to store registration challenge")
+        })?;
 
-    let expires_at = auth_token.expires_at.to_rfc3339();
+    let challenge_json = serde_json::to_value(&challenge).map_err(|e| {
+        tracing::error!("Failed to serialize challenge: {}", e);
+        ApiErrorResponse::internal_server_error("Failed to serialize challenge")
+    })?;
 
-    tracing::info!(
-        encrypted_token = %encrypted_token,
-        "User authenticated successfully"
-    );
+    tracing::info!("Registration challenge issued; awaiting passkey enrollment to create account");
 
-    Ok(Json(auth_models::AuthResponse {
-        token: auth_token.token,
-        user_id: user.id.to_string(),
-        expires_at,
-        onboarding_completed: user.onboarding_completed,
+    Ok(Json(auth_models::RegisterBeginResponse {
+        user_id: user_id.to_string(),
+        session_id,
+        challenge: challenge_json,
     }))
 }
 
@@ -729,25 +988,18 @@ async fn login_user(
         (status = 200, description = "Logout successful", body = LogoutResponse),
         (status = 401, description = "Unauthorized")
     ),
-    security(("bearer_auth" = [])),
+    security(("auth_cookie" = [])),
     tag = "Authentication"
 )]
 async fn logout_user(
     State(state): State<AppState>,
     headers: HeaderMap,
-) -> Result<Json<LogoutResponse>, StatusCode> {
-    let auth_header = headers
-        .get("authorization")
-        .and_then(|h| h.to_str().ok())
-        .and_then(|s| s.strip_prefix("Bearer "))
-        .ok_or(StatusCode::UNAUTHORIZED)?;
-
-    let encrypted_token = hash_token(auth_header);
-    attach_encrypted_token_to_current_span(&encrypted_token);
+) -> Result<(HeaderMap, Json<LogoutResponse>), StatusCode> {
+    let auth_header = extract_auth_cookie_token(&headers).ok_or(StatusCode::UNAUTHORIZED)?;
 
     let claims = state
         .auth_service
-        .validate_token(auth_header)
+        .validate_token(&auth_header)
         .map_err(|_| StatusCode::UNAUTHORIZED)?;
 
     if let Err(e) = state.cache_service.invalidate_session(&claims.jti).await {
@@ -758,49 +1010,42 @@ async fn logout_user(
         tracing::warn!("Failed to clear JWT-scoped data during logout: {}", e);
     }
 
-    if let Err(e) = state.cache_service.clear_transactions().await {
+    if let Err(e) = state.cache_service.clear_transactions(&claims.jti).await {
         tracing::warn!("Failed to clear transaction cache during logout: {}", e);
     }
 
-    tracing::info!(
-        encrypted_token = %encrypted_token,
-        "User logged out successfully"
-    );
+    tracing::info!("User logged out successfully");
 
-    Ok(Json(LogoutResponse {
-        message: "Logged out successfully".to_string(),
-        cleared_session: claims.jti,
-    }))
+    Ok((
+        auth_cookie_headers(build_clearing_auth_cookie(&state.config)),
+        Json(LogoutResponse {
+            message: "Logged out successfully".to_string(),
+            cleared_session: claims.jti,
+        }),
+    ))
 }
 
 #[utoipa::path(
     post,
     path = "/api/auth/refresh",
-    description = "Exchanges an existing token for a refreshed bearer token.",
+    description = "Refreshes the auth_token HttpOnly cookie.",
     responses(
-        (status = 200, description = "Token refreshed successfully", body = auth_models::AuthResponse),
+        (status = 200, description = "Session refreshed successfully", body = auth_models::AuthResponse),
         (status = 401, description = "Unauthorized or session expired"),
         (status = 500, description = "Internal server error"),
     ),
-    security(("bearer_auth" = [])),
+    security(("auth_cookie" = [])),
     tag = "Authentication"
 )]
 async fn refresh_user_session(
     State(state): State<AppState>,
     headers: HeaderMap,
-) -> Result<Json<auth_models::AuthResponse>, StatusCode> {
-    let auth_header = headers
-        .get("authorization")
-        .and_then(|h| h.to_str().ok())
-        .and_then(|s| s.strip_prefix("Bearer "))
-        .ok_or(StatusCode::UNAUTHORIZED)?;
-
-    let encrypted_token = hash_token(auth_header);
-    attach_encrypted_token_to_current_span(&encrypted_token);
+) -> Result<(HeaderMap, Json<auth_models::AuthResponse>), StatusCode> {
+    let auth_header = extract_auth_cookie_token(&headers).ok_or(StatusCode::UNAUTHORIZED)?;
 
     let claims = state
         .auth_service
-        .validate_token_for_refresh(auth_header)
+        .validate_token_for_refresh(&auth_header)
         .map_err(|_| StatusCode::UNAUTHORIZED)?;
 
     match state.cache_service.is_session_valid(&claims.jti).await {
@@ -830,11 +1075,6 @@ async fn refresh_user_session(
         .generate_token(user_id)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let encrypted_token = hash_token(&auth_token.token);
-    attach_encrypted_token_to_current_span(&encrypted_token);
-
-    let expires_at = chrono::Utc::now() + chrono::Duration::hours(1);
-
     // Cache refreshed JWT in Redis with TTL
     let ttl = (auth_token.expires_at - Utc::now()).num_seconds().max(0) as u64;
     if ttl > 0 {
@@ -855,17 +1095,21 @@ async fn refresh_user_session(
         }
     }
 
-    tracing::info!(
-        encrypted_token = %encrypted_token,
-        "User session refreshed"
-    );
+    tracing::info!("User session refreshed");
 
-    Ok(Json(auth_models::AuthResponse {
-        token: auth_token.token,
-        user_id: claims.user_id(),
-        expires_at: expires_at.to_rfc3339(),
-        onboarding_completed: user.onboarding_completed,
-    }))
+    Ok((
+        auth_cookie_headers(build_auth_cookie(
+            &auth_token.token,
+            auth_token.expires_at,
+            &state.config,
+        )),
+        Json(auth_models::AuthResponse {
+            user_id: claims.user_id(),
+            expires_at: auth_token.expires_at.to_rfc3339(),
+            onboarding_completed: user.onboarding_completed,
+            requires_passkey_enrollment: false,
+        }),
+    ))
 }
 
 #[utoipa::path(
@@ -877,7 +1121,7 @@ async fn refresh_user_session(
         (status = 401, description = "Unauthorized"),
         (status = 500, description = "Internal server error", body = ApiErrorResponse),
     ),
-    security(("bearer_auth" = [])),
+    security(("auth_cookie" = [])),
     tag = "Authentication"
 )]
 async fn complete_user_onboarding(
@@ -910,122 +1154,921 @@ async fn complete_user_onboarding(
 #[utoipa::path(
     get,
     path = "/api/transactions",
-    description = "Returns transactions with optional text search and account filtering.",
-    params(("search" = Option<String>, Query, description = "Search transactions by merchant or category"),
-           ("account_ids" = Option<Vec<String>>, Query, description = "Filter by account IDs")),
+    description = "Returns transactions with optional server-side pagination and filtering.",
+    params(("search" = Option<String>, Query, description = "Search transactions by merchant, category, or account"),
+           ("account_ids" = Option<Vec<String>>, Query, description = "Filter by account IDs"),
+           ("page" = Option<i64>, Query, description = "Page number starting at 1"),
+           ("page_size" = Option<i64>, Query, description = "Results per page, clamped to 200"),
+           ("start_date" = Option<String>, Query, description = "Start date in YYYY-MM-DD format"),
+           ("end_date" = Option<String>, Query, description = "End date in YYYY-MM-DD format"),
+           ("category_primary" = Option<String>, Query, description = "Filter by primary category")),
     responses(
-        (status = 200, description = "List of transactions", body = Vec<TransactionWithAccount>),
+        (status = 200, description = "Paginated list of transactions", body = PaginatedTransactionsResponse),
         (status = 400, description = "Invalid account filter"),
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Account filter references another user"),
         (status = 500, description = "Internal server error"),
     ),
-    security(("bearer_auth" = [])),
+    security(("auth_cookie" = [])),
     tag = "Transactions"
 )]
 async fn get_authenticated_transactions(
     State(state): State<AppState>,
     auth_context: AuthContext,
-    Query(query): Query<TransactionsQuery>,
-) -> Result<Json<Vec<TransactionWithAccount>>, StatusCode> {
+    AuthorizedQuery {
+        query,
+        authorized_account_ids,
+    }: AuthorizedQuery<TransactionsQuery>,
+) -> Result<Json<PaginatedTransactionsResponse>, StatusCode> {
     let user_id = auth_context.user_id;
 
     let TransactionsQuery {
         search,
-        account_ids,
+        account_ids: _,
+        page,
+        page_size,
+        start_date,
+        end_date,
+        category_primary,
     } = query;
-    let account_ids_params = account_ids;
 
     tracing::info!(
-        account_ids = ?account_ids_params,
         search = ?search,
+        page = ?page,
+        page_size = ?page_size,
         "Transactions query params"
     );
 
-    if !account_ids_params.is_empty() {
-        utils::account_validation::validate_account_ownership(
-            &account_ids_params,
-            &user_id,
-            &state.db_repository,
-        )
-        .await?;
+    let page = page.unwrap_or(1).max(1);
+    let page_size = page_size.unwrap_or(50).clamp(1, 200);
+    let offset = (page - 1).saturating_mul(page_size);
+
+    let search = search
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let category_primary = category_primary
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+
+    let start_date = match start_date.as_deref() {
+        Some(raw) => {
+            Some(NaiveDate::parse_from_str(raw, "%Y-%m-%d").map_err(|_| StatusCode::BAD_REQUEST)?)
+        }
+        None => None,
+    };
+    let end_date = match end_date.as_deref() {
+        Some(raw) => {
+            Some(NaiveDate::parse_from_str(raw, "%Y-%m-%d").map_err(|_| StatusCode::BAD_REQUEST)?)
+        }
+        None => None,
+    };
+
+    if let (Some(start_date), Some(end_date)) = (start_date, end_date) {
+        if end_date < start_date {
+            return Err(StatusCode::BAD_REQUEST);
+        }
     }
 
-    let rules = state
-        .db_repository
-        .get_category_rules(user_id)
-        .await
-        .unwrap_or_default();
+    let account_ids: Option<Vec<Uuid>> = authorized_account_ids
+        .as_ref()
+        .map(|ids| ids.iter().copied().collect());
+    let account_ids_ref = account_ids.as_deref();
 
+    let transactions_future = state.db_repository.get_transactions_paginated(
+        &user_id,
+        page_size,
+        offset,
+        search,
+        account_ids_ref,
+        start_date,
+        end_date,
+        category_primary,
+    );
+    let count_future = state.db_repository.count_transactions(
+        &user_id,
+        search,
+        account_ids_ref,
+        start_date,
+        end_date,
+        category_primary,
+    );
+
+    let (transactions_result, total_result) = tokio::join!(transactions_future, count_future);
+
+    let transactions = match transactions_result {
+        Ok(transactions) => transactions,
+        Err(e) => {
+            tracing::error!(
+                "Failed to fetch paginated transactions for user {}: {}",
+                user_id,
+                e
+            );
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    };
+
+    let total = match total_result {
+        Ok(total) => total,
+        Err(e) => {
+            tracing::error!("Failed to count transactions for user {}: {}", user_id, e);
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    };
+
+    tracing::info!(
+        record_count = transactions.len(),
+        total,
+        "Data access: transactions"
+    );
+    Ok(Json(PaginatedTransactionsResponse {
+        transactions,
+        total,
+        page,
+        page_size,
+    }))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/transactions/insights",
+    description = "Returns aggregated transaction insights for the current filters.",
+    params(("search" = Option<String>, Query, description = "Search transactions by merchant, category, or account"),
+           ("account_ids" = Option<Vec<String>>, Query, description = "Filter by account IDs"),
+           ("start_date" = Option<String>, Query, description = "Start date in YYYY-MM-DD format"),
+           ("end_date" = Option<String>, Query, description = "End date in YYYY-MM-DD format"),
+           ("category_primary" = Option<String>, Query, description = "Filter by primary category")),
+    responses(
+        (status = 200, description = "Transaction insights", body = TransactionsInsightsResponse),
+        (status = 400, description = "Invalid account filter"),
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Account filter references another user"),
+        (status = 500, description = "Internal server error"),
+    ),
+    security(("auth_cookie" = [])),
+    tag = "Transactions"
+)]
+async fn get_authenticated_transactions_insights(
+    State(state): State<AppState>,
+    auth_context: AuthContext,
+    AuthorizedQuery {
+        query,
+        authorized_account_ids,
+    }: AuthorizedQuery<TransactionsQuery>,
+) -> Result<Json<TransactionsInsightsResponse>, StatusCode> {
+    let user_id = auth_context.user_id;
+
+    let TransactionsQuery {
+        search,
+        account_ids: _,
+        page: _,
+        page_size: _,
+        start_date,
+        end_date,
+        category_primary,
+    } = query;
+
+    let search = search
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let category_primary = category_primary
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+
+    let start_date = match start_date.as_deref() {
+        Some(raw) => {
+            Some(NaiveDate::parse_from_str(raw, "%Y-%m-%d").map_err(|_| StatusCode::BAD_REQUEST)?)
+        }
+        None => None,
+    };
+    let end_date = match end_date.as_deref() {
+        Some(raw) => {
+            Some(NaiveDate::parse_from_str(raw, "%Y-%m-%d").map_err(|_| StatusCode::BAD_REQUEST)?)
+        }
+        None => None,
+    };
+
+    if let (Some(start_date), Some(end_date)) = (start_date, end_date) {
+        if end_date < start_date {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+    }
+
+    let account_ids: Option<Vec<Uuid>> = authorized_account_ids
+        .as_ref()
+        .map(|ids| ids.iter().copied().collect());
+    let account_ids_ref = account_ids.as_deref();
+
+    let insights = state
+        .db_repository
+        .get_transactions_insights(
+            &user_id,
+            search,
+            account_ids_ref,
+            start_date,
+            end_date,
+            category_primary,
+        )
+        .await
+        .map_err(|e| {
+            tracing::error!(
+                "Failed to load transaction insights for user {}: {}",
+                user_id,
+                e
+            );
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    Ok(Json(insights))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/transactions/categories",
+    description = "Returns the user's transaction categories sorted and deduplicated.",
+    responses(
+        (status = 200, description = "List of categories", body = Vec<String>),
+        (status = 401, description = "Unauthorized"),
+        (status = 500, description = "Internal server error"),
+    ),
+    security(("auth_cookie" = [])),
+    tag = "Transactions"
+)]
+async fn get_authenticated_transaction_categories(
+    State(state): State<AppState>,
+    auth_context: AuthContext,
+) -> Result<Json<Vec<String>>, StatusCode> {
     match state
         .db_repository
-        .get_transactions_with_account_for_user(&user_id)
+        .get_distinct_transaction_categories(&auth_context.user_id)
         .await
     {
-        Ok(mut transactions) => {
-            if !account_ids_params.is_empty() {
-                let account_ids: Vec<Uuid> = account_ids_params
-                    .iter()
-                    .filter_map(|s| Uuid::parse_str(s).ok())
-                    .collect();
-
-                let account_id_set: std::collections::HashSet<Uuid> =
-                    account_ids.into_iter().collect();
-                transactions.retain(|t| account_id_set.contains(&t.account_id));
-            }
-
-            // Apply glob rules to transactions that have no explicit override.
-            // Earlier rules take precedence (first match wins).
-            tracing::info!(rule_count = rules.len(), "applying category rules");
-            for txn in transactions.iter_mut() {
-                if txn.custom_category.is_none() {
-                    let merchant = txn.merchant_name.as_deref().unwrap_or("<null>");
-                    for rule in &rules {
-                        let matched = utils::glob::glob_match(&rule.pattern, merchant);
-                        tracing::info!(
-                            pattern = %rule.pattern,
-                            merchant = %merchant,
-                            matched = %matched,
-                            "category rule check"
-                        );
-                        if matched {
-                            txn.rule_category = Some(rule.category_name.clone());
-                            break;
-                        }
-                    }
-                }
-            }
-
-            if let Some(search) = search.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty()) {
-                let needle = search.to_lowercase();
-                let filtered: Vec<TransactionWithAccount> = transactions
-                    .into_iter()
-                    .filter(|t| {
-                        let merchant = t.merchant_name.as_deref().unwrap_or("").to_lowercase();
-                        let cat_primary = t.category_primary.to_lowercase();
-                        let cat_detailed = t.category_detailed.to_lowercase();
-                        let account_name = t.account_name.to_lowercase();
-                        merchant.contains(&needle)
-                            || cat_primary.contains(&needle)
-                            || cat_detailed.contains(&needle)
-                            || account_name.contains(&needle)
-                    })
-                    .collect();
-                tracing::info!(record_count = filtered.len(), "Data access: transactions");
-                Ok(Json(filtered))
-            } else {
-                tracing::info!(
-                    record_count = transactions.len(),
-                    "Data access: transactions"
-                );
-                Ok(Json(transactions))
-            }
-        }
-        Err(_) => {
-            tracing::info!(record_count = 0, "Data access: transactions");
-            Ok(Json(vec![]))
+        Ok(categories) => Ok(Json(categories)),
+        Err(e) => {
+            tracing::error!(
+                "Failed to fetch transaction categories for user {}: {}",
+                auth_context.user_id,
+                e
+            );
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
     }
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/categories",
+    responses(
+        (status = 200, description = "List of system and custom categories", body = crate::models::custom_category::CategoryListResponse),
+        (status = 401, description = "Unauthorized", body = ApiErrorResponse),
+        (status = 500, description = "Internal server error"),
+    ),
+    security(("auth_cookie" = [])),
+    tag = "Categories"
+)]
+async fn list_categories(
+    State(state): State<AppState>,
+    auth_context: AuthContext,
+) -> Result<Json<crate::models::custom_category::CategoryListResponse>, StatusCode> {
+    match state
+        .category_management_service
+        .list_categories_for_user(&*state.db_repository, &auth_context.user_id)
+        .await
+    {
+        Ok(response) => Ok(Json(response)),
+        Err(e) => {
+            tracing::error!(
+                "Failed to fetch categories for user {}: {}",
+                auth_context.user_id,
+                e
+            );
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/categories/custom",
+    request_body = crate::models::custom_category::CreateCustomCategoryRequest,
+    responses(
+        (status = 200, description = "Custom category created", body = crate::models::custom_category::CustomCategory),
+        (status = 400, description = "Validation error with error code"),
+        (status = 401, description = "Unauthorized", body = ApiErrorResponse),
+        (status = 500, description = "Internal server error"),
+    ),
+    security(("auth_cookie" = [])),
+    tag = "Categories"
+)]
+async fn create_custom_category(
+    State(state): State<AppState>,
+    auth_context: AuthContext,
+    Json(req): Json<crate::models::custom_category::CreateCustomCategoryRequest>,
+) -> Result<
+    Json<crate::models::custom_category::CustomCategory>,
+    (StatusCode, Json<ApiErrorResponse>),
+> {
+    use crate::services::category_management::service::CategoryServiceError;
+
+    match state
+        .category_management_service
+        .create_custom_category(&*state.db_repository, &auth_context.user_id, &req.name)
+        .await
+    {
+        Ok(category) => Ok(Json(category)),
+        Err(CategoryServiceError::Db(e)) => {
+            tracing::error!(
+                "Failed to create custom category for user {}: {}",
+                auth_context.user_id,
+                e
+            );
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiErrorResponse::new(
+                    "internal_error",
+                    "internal_server_error",
+                )),
+            ))
+        }
+        Err(CategoryServiceError::Validation(e)) => {
+            let (message, error_code) = match e {
+                crate::models::custom_category::CustomCategoryError::NameTooLong => {
+                    ("Name too long", "name_too_long")
+                }
+                crate::models::custom_category::CustomCategoryError::TooManyWords => {
+                    ("Too many words", "too_many_words")
+                }
+                crate::models::custom_category::CustomCategoryError::EmptyName => {
+                    ("Name is empty", "empty_name")
+                }
+                crate::models::custom_category::CustomCategoryError::InvalidCharacters => {
+                    ("Invalid characters", "invalid_characters")
+                }
+                crate::models::custom_category::CustomCategoryError::CollidesWithSystemCategory => {
+                    (
+                        "Collides with system category",
+                        "collides_with_system_category",
+                    )
+                }
+                crate::models::custom_category::CustomCategoryError::CollidesWithExistingCustom => {
+                    (
+                        "Collides with existing custom category",
+                        "collides_with_existing_custom",
+                    )
+                }
+            };
+            Err((
+                StatusCode::BAD_REQUEST,
+                Json(ApiErrorResponse::with_code(
+                    "validation_error",
+                    message,
+                    error_code,
+                )),
+            ))
+        }
+        Err(other) => {
+            tracing::error!(
+                "Unexpected error creating custom category for user {}: {:?}",
+                auth_context.user_id,
+                other
+            );
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiErrorResponse::new(
+                    "internal_error",
+                    "internal_server_error",
+                )),
+            ))
+        }
+    }
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/categories/custom/{id}",
+    params(
+        ("id" = Uuid, Path, description = "Custom category ID"),
+    ),
+    responses(
+        (status = 204, description = "Custom category deleted"),
+        (status = 401, description = "Unauthorized", body = ApiErrorResponse),
+        (status = 500, description = "Internal server error"),
+    ),
+    security(("auth_cookie" = [])),
+    tag = "Categories"
+)]
+async fn delete_custom_category(
+    State(state): State<AppState>,
+    auth_context: AuthContext,
+    axum::extract::Path(id): axum::extract::Path<Uuid>,
+) -> Result<StatusCode, StatusCode> {
+    match state
+        .category_management_service
+        .delete_custom_category(&*state.db_repository, &auth_context.user_id, &id)
+        .await
+    {
+        Ok(_) => Ok(StatusCode::NO_CONTENT),
+        Err(e) => {
+            tracing::error!(
+                "Failed to delete custom category {} for user {}: {}",
+                id,
+                auth_context.user_id,
+                e
+            );
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+#[utoipa::path(
+    put,
+    path = "/api/transactions/{id}/category",
+    request_body = crate::models::transaction_category_override::SetTransactionCategoryRequest,
+    params(
+        ("id" = Uuid, Path, description = "Transaction ID"),
+    ),
+    responses(
+        (status = 200, description = "Category updated"),
+        (status = 400, description = "Validation error"),
+        (status = 401, description = "Unauthorized", body = ApiErrorResponse),
+        (status = 404, description = "Transaction not found"),
+        (status = 500, description = "Internal server error"),
+    ),
+    security(("auth_cookie" = [])),
+    tag = "Transactions"
+)]
+async fn set_transaction_category(
+    State(state): State<AppState>,
+    auth_context: AuthContext,
+    axum::extract::Path(id): axum::extract::Path<Uuid>,
+    Json(req): Json<crate::models::transaction_category_override::SetTransactionCategoryRequest>,
+) -> Result<StatusCode, (StatusCode, Json<ApiErrorResponse>)> {
+    use crate::services::category_management::service::CategoryServiceError;
+
+    match state
+        .category_management_service
+        .set_transaction_category(&*state.db_repository, &auth_context.user_id, &id, req)
+        .await
+    {
+        Ok(_) => Ok(StatusCode::OK),
+        Err(CategoryServiceError::TransactionNotFound) => Err((
+            StatusCode::NOT_FOUND,
+            Json(ApiErrorResponse::new("not_found", "transaction_not_found")),
+        )),
+        Err(CategoryServiceError::CustomCategoryNotFound) => Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiErrorResponse::new(
+                "validation_error",
+                "custom_category_not_found",
+            )),
+        )),
+        Err(CategoryServiceError::Db(e)) => {
+            tracing::error!(
+                "Database error setting category for transaction {}: {}",
+                id,
+                e
+            );
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiErrorResponse::new(
+                    "internal_error",
+                    "internal_server_error",
+                )),
+            ))
+        }
+        Err(CategoryServiceError::Validation(_)) => Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiErrorResponse::new(
+                "validation_error",
+                "validation_error",
+            )),
+        )),
+    }
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/transactions/auto-categorize",
+    responses(
+        (status = 200, description = "Background categorization started", body = AutoCategorizationJobState),
+        (status = 401, description = "Unauthorized", body = ApiErrorResponse),
+        (status = 409, description = "Active job already exists", body = AutoCategorizationJobState),
+        (status = 500, description = "Internal server error", body = ApiErrorResponse),
+    ),
+    security(("auth_cookie" = [])),
+    tag = "Transactions"
+)]
+async fn start_auto_categorization(
+    State(state): State<AppState>,
+    auth_context: AuthContext,
+) -> Result<Response, (StatusCode, Json<ApiErrorResponse>)> {
+    match state
+        .auto_categorization_service
+        .start(&auth_context.user_id, &auth_context.jwt_id)
+        .await
+    {
+        Ok(job) => Ok((StatusCode::OK, Json(job)).into_response()),
+        Err(AutoCategorizationError::ActiveJobExists(job)) => {
+            Ok((StatusCode::CONFLICT, Json(job)).into_response())
+        }
+        Err(AutoCategorizationError::NoActiveJob) => Err(ApiErrorResponse::internal_server_error(
+            "Failed to start auto-categorization",
+        )),
+        Err(AutoCategorizationError::Storage(error)) => {
+            tracing::error!(
+                "Failed to start auto-categorization for user {}: {}",
+                auth_context.user_id,
+                error
+            );
+            Err(ApiErrorResponse::internal_server_error(
+                "Failed to start auto-categorization",
+            ))
+        }
+    }
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/transactions/auto-categorize",
+    responses(
+        (status = 200, description = "Latest auto-categorization job status", body = AutoCategorizationJobState),
+        (status = 401, description = "Unauthorized", body = ApiErrorResponse),
+        (status = 500, description = "Internal server error", body = ApiErrorResponse),
+    ),
+    security(("auth_cookie" = [])),
+    tag = "Transactions"
+)]
+async fn get_auto_categorization_status(
+    State(state): State<AppState>,
+    auth_context: AuthContext,
+) -> Result<Json<Option<AutoCategorizationJobState>>, (StatusCode, Json<ApiErrorResponse>)> {
+    match state
+        .auto_categorization_service
+        .get_status(&auth_context.user_id)
+        .await
+    {
+        Ok(status) => Ok(Json(status)),
+        Err(error) => {
+            tracing::error!(
+                "Failed to fetch auto-categorization status for user {}: {}",
+                auth_context.user_id,
+                error
+            );
+            Err(ApiErrorResponse::internal_server_error(
+                "Failed to fetch auto-categorization status",
+            ))
+        }
+    }
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/transactions/auto-categorize",
+    responses(
+        (status = 200, description = "Cancellation requested for active job", body = AutoCategorizationJobState),
+        (status = 401, description = "Unauthorized", body = ApiErrorResponse),
+        (status = 404, description = "No active job to cancel", body = ApiErrorResponse),
+        (status = 500, description = "Internal server error", body = ApiErrorResponse),
+    ),
+    security(("auth_cookie" = [])),
+    tag = "Transactions"
+)]
+async fn cancel_auto_categorization(
+    State(state): State<AppState>,
+    auth_context: AuthContext,
+) -> Result<Json<AutoCategorizationJobState>, (StatusCode, Json<ApiErrorResponse>)> {
+    match state
+        .auto_categorization_service
+        .cancel(&auth_context.user_id)
+        .await
+    {
+        Ok(job) => Ok(Json(job)),
+        Err(AutoCategorizationError::NoActiveJob) => Err((
+            StatusCode::NOT_FOUND,
+            Json(ApiErrorResponse::new(
+                "not_found",
+                "auto_categorization_job_not_found",
+            )),
+        )),
+        Err(AutoCategorizationError::ActiveJobExists(_)) => Err(
+            ApiErrorResponse::internal_server_error("Failed to cancel auto-categorization"),
+        ),
+        Err(AutoCategorizationError::Storage(error)) => {
+            tracing::error!(
+                "Failed to cancel auto-categorization for user {}: {}",
+                auth_context.user_id,
+                error
+            );
+            Err(ApiErrorResponse::internal_server_error(
+                "Failed to cancel auto-categorization",
+            ))
+        }
+    }
+}
+
+struct ParsedImportMultipart {
+    file_name: String,
+    file_bytes: Vec<u8>,
+    account_id: Uuid,
+    csv_mapping: Option<CsvColumnMapping>,
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/transactions/import/validate",
+    request_body(content = inline(ImportMultipartRequest), content_type = "multipart/form-data"),
+    responses(
+        (status = 200, description = "File validation result", body = ValidateResponse),
+        (status = 400, description = "Missing fields, invalid multipart payload, unsupported extension, invalid UTF-8, or invalid CSV mapping"),
+        (status = 401, description = "Unauthorized", body = ApiErrorResponse),
+        (status = 403, description = "Account belongs to another user"),
+        (status = 413, description = "Payload too large"),
+        (status = 500, description = "Internal server error"),
+    ),
+    security(("auth_cookie" = [])),
+    tag = "Transactions"
+)]
+async fn validate_authenticated_transaction_import(
+    State(state): State<AppState>,
+    auth_context: AuthContext,
+    mut multipart: Multipart,
+) -> Result<Json<ValidateResponse>, (StatusCode, Json<ApiErrorResponse>)> {
+    let import = parse_transaction_import_multipart(&mut multipart).await?;
+    let ParsedImportMultipart {
+        file_name,
+        file_bytes,
+        account_id,
+        csv_mapping: _,
+    } = import;
+
+    ensure_import_account_owned(&state, &auth_context.user_id, &account_id).await?;
+
+    let content = String::from_utf8(file_bytes)
+        .map_err(|_| api_bad_request("Uploaded file must be valid UTF-8"))?;
+
+    if crate::services::import_service::detect_import_format(&file_name).is_none() {
+        return Err(api_bad_request(format!(
+            "Unsupported file extension for '{}'",
+            file_name
+        )));
+    }
+
+    Ok(Json(ImportService::validate_file(
+        &content,
+        &file_name,
+        &account_id,
+    )))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/transactions/import",
+    request_body(content = inline(ImportMultipartRequest), content_type = "multipart/form-data"),
+    responses(
+        (status = 200, description = "Transactions imported successfully", body = ImportResponse),
+        (status = 400, description = "Missing fields, invalid multipart payload, unsupported extension, invalid UTF-8, invalid CSV mapping, or file with no valid transactions"),
+        (status = 401, description = "Unauthorized", body = ApiErrorResponse),
+        (status = 403, description = "Account belongs to another user"),
+        (status = 413, description = "Payload too large"),
+        (status = 500, description = "Internal server error"),
+    ),
+    security(("auth_cookie" = [])),
+    tag = "Transactions"
+)]
+async fn import_authenticated_transactions(
+    State(state): State<AppState>,
+    auth_context: AuthContext,
+    mut multipart: Multipart,
+) -> Result<Json<ImportResponse>, (StatusCode, Json<ApiErrorResponse>)> {
+    let import = parse_transaction_import_multipart(&mut multipart).await?;
+    let ParsedImportMultipart {
+        file_name,
+        file_bytes,
+        account_id,
+        csv_mapping,
+    } = import;
+
+    ensure_import_account_owned(&state, &auth_context.user_id, &account_id).await?;
+
+    let content = String::from_utf8(file_bytes)
+        .map_err(|_| api_bad_request("Uploaded file must be valid UTF-8"))?;
+    let format =
+        crate::services::import_service::detect_import_format(&file_name).ok_or_else(|| {
+            api_bad_request(format!("Unsupported file extension for '{}'", file_name))
+        })?;
+
+    let mut parsed = match format {
+        ImportFileFormat::Ofx
+        | ImportFileFormat::Qfx
+        | ImportFileFormat::Qbo
+        | ImportFileFormat::Qbx => ImportService::parse_ofx(&content, &account_id),
+        ImportFileFormat::Csv => {
+            let mapping = match csv_mapping {
+                Some(mapping) => mapping,
+                None => detect_csv_mapping_from_content(&content)?,
+            };
+
+            let mapping_errors = csv_mapping_errors(&mapping);
+            if !mapping_errors.is_empty() {
+                return Err(api_bad_request(mapping_errors.join("; ")));
+            }
+
+            ImportService::parse_csv(&content, &mapping, &account_id)
+        }
+    };
+
+    if parsed.transactions.is_empty() {
+        let message = if parsed.errors.is_empty() {
+            "No valid transactions were found in the uploaded file".to_string()
+        } else {
+            parsed.errors.join("; ")
+        };
+        return Err(api_bad_request(message));
+    }
+
+    let mut transactions = std::mem::take(&mut parsed.transactions);
+
+    for transaction in &mut transactions {
+        transaction.user_id = Some(auth_context.user_id);
+    }
+
+    let transaction_counts_before = state
+        .db_repository
+        .get_transaction_count_by_account_for_user(&auth_context.user_id)
+        .await
+        .map_err(|_| api_internal_server_error("Failed to load existing transaction counts"))?;
+    let before_count = transaction_counts_before
+        .get(&account_id)
+        .copied()
+        .unwrap_or(0);
+
+    state
+        .db_repository
+        .upsert_transactions_batch(&transactions, &auth_context.user_id)
+        .await
+        .map_err(|_| api_internal_server_error("Failed to import transactions"))?;
+
+    if let Err(e) = state
+        .cache_service
+        .clear_transactions(&auth_context.jwt_id)
+        .await
+    {
+        tracing::warn!(
+            "Failed to clear transaction cache after file import for user {}: {}",
+            auth_context.user_id,
+            e
+        );
+    }
+
+    let transaction_counts_after = state
+        .db_repository
+        .get_transaction_count_by_account_for_user(&auth_context.user_id)
+        .await
+        .map_err(|_| api_internal_server_error("Failed to refresh transaction counts"))?;
+    let after_count = transaction_counts_after
+        .get(&account_id)
+        .copied()
+        .unwrap_or(before_count);
+
+    let imported_count = after_count.saturating_sub(before_count);
+    let total_parsed = transactions.len() as i64;
+    let skipped_count = total_parsed.saturating_sub(imported_count);
+
+    Ok(Json(ImportResponse {
+        imported_count,
+        skipped_count,
+        truncated_count: parsed.truncated_count as i64,
+        total_parsed,
+        errors: std::mem::take(&mut parsed.errors),
+    }))
+}
+
+async fn parse_transaction_import_multipart(
+    multipart: &mut Multipart,
+) -> Result<ParsedImportMultipart, (StatusCode, Json<ApiErrorResponse>)> {
+    let mut file_name = None;
+    let mut file_bytes = None;
+    let mut account_id = None;
+    let mut csv_mapping = None;
+
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|_| api_bad_request("Invalid multipart request"))?
+    {
+        let field_name = field.name().map(str::to_string).unwrap_or_default();
+        match field_name.as_str() {
+            "file" => {
+                file_name = field.file_name().map(str::to_string);
+                let bytes = field
+                    .bytes()
+                    .await
+                    .map_err(|_| api_bad_request("Unable to read uploaded file"))?;
+                file_bytes = Some(bytes.to_vec());
+            }
+            "account_id" => {
+                let value = field
+                    .text()
+                    .await
+                    .map_err(|_| api_bad_request("Unable to read account_id"))?;
+                account_id = Some(
+                    Uuid::parse_str(value.trim())
+                        .map_err(|_| api_bad_request("account_id must be a valid UUID"))?,
+                );
+            }
+            "csv_mapping" => {
+                let value = field
+                    .text()
+                    .await
+                    .map_err(|_| api_bad_request("Unable to read csv_mapping"))?;
+                csv_mapping = Some(
+                    serde_json::from_str(&value)
+                        .map_err(|_| api_bad_request("csv_mapping must be valid JSON"))?,
+                );
+            }
+            _ => {
+                let _ = field
+                    .bytes()
+                    .await
+                    .map_err(|_| api_bad_request("Unable to read multipart field"))?;
+            }
+        }
+    }
+
+    let file_name = file_name.ok_or_else(|| api_bad_request("file is required"))?;
+    let file_bytes = file_bytes.ok_or_else(|| api_bad_request("file is required"))?;
+    let account_id = account_id.ok_or_else(|| api_bad_request("account_id is required"))?;
+
+    Ok(ParsedImportMultipart {
+        file_name,
+        file_bytes,
+        account_id,
+        csv_mapping,
+    })
+}
+
+async fn ensure_import_account_owned(
+    state: &AppState,
+    user_id: &Uuid,
+    account_id: &Uuid,
+) -> Result<(), (StatusCode, Json<ApiErrorResponse>)> {
+    let account_ids = vec![account_id.to_string()];
+    state
+        .authorization_service
+        .validate_account_ownership(&account_ids, user_id, state.db_repository.as_ref())
+        .await
+        .map(|_| ())
+        .map_err(|status| match status {
+            StatusCode::FORBIDDEN => {
+                api_forbidden("Account does not belong to the authenticated user")
+            }
+            _ => api_internal_server_error("Failed to validate account ownership"),
+        })
+}
+
+fn detect_csv_mapping_from_content(
+    content: &str,
+) -> Result<CsvColumnMapping, (StatusCode, Json<ApiErrorResponse>)> {
+    let headers =
+        crate::services::import_service::read_csv_headers(content).map_err(api_bad_request)?;
+    Ok(ImportService::detect_csv_mapping(&StringRecord::from(
+        headers,
+    )))
+}
+
+fn csv_mapping_errors(mapping: &CsvColumnMapping) -> Vec<String> {
+    let mut errors = Vec::new();
+
+    if mapping.date_column.is_none() {
+        errors.push("Unable to detect a CSV date column".to_string());
+    }
+    if mapping.description_column.is_none() {
+        errors.push("Unable to detect a CSV description column".to_string());
+    }
+    if mapping.amount_column.is_none()
+        && mapping.debit_column.is_none()
+        && mapping.credit_column.is_none()
+    {
+        errors.push("Unable to detect a CSV amount, debit, or credit column".to_string());
+    }
+
+    errors
+}
+
+fn api_bad_request(message: impl Into<String>) -> (StatusCode, Json<ApiErrorResponse>) {
+    ApiErrorResponse::new("BAD_REQUEST", &message.into()).into_response(StatusCode::BAD_REQUEST)
+}
+
+fn api_forbidden(message: impl Into<String>) -> (StatusCode, Json<ApiErrorResponse>) {
+    ApiErrorResponse::new("FORBIDDEN", &message.into()).into_response(StatusCode::FORBIDDEN)
+}
+
+fn api_internal_server_error(message: impl Into<String>) -> (StatusCode, Json<ApiErrorResponse>) {
+    ApiErrorResponse::new("INTERNAL_SERVER_ERROR", &message.into())
+        .into_response(StatusCode::INTERNAL_SERVER_ERROR)
 }
 
 #[utoipa::path(
@@ -1039,15 +2082,15 @@ async fn get_authenticated_transactions(
         (status = 401, description = "Unauthorized"),
         (status = 500, description = "Failed to create link token", body = ApiErrorResponse),
     ),
-    security(("bearer_auth" = [])),
+    security(("auth_cookie" = [])),
     tag = "Plaid"
 )]
 async fn create_authenticated_link_token(
     State(state): State<AppState>,
     auth_context: AuthContext,
     Json(_req): Json<LinkTokenRequest>,
-) -> Result<Json<LinkTokenResponse>, (StatusCode, Json<ApiErrorResponse>)> {
-    let provider = state.config.get_default_provider();
+) -> Result<Json<LinkTokenResponse>, StatusCode> {
+    let provider = "plaid";
 
     match state
         .connection_service
@@ -1096,7 +2139,7 @@ async fn create_authenticated_link_token(
         (status = 502, description = "Token exchange failed with provider"),
         (status = 500, description = "Internal server error"),
     ),
-    security(("bearer_auth" = [])),
+    security(("auth_cookie" = [])),
     tag = "Plaid"
 )]
 async fn exchange_authenticated_public_token(
@@ -1105,7 +2148,7 @@ async fn exchange_authenticated_public_token(
     Json(req): Json<ExchangeTokenRequest>,
 ) -> Result<Json<ExchangeTokenResponse>, StatusCode> {
     let user_id = auth_context.user_id;
-    let provider = state.config.get_default_provider();
+    let provider = "plaid";
 
     match state
         .connection_service
@@ -1151,7 +2194,7 @@ async fn exchange_authenticated_public_token(
         (status = 401, description = "Unauthorized"),
         (status = 500, description = "Internal server error"),
     ),
-    security(("bearer_auth" = [])),
+    security(("auth_cookie" = [])),
     tag = "Plaid"
 )]
 async fn get_authenticated_plaid_accounts(
@@ -1181,6 +2224,22 @@ async fn get_authenticated_plaid_accounts(
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
 
+    let provider_by_connection_id = state
+        .db_repository
+        .get_all_provider_connections_by_user(&user_id)
+        .await
+        .map_err(|e| {
+            tracing::error!(
+                "Failed to get provider connections for user {}: {}",
+                user_id,
+                e
+            );
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?
+        .into_iter()
+        .map(|connection| (connection.id, connection.provider))
+        .collect::<std::collections::HashMap<_, _>>();
+
     let account_responses: Vec<AccountResponse> = db_accounts
         .into_iter()
         .map(|account| {
@@ -1188,6 +2247,9 @@ async fn get_authenticated_plaid_accounts(
             AccountResponse {
                 id: account.id,
                 user_id: Some(user_id),
+                provider: account.provider_connection_id.and_then(|connection_id| {
+                    provider_by_connection_id.get(&connection_id).cloned()
+                }),
                 provider_account_id: account.provider_account_id.clone(),
                 provider_connection_id: account.provider_connection_id,
                 name: account.name,
@@ -1203,7 +2265,7 @@ async fn get_authenticated_plaid_accounts(
 
     tracing::info!(
         record_count = account_responses.len(),
-        provider = "plaid",
+        provider = "unified",
         "Data access: accounts"
     );
 
@@ -1663,188 +2725,141 @@ async fn delete_authenticated_manual_investment_account(
         (status = 200, description = "Transactions synced successfully", body = SyncTransactionsResponse),
         (status = 400, description = "Missing connection_id"),
         (status = 401, description = "Unauthorized"),
+        (status = 415, description = "Unsupported media type"),
         (status = 404, description = "Connection not found or credentials missing"),
         (status = 502, description = "Provider request failed"),
         (status = 500, description = "Internal server error"),
     ),
-    security(("bearer_auth" = [])),
+    security(("auth_cookie" = [])),
     tag = "Financial Providers"
 )]
 async fn sync_authenticated_provider_transactions(
     State(state): State<AppState>,
     auth_context: AuthContext,
-    Json(req): Json<Option<SyncTransactionsRequest>>,
-) -> Result<Json<SyncTransactionsResponse>, StatusCode> {
+    req: AuthorizedConnectionRequest<SyncTransactionsRequest>,
+) -> Result<Json<SyncTransactionsResponse>, Response> {
     let user_id = auth_context.user_id;
+    let AuthorizedConnectionRequest {
+        _body: request_body,
+        connection,
+    } = req;
 
-    tracing::info!("Sync transactions requested for user {}", user_id);
+    tracing::info!(
+        user_id = %user_id,
+        connection_id = %connection.id,
+        item_id = %connection.item_id,
+        "Sync transactions requested"
+    );
 
-    let connection_id_str = req
-        .as_ref()
-        .and_then(|r| r.connection_id.as_ref())
-        .ok_or_else(|| {
-            tracing::error!("connection_id is required for sync");
-            StatusCode::BAD_REQUEST
-        })?;
+    let reference_date = NaiveDate::parse_from_str(&request_body.client_date, "%Y-%m-%d")
+        .map_err(|_| StatusCode::BAD_REQUEST.into_response())?;
+    let mut connection = connection;
 
-    let connection_id = Uuid::parse_str(connection_id_str).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let provider = connection.provider.clone();
 
-    let mut connection = match state
-        .db_repository
-        .get_provider_connection_by_id(&connection_id, &user_id)
+    match state
+        .provider_sync_rate_limit_service
+        .try_consume_sync_quota(
+            &user_id,
+            &request_body.client_date,
+            &request_body.client_timezone,
+        )
         .await
     {
-        Ok(Some(conn)) => conn,
-        Ok(None) => {
+        Ok(crate::services::provider_sync_rate_limit_service::SyncQuotaDecision::Allowed { .. }) => {}
+        Ok(crate::services::provider_sync_rate_limit_service::SyncQuotaDecision::Limited {
+            retry_after_secs,
+        }) => {
+            return Err(sync_quota_rate_limited_response(retry_after_secs));
+        }
+        Err(crate::services::provider_sync_rate_limit_service::ProviderSyncRateLimitError::InvalidClientDate)
+        | Err(crate::services::provider_sync_rate_limit_service::ProviderSyncRateLimitError::InvalidClientTimezone) => {
+            return Err(StatusCode::BAD_REQUEST.into_response());
+        }
+        Err(crate::services::provider_sync_rate_limit_service::ProviderSyncRateLimitError::Cache(error)) => {
             tracing::error!(
-                "Connection {} not found for user {}",
-                connection_id,
-                user_id
+                error = %error,
+                user_id = %user_id,
+                "Sync quota check failed"
             );
-            return Err(StatusCode::NOT_FOUND);
-        }
-        Err(e) => {
-            tracing::error!("Failed to get connection {}: {}", connection_id, e);
-            return Err(StatusCode::INTERNAL_SERVER_ERROR);
-        }
-    };
-
-    let connection_provider = provider_for_connection(&connection.item_id);
-
-    if connection_provider == "teller" {
-        match state
-            .connection_service
-            .sync_teller_connection(&user_id, &auth_context.jwt_id, &mut connection)
-            .await
-        {
-            Ok(response) => return Ok(Json(response)),
-            Err(TellerSyncError::CredentialsMissing) => {
-                tracing::error!(
-                    "No Teller credentials for user {} and item {}",
-                    user_id,
-                    connection.item_id
-                );
-                return Err(StatusCode::NOT_FOUND);
-            }
-            Err(TellerSyncError::CredentialAccess(e)) => {
-                tracing::error!(
-                    "Failed to load Teller credentials for user {} and item {}: {}",
-                    user_id,
-                    connection.item_id,
-                    e
-                );
-                return Err(StatusCode::INTERNAL_SERVER_ERROR);
-            }
-            Err(TellerSyncError::ProviderInitialization(e)) => {
-                tracing::error!("Failed to initialize Teller provider: {}", e);
-                return Err(StatusCode::INTERNAL_SERVER_ERROR);
-            }
-            Err(TellerSyncError::ProviderRequest(e)) => {
-                tracing::error!("Teller provider request failed for user {}: {}", user_id, e);
-                return Err(StatusCode::INTERNAL_SERVER_ERROR);
-            }
-            Err(TellerSyncError::AccountLookup(e)) => {
-                tracing::error!(
-                    "Failed to fetch accounts from database for Teller user {}: {}",
-                    user_id,
-                    e
-                );
-                return Err(StatusCode::INTERNAL_SERVER_ERROR);
-            }
-            Err(TellerSyncError::TransactionLookup(e)) => {
-                tracing::error!(
-                    "Failed to load transactions for Teller user {}: {}",
-                    user_id,
-                    e
-                );
-                return Err(StatusCode::INTERNAL_SERVER_ERROR);
-            }
-            Err(TellerSyncError::ConnectionPersistence(e)) => {
-                tracing::error!(
-                    "Failed to update Teller connection {} for user {}: {}",
-                    connection_id,
-                    user_id,
-                    e
-                );
-                return Err(StatusCode::INTERNAL_SERVER_ERROR);
-            }
+            return Err(StatusCode::INTERNAL_SERVER_ERROR.into_response());
         }
     }
 
     let sync_params = SyncConnectionParams {
-        provider: connection_provider,
+        provider: provider.as_str(),
         user_id: &user_id,
         jwt_id: &auth_context.jwt_id,
     };
 
-    match state
-        .connection_service
-        .sync_provider_connection(sync_params, state.sync_service.as_ref(), &mut connection)
-        .await
-    {
-        Ok(response) => Ok(Json(response)),
-        Err(ProviderSyncError::CredentialsMissing) => {
+    let dispatcher = state
+        .sync_service_factory
+        .get_dispatcher(&provider)
+        .ok_or_else(|| {
             tracing::error!(
-                "Sync transactions: no credentials for user {} and item {}",
-                user_id,
-                connection.item_id
-            );
-            Err(StatusCode::NOT_FOUND)
-        }
-        Err(ProviderSyncError::CredentialAccess(e)) => {
-            tracing::error!(
-                "Sync transactions: failed to access credentials for user {} and item {}: {}",
-                user_id,
-                connection.item_id,
-                e
-            );
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
-        Err(ProviderSyncError::ProviderUnavailable(p)) => {
-            tracing::error!(
-                "Sync transactions: provider '{}' unavailable for user {}",
-                p,
+                "Sync transactions: unsupported provider '{}' for user {}",
+                connection.provider,
                 user_id
             );
-            Err(StatusCode::BAD_REQUEST)
+            StatusCode::BAD_REQUEST.into_response()
+        })?;
+
+    match dispatcher
+        .sync(sync_params, &mut connection, Some(reference_date))
+        .await
+    {
+        Ok(response) => {
+            if let Err(e) = state
+                .cache_service
+                .clear_jwt_scoped_bank_connection_cache(&auth_context.jwt_id, connection.id)
+                .await
+            {
+                tracing::warn!(
+                    "Failed to clear connection cache after sync for user {}: {}",
+                    user_id,
+                    e
+                );
+            }
+
+            if let Err(e) = state
+                .cache_service
+                .clear_transactions(&auth_context.jwt_id)
+                .await
+            {
+                tracing::warn!(
+                    "Failed to clear transaction cache after sync for user {}: {}",
+                    user_id,
+                    e
+                );
+            }
+
+            Ok(Json(response))
         }
-        Err(ProviderSyncError::ProviderRequest(e)) => {
-            tracing::error!(
-                "Provider request failed during sync for user {} and item {}: {}",
-                user_id,
-                connection.item_id,
-                e
-            );
-            Err(StatusCode::BAD_GATEWAY)
-        }
-        Err(ProviderSyncError::AccountLookup(e)) => {
-            tracing::error!(
-                "Failed to load accounts during sync for user {} and item {}: {}",
-                user_id,
-                connection.item_id,
-                e
-            );
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
-        Err(ProviderSyncError::TransactionLookup(e)) => {
-            tracing::error!(
-                "Failed to load transactions during sync for user {} and item {}: {}",
-                user_id,
-                connection.item_id,
-                e
-            );
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
-        Err(ProviderSyncError::SyncFailure(e)) => {
-            tracing::error!(
-                "Sync service failed for user {} and item {}: {}",
-                user_id,
-                connection.item_id,
-                e
-            );
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
+        Err(err) => Err(provider_sync_error_to_response(
+            err,
+            user_id,
+            &connection.item_id,
+        )),
     }
+}
+
+fn sync_quota_rate_limited_response(retry_after_secs: u64) -> Response {
+    let payload = ApiErrorResponse::with_code(
+        "TOO_MANY_REQUESTS",
+        "Daily sync limit reached (24 per day). Try again tomorrow.",
+        "RATE_LIMITED",
+    );
+    let body = serde_json::to_vec(&payload).unwrap_or_else(|_| b"{}".to_vec());
+
+    Response::builder()
+        .status(StatusCode::TOO_MANY_REQUESTS)
+        .header(CONTENT_TYPE, "application/json")
+        .header(
+            axum::http::header::RETRY_AFTER,
+            retry_after_secs.to_string(),
+        )
+        .body(axum::body::Body::from(body))
+        .unwrap_or_else(|_| Response::new(axum::body::Body::empty()))
 }
 
 #[utoipa::path(
@@ -1856,7 +2871,7 @@ async fn sync_authenticated_provider_transactions(
         (status = 401, description = "Unauthorized"),
         (status = 500, description = "Internal server error"),
     ),
-    security(("bearer_auth" = [])),
+    security(("auth_cookie" = [])),
     tag = "Analytics"
 )]
 async fn get_authenticated_current_month_spending(
@@ -1865,31 +2880,28 @@ async fn get_authenticated_current_month_spending(
     _headers: HeaderMap,
 ) -> Result<Json<rust_decimal::Decimal>, StatusCode> {
     let user_id = auth_context.user_id;
-
-    let rules = state
-        .db_repository
-        .get_category_rules(user_id)
+    let (start_date, end_date) = state.analytics_service.current_month_date_range();
+    let transactions = state
+        .analytics_service
+        .load_spending_transactions(
+            state.db_repository.as_ref(),
+            &user_id,
+            Some(start_date),
+            Some(end_date),
+        )
         .await
-        .unwrap_or_default();
-
-    match state
-        .db_repository
-        .get_transactions_with_account_for_user(&user_id)
-        .await
-    {
-        Ok(mut transactions) => {
-            apply_category_rules(&mut transactions, &rules);
-
-            let total = state
-                .analytics_service
-                .calculate_current_month_spending_with_account(&transactions);
-            Ok(Json(total))
-        }
-        Err(e) => {
-            tracing::error!("Failed to get transactions for user {}: {}", user_id, e);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
-    }
+        .map_err(|e| {
+            tracing::error!(
+                "Failed to get spending transactions for user {}: {}",
+                user_id,
+                e
+            );
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    let total = state
+        .analytics_service
+        .calculate_current_month_spending(&transactions);
+    Ok(Json(total))
 }
 
 #[utoipa::path(
@@ -1903,7 +2915,7 @@ async fn get_authenticated_current_month_spending(
         (status = 401, description = "Unauthorized"),
         (status = 500, description = "Internal server error"),
     ),
-    security(("bearer_auth" = [])),
+    security(("auth_cookie" = [])),
     tag = "Analytics"
 )]
 async fn get_authenticated_daily_spending(
@@ -1932,31 +2944,32 @@ async fn get_authenticated_daily_spending(
         (now.year(), now.month())
     };
 
-    let rules = state
-        .db_repository
-        .get_category_rules(user_id)
+    let (start_date, end_date) = state
+        .analytics_service
+        .month_date_range(year, month)
+        .ok_or(StatusCode::BAD_REQUEST)?;
+    let transactions = state
+        .analytics_service
+        .load_spending_transactions(
+            state.db_repository.as_ref(),
+            &user_id,
+            Some(start_date),
+            Some(end_date),
+        )
         .await
-        .unwrap_or_default();
-
-    match state
-        .db_repository
-        .get_transactions_with_account_for_user(&user_id)
-        .await
-    {
-        Ok(mut transactions) => {
-            apply_category_rules(&mut transactions, &rules);
-
-            let daily_spending =
-                state
-                    .analytics_service
-                    .calculate_daily_spending_with_account(&transactions, year, month);
-            Ok(Json(daily_spending))
-        }
-        Err(e) => {
-            tracing::error!("Failed to get transactions for user {}: {}", user_id, e);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
-    }
+        .map_err(|e| {
+            tracing::error!(
+                "Failed to get spending transactions for user {}: {}",
+                user_id,
+                e
+            );
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    let daily_spending =
+        state
+            .analytics_service
+            .calculate_daily_spending(&transactions, year, month);
+    Ok(Json(daily_spending))
 }
 
 #[utoipa::path(
@@ -1968,7 +2981,7 @@ async fn get_authenticated_daily_spending(
         (status = 401, description = "Unauthorized"),
         (status = 500, description = "Internal server error"),
     ),
-    security(("bearer_auth" = [])),
+    security(("auth_cookie" = [])),
     tag = "Plaid"
 )]
 async fn clear_authenticated_synced_data(
@@ -1977,7 +2990,11 @@ async fn clear_authenticated_synced_data(
 ) -> Result<Json<ClearSyncedDataResponse>, StatusCode> {
     let user_id = auth_context.user_id;
 
-    match state.cache_service.clear_transactions().await {
+    match state
+        .cache_service
+        .clear_transactions(&auth_context.jwt_id)
+        .await
+    {
         Ok(_) => Ok(Json(ClearSyncedDataResponse {
             cleared: true,
             user_id: user_id.to_string(),
@@ -2001,85 +3018,49 @@ async fn clear_authenticated_synced_data(
         (status = 401, description = "Unauthorized"),
         (status = 500, description = "Internal server error"),
     ),
-    security(("bearer_auth" = [])),
+    security(("auth_cookie" = [])),
     tag = "Analytics"
 )]
 async fn get_authenticated_spending_by_date_range(
     State(state): State<AppState>,
     auth_context: AuthContext,
-    _headers: HeaderMap,
-    uri: Uri,
+    AuthorizedQuery {
+        query,
+        authorized_account_ids,
+    }: AuthorizedQuery<DateRangeQuery>,
 ) -> Result<Json<rust_decimal::Decimal>, StatusCode> {
     let user_id = auth_context.user_id;
 
-    let query_string = uri.query().unwrap_or("");
-    let mut start_date_param = None;
-    let mut end_date_param = None;
-    let mut account_ids_params = Vec::new();
-
-    for pair in query_string.split('&') {
-        if let Some((key, value)) = pair.split_once('=') {
-            match key {
-                "start_date" => start_date_param = Some(value.to_string()),
-                "end_date" => end_date_param = Some(value.to_string()),
-                "account_ids" | "account_ids[]" | "account_ids%5B%5D" => {
-                    account_ids_params.push(value.to_string())
-                }
-                _ => {}
-            }
-        }
-    }
-
-    if !account_ids_params.is_empty() {
-        utils::account_validation::validate_account_ownership(
-            &account_ids_params,
-            &user_id,
-            &state.db_repository,
-        )
-        .await?;
-    }
-
-    let start = start_date_param
+    let start = query
+        .start_date
         .as_deref()
         .and_then(|s| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok());
-    let end = end_date_param
+    let end = query
+        .end_date
         .as_deref()
         .and_then(|s| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok());
 
-    let rules = state
-        .db_repository
-        .get_category_rules(user_id)
+    let mut transactions = state
+        .analytics_service
+        .load_spending_transactions(state.db_repository.as_ref(), &user_id, start, end)
         .await
-        .unwrap_or_default();
-
-    match state
-        .db_repository
-        .get_transactions_with_account_for_user(&user_id)
-        .await
-    {
-        Ok(mut transactions) => {
-            if !account_ids_params.is_empty() {
-                let account_ids: Vec<Uuid> = account_ids_params
-                    .iter()
-                    .filter_map(|s| Uuid::parse_str(s).ok())
-                    .collect();
-
-                let account_id_set: std::collections::HashSet<Uuid> =
-                    account_ids.into_iter().collect();
-                transactions.retain(|t| account_id_set.contains(&t.account_id));
-            }
-
-            apply_category_rules(&mut transactions, &rules);
-
-            let total =
-                AnalyticsService::sum_spending_transactions_with_account(&transactions, start, end);
-            Ok(Json(total))
-        }
-        Err(e) => {
-            tracing::error!("Failed to get transactions for user {}: {}", user_id, e);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
+        .map_err(|e| {
+            tracing::error!(
+                "Failed to get spending transactions for user {}: {}",
+                user_id,
+                e
+            );
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    if let Some(ref account_id_set) = authorized_account_ids {
+        transactions.retain(|t| account_id_set.contains(&t.account_id));
     }
+    let total: rust_decimal::Decimal = transactions
+        .into_iter()
+        .filter(|t| t.amount < rust_decimal::Decimal::ZERO)
+        .map(|t| -t.amount)
+        .sum();
+    Ok(Json(total))
 }
 
 #[utoipa::path(
@@ -2094,89 +3075,49 @@ async fn get_authenticated_spending_by_date_range(
         (status = 401, description = "Unauthorized"),
         (status = 500, description = "Internal server error"),
     ),
-    security(("bearer_auth" = [])),
+    security(("auth_cookie" = [])),
     tag = "Analytics"
 )]
 async fn get_authenticated_category_spending(
     State(state): State<AppState>,
     auth_context: AuthContext,
-    _headers: HeaderMap,
-    uri: Uri,
+    AuthorizedQuery {
+        query,
+        authorized_account_ids,
+    }: AuthorizedQuery<DateRangeQuery>,
 ) -> Result<Json<Vec<CategorySpending>>, StatusCode> {
     let user_id = auth_context.user_id;
 
-    let query_string = uri.query().unwrap_or("");
-    let mut start_date_param = None;
-    let mut end_date_param = None;
-    let mut account_ids_params = Vec::new();
-
-    for pair in query_string.split('&') {
-        if let Some((key, value)) = pair.split_once('=') {
-            match key {
-                "start_date" => start_date_param = Some(value.to_string()),
-                "end_date" => end_date_param = Some(value.to_string()),
-                "account_ids" | "account_ids[]" | "account_ids%5B%5D" => {
-                    account_ids_params.push(value.to_string())
-                }
-                _ => {}
-            }
-        }
-    }
-
-    if !account_ids_params.is_empty() {
-        utils::account_validation::validate_account_ownership(
-            &account_ids_params,
-            &user_id,
-            &state.db_repository,
-        )
-        .await?;
-    }
-
-    let start_date = start_date_param
+    let start_date = query
+        .start_date
         .as_ref()
         .and_then(|s| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok());
-    let end_date = end_date_param
+    let end_date = query
+        .end_date
         .as_ref()
         .and_then(|s| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok());
 
-    let rules = state
-        .db_repository
-        .get_category_rules(user_id)
+    let mut transactions = state
+        .analytics_service
+        .load_spending_transactions(state.db_repository.as_ref(), &user_id, start_date, end_date)
         .await
-        .unwrap_or_default();
-
-    match state
-        .db_repository
-        .get_transactions_with_account_for_user(&user_id)
-        .await
-    {
-        Ok(mut transactions) => {
-            if !account_ids_params.is_empty() {
-                let account_ids: Vec<Uuid> = account_ids_params
-                    .iter()
-                    .filter_map(|s| Uuid::parse_str(s).ok())
-                    .collect();
-
-                let account_id_set: std::collections::HashSet<Uuid> =
-                    account_ids.into_iter().collect();
-                transactions.retain(|t| account_id_set.contains(&t.account_id));
-            }
-
-            apply_category_rules(&mut transactions, &rules);
-
-            let categories =
-                AnalyticsService::group_transactions_with_account_by_effective_category(
-                    &transactions,
-                    start_date,
-                    end_date,
-                );
-            Ok(Json(categories))
-        }
-        Err(e) => {
-            tracing::error!("Failed to get transactions for user {}: {}", user_id, e);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
+        .map_err(|e| {
+            tracing::error!(
+                "Failed to get spending transactions for user {}: {}",
+                user_id,
+                e
+            );
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    if let Some(ref account_id_set) = authorized_account_ids {
+        transactions.retain(|t| account_id_set.contains(&t.account_id));
     }
+    let categories = state.analytics_service.group_by_category_with_date_range(
+        &transactions,
+        start_date,
+        end_date,
+    );
+    Ok(Json(categories))
 }
 
 #[utoipa::path(
@@ -2190,61 +3131,121 @@ async fn get_authenticated_category_spending(
         (status = 401, description = "Unauthorized"),
         (status = 500, description = "Internal server error"),
     ),
-    security(("bearer_auth" = [])),
+    security(("auth_cookie" = [])),
     tag = "Analytics"
 )]
 async fn get_authenticated_monthly_totals(
     State(state): State<AppState>,
     auth_context: AuthContext,
-    _headers: HeaderMap,
-    Query(params): Query<MonthlyTotalsQuery>,
+    AuthorizedQuery {
+        query,
+        authorized_account_ids,
+    }: AuthorizedQuery<MonthlyTotalsQuery>,
 ) -> Result<Json<Vec<MonthlySpending>>, StatusCode> {
     let user_id = auth_context.user_id;
-    let months = params.months.unwrap_or(6);
+    let months = query.months.unwrap_or(6);
 
-    let filtered_account_ids = if !params.account_ids.is_empty() {
-        let validated_ids = utils::account_validation::validate_account_ownership(
-            &params.account_ids,
-            &user_id,
-            &state.db_repository,
-        )
-        .await?;
-        Some(
-            validated_ids
-                .into_iter()
-                .collect::<std::collections::HashSet<_>>(),
-        )
-    } else {
-        None
-    };
-
-    match state
-        .db_repository
-        .get_transactions_with_account_for_user(&user_id)
+    let transactions = state
+        .analytics_service
+        .load_spending_transactions(state.db_repository.as_ref(), &user_id, None, None)
         .await
-    {
-        Ok(mut transactions) => {
-            if let Some(ref allowed_ids) = filtered_account_ids {
-                transactions
-                    .retain(|t| allowed_ids.contains(&t.account_id));
-            }
-            let rules = state
-                .db_repository
-                .get_category_rules(user_id)
-                .await
-                .unwrap_or_default();
-            apply_category_rules(&mut transactions, &rules);
+        .map_err(|e| {
+            tracing::error!(
+                "Failed to get spending transactions for user {}: {}",
+                user_id,
+                e
+            );
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    let transactions = if let Some(ref allowed_ids) = authorized_account_ids {
+        transactions
+            .into_iter()
+            .filter(|t| allowed_ids.contains(&t.account_id))
+            .collect()
+    } else {
+        transactions
+    };
+    let monthly_totals = state
+        .analytics_service
+        .calculate_monthly_totals(&transactions, months);
+    Ok(Json(monthly_totals))
+}
 
-            let monthly_totals = state
-                .analytics_service
-                .calculate_monthly_totals_with_account(&transactions, months);
-            Ok(Json(monthly_totals))
-        }
-        Err(e) => {
-            tracing::error!("Failed to get transactions for user {}: {}", user_id, e);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
+#[utoipa::path(
+    get,
+    path = "/api/analytics/cash-flow",
+    description = "Produces a timeline of monthly income, expenses, and net savings for dashboard charts.",
+    params(("months" = Option<i32>, Query, description = "Number of months to retrieve (default: 6)"),
+           ("account_ids" = Option<Vec<String>>, Query, description = "Include only these account IDs"),
+           ("exclude_account_ids" = Option<Vec<String>>, Query, description = "Exclude these account IDs (ignored when account_ids is set)")),
+    responses(
+        (status = 200, description = "Monthly cash flow data", body = CashFlowResponse),
+        (status = 401, description = "Unauthorized"),
+        (status = 500, description = "Internal server error"),
+    ),
+    security(("auth_cookie" = [])),
+    tag = "Analytics"
+)]
+async fn get_authenticated_cash_flow(
+    State(state): State<AppState>,
+    auth_context: AuthContext,
+    AuthorizedQuery {
+        query,
+        authorized_account_ids,
+    }: AuthorizedQuery<MonthlyTotalsQuery>,
+) -> Result<Json<CashFlowResponse>, StatusCode> {
+    use chrono::Datelike;
+
+    let user_id = auth_context.user_id;
+    let months = query.months.unwrap_or(6);
+    let now = Utc::now().naive_utc().date();
+
+    let current_year = now.year();
+    let current_month = now.month();
+    let total_months = current_year * 12 + (current_month as i32) - 1 - ((months - 1) as i32);
+    let start_year = total_months.div_euclid(12);
+    let start_month0 = total_months.rem_euclid(12);
+    let start_month = (start_month0 + 1) as u32;
+
+    let start_date = chrono::NaiveDate::from_ymd_opt(start_year, start_month, 1).unwrap_or(now);
+    let end_date = now;
+
+    let account_ids = authorized_account_ids
+        .as_ref()
+        .map(|ids| ids.iter().copied().collect::<Vec<_>>());
+
+    if matches!(account_ids.as_deref(), Some([])) {
+        return Ok(Json(CashFlowResponse {
+            series: Vec::new(),
+            currency: "USD".to_string(),
+        }));
     }
+
+    let aggregates = state
+        .db_repository
+        .get_monthly_cash_flow_aggregates_for_user(
+            &user_id,
+            start_date,
+            end_date,
+            account_ids.as_deref(),
+        )
+        .await
+        .map_err(|e| {
+            tracing::error!(
+                "Failed to get cash flow aggregates for user {} in range [{}, {}]: {}",
+                user_id,
+                start_date,
+                end_date,
+                e
+            );
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    let currency = "USD".to_string();
+    let series = state
+        .analytics_service
+        .cash_flow_from_monthly_aggregates(&aggregates, months);
+    Ok(Json(CashFlowResponse { series, currency }))
 }
 
 #[utoipa::path(
@@ -2337,79 +3338,53 @@ async fn get_authenticated_category_trends(
         (status = 401, description = "Unauthorized"),
         (status = 500, description = "Internal server error"),
     ),
-    security(("bearer_auth" = [])),
+    security(("auth_cookie" = [])),
     tag = "Analytics"
 )]
 async fn get_authenticated_top_merchants(
     State(state): State<AppState>,
     auth_context: AuthContext,
-    _headers: HeaderMap,
-    Query(params): Query<DateRangeQuery>,
+    AuthorizedQuery {
+        query,
+        authorized_account_ids,
+    }: AuthorizedQuery<DateRangeQuery>,
 ) -> Result<Json<Vec<TopMerchant>>, StatusCode> {
     let user_id = auth_context.user_id;
     let limit = 10usize;
 
-    let start_date = params
+    let start_date = query
         .start_date
         .as_ref()
         .and_then(|s| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok());
-    let end_date = params
+    let end_date = query
         .end_date
         .as_ref()
         .and_then(|s| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok());
 
-    let filtered_account_ids = if !params.account_ids.is_empty() {
-        let validated_ids = utils::account_validation::validate_account_ownership(
-            &params.account_ids,
-            &user_id,
-            &state.db_repository,
-        )
-        .await?;
-        Some(
-            validated_ids
-                .into_iter()
-                .collect::<std::collections::HashSet<_>>(),
-        )
-    } else {
-        None
-    };
-
-    match state
-        .db_repository
-        .get_transactions_with_account_for_user(&user_id)
+    let transactions = state
+        .analytics_service
+        .load_spending_transactions(state.db_repository.as_ref(), &user_id, start_date, end_date)
         .await
-    {
-        Ok(transactions) => {
-            let mut transactions = if let Some(ref allowed_ids) = filtered_account_ids {
-                transactions
-                    .into_iter()
-                    .filter(|t| allowed_ids.contains(&t.account_id))
-                    .collect()
-            } else {
-                transactions
-            };
-            let rules = state
-                .db_repository
-                .get_category_rules(user_id)
-                .await
-                .unwrap_or_default();
-            apply_category_rules(&mut transactions, &rules);
-
-            let top_merchants = state
-                .analytics_service
-                .get_top_merchants_with_account_date_range(
-                    &transactions,
-                    start_date,
-                    end_date,
-                    limit,
-                );
-            Ok(Json(top_merchants))
-        }
-        Err(e) => {
-            tracing::error!("Failed to get transactions for user {}: {}", user_id, e);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
-    }
+        .map_err(|e| {
+            tracing::error!(
+                "Failed to get spending transactions for user {}: {}",
+                user_id,
+                e
+            );
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    let transactions = if let Some(ref allowed_ids) = authorized_account_ids {
+        transactions
+            .into_iter()
+            .filter(|t| allowed_ids.contains(&t.account_id))
+            .collect()
+    } else {
+        transactions
+    };
+    let top_merchants = state
+        .analytics_service
+        .get_top_merchants(&transactions, limit);
+    Ok(Json(top_merchants))
 }
 
 fn apply_category_rules(transactions: &mut [TransactionWithAccount], rules: &[CategoryRule]) {
@@ -2448,6 +3423,7 @@ async fn load_connection_statuses(
             last_sync_at: conn.last_sync_at.map(|dt| dt.to_rfc3339()),
             institution_name: conn.institution_name,
             connection_id: Some(conn.id.to_string()),
+            item_id: Some(conn.item_id),
             transaction_count: conn.transaction_count,
             account_count: conn.account_count,
             sync_in_progress: false,
@@ -2466,7 +3442,7 @@ fn provider_for_connection(item_id: &str) -> &'static str {
 #[utoipa::path(
     post,
     path = "/api/providers/connect",
-    description = "Completes Teller Connect enrollment and stores provider credentials for the user.",
+    description = "Completes provider connect enrollment and stores provider credentials for the user.",
     request_body = ProviderConnectRequest,
     responses(
         (status = 200, description = "Provider connected successfully", body = ProviderConnectResponse),
@@ -2474,7 +3450,7 @@ fn provider_for_connection(item_id: &str) -> &'static str {
         (status = 401, description = "Unauthorized"),
         (status = 500, description = "Failed to connect provider", body = ApiErrorResponse),
     ),
-    security(("bearer_auth" = [])),
+    security(("auth_cookie" = [])),
     tag = "Financial Providers"
 )]
 async fn connect_authenticated_provider(
@@ -2482,22 +3458,233 @@ async fn connect_authenticated_provider(
     auth_context: AuthContext,
     Json(req): Json<ProviderConnectRequest>,
 ) -> Result<Json<ProviderConnectResponse>, (StatusCode, Json<ApiErrorResponse>)> {
-    if req.provider != "teller" {
-        log_provider_credential_outcome(&req.provider, StatusCode::BAD_REQUEST, "provider.connect");
-        return Err(ApiErrorResponse::new("BAD_REQUEST", "Unsupported provider")
-            .into_response(StatusCode::BAD_REQUEST));
-    }
-
-    match state
-        .connection_service
-        .connect_teller_provider(&auth_context.user_id, &auth_context.jwt_id, &req)
-        .await
-    {
-        Ok(response) => {
-            log_provider_credential_outcome("teller", StatusCode::OK, "provider.connect");
-            Ok(Json(response))
-        }
-        Err(TellerConnectError::InvalidProvider(_)) => {
+    match req.provider.as_str() {
+        "teller" => match state
+            .connection_service
+            .connect_teller_provider(&auth_context.user_id, &auth_context.jwt_id, &req)
+            .await
+        {
+            Ok(response) => {
+                log_provider_credential_outcome("teller", StatusCode::OK, "provider.connect");
+                Ok(Json(response))
+            }
+            Err(TellerConnectError::InvalidProvider(_)) => {
+                log_provider_credential_outcome(
+                    &req.provider,
+                    StatusCode::BAD_REQUEST,
+                    "provider.connect",
+                );
+                Err(ApiErrorResponse::new("BAD_REQUEST", "Unsupported provider")
+                    .into_response(StatusCode::BAD_REQUEST))
+            }
+            Err(TellerConnectError::CredentialStorage(e)) => {
+                log_provider_credential_outcome(
+                    "teller",
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "provider.connect",
+                );
+                tracing::error!(
+                    "Failed to store Teller credentials for user {}: {}",
+                    auth_context.user_id,
+                    e
+                );
+                Err(ApiErrorResponse::internal_server_error(
+                    "Failed to store credentials",
+                ))
+            }
+            Err(TellerConnectError::ConnectionPersistence(e)) => {
+                log_provider_credential_outcome(
+                    "teller",
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "provider.connect",
+                );
+                tracing::error!(
+                    "Failed to persist Teller connection for user {}: {}",
+                    auth_context.user_id,
+                    e
+                );
+                Err(ApiErrorResponse::internal_server_error(
+                    "Failed to save connection",
+                ))
+            }
+        },
+        "simplefin" => match state
+            .connection_service
+            .connect_simplefin_provider(&auth_context.user_id, &auth_context.jwt_id, &req)
+            .await
+        {
+            Ok(response) => {
+                log_provider_credential_outcome("simplefin", StatusCode::OK, "provider.connect");
+                Ok(Json(response))
+            }
+            Err(SimpleFinConnectError::InvalidProvider(_)) => {
+                log_provider_credential_outcome(
+                    &req.provider,
+                    StatusCode::BAD_REQUEST,
+                    "provider.connect",
+                );
+                Err(ApiErrorResponse::new("BAD_REQUEST", "Unsupported provider")
+                    .into_response(StatusCode::BAD_REQUEST))
+            }
+            Err(SimpleFinConnectError::MissingSetupToken) => {
+                log_provider_credential_outcome(
+                    "simplefin",
+                    StatusCode::BAD_REQUEST,
+                    "provider.connect",
+                );
+                Err(ApiErrorResponse::new(
+                    "BAD_REQUEST",
+                    "Provide a SimpleFIN setup token to connect this account",
+                )
+                .into_response(StatusCode::BAD_REQUEST))
+            }
+            Err(SimpleFinConnectError::MalformedSetupToken) => {
+                log_provider_credential_outcome(
+                    "simplefin",
+                    StatusCode::BAD_REQUEST,
+                    "provider.connect",
+                );
+                Err(
+                    ApiErrorResponse::new("BAD_REQUEST", "The SimpleFIN setup token is malformed")
+                        .into_response(StatusCode::BAD_REQUEST),
+                )
+            }
+            Err(SimpleFinConnectError::SetupTokenAlreadyClaimed) => {
+                log_provider_credential_outcome(
+                    "simplefin",
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "provider.connect",
+                );
+                Err(ApiErrorResponse::new(
+                    "SETUP_TOKEN_ALREADY_CLAIMED",
+                    "This SimpleFIN setup token has already been used",
+                )
+                .into_response(StatusCode::UNPROCESSABLE_ENTITY))
+            }
+            Err(SimpleFinConnectError::ClaimFailed(e)) => {
+                log_provider_credential_outcome(
+                    "simplefin",
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "provider.connect",
+                );
+                tracing::error!(
+                    "Failed to claim SimpleFIN access URL for user {}: {}",
+                    auth_context.user_id,
+                    e
+                );
+                Err(ApiErrorResponse::new(
+                    "SETUP_TOKEN_CLAIM_FAILED",
+                    "Could not claim the SimpleFIN setup token",
+                )
+                .into_response(StatusCode::UNPROCESSABLE_ENTITY))
+            }
+            Err(SimpleFinConnectError::CredentialStorage(e)) => {
+                log_provider_credential_outcome(
+                    "simplefin",
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "provider.connect",
+                );
+                tracing::error!(
+                    "Failed to store SimpleFIN credentials for user {}: {}",
+                    auth_context.user_id,
+                    e
+                );
+                Err(ApiErrorResponse::internal_server_error(
+                    "Failed to store credentials",
+                ))
+            }
+            Err(SimpleFinConnectError::SnapshotFetch(e)) => {
+                log_provider_credential_outcome(
+                    "simplefin",
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "provider.connect",
+                );
+                tracing::error!(
+                    "Failed to fetch SimpleFIN account snapshot for user {}: {}",
+                    auth_context.user_id,
+                    e
+                );
+                Err(ApiErrorResponse::new(
+                    "INTERNAL_SERVER_ERROR",
+                    "Failed to fetch accounts from SimpleFIN bridge",
+                )
+                .into_response(StatusCode::INTERNAL_SERVER_ERROR))
+            }
+            Err(SimpleFinConnectError::ConnectionPersistence(e)) => {
+                log_provider_credential_outcome(
+                    "simplefin",
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "provider.connect",
+                );
+                tracing::error!(
+                    "Failed to persist SimpleFIN connection for user {}: {}",
+                    auth_context.user_id,
+                    e
+                );
+                Err(ApiErrorResponse::internal_server_error(
+                    "Failed to save connection",
+                ))
+            }
+            Err(SimpleFinConnectError::NoInstitutionsOnBridge) => {
+                log_provider_credential_outcome(
+                    "simplefin",
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "provider.connect",
+                );
+                Err(ApiErrorResponse::new(
+                    "NO_INSTITUTIONS",
+                    "No institutions are available from your SimpleFIN bridge yet",
+                )
+                .into_response(StatusCode::UNPROCESSABLE_ENTITY))
+            }
+            Err(SimpleFinConnectError::AllInstitutionsHidden) => {
+                log_provider_credential_outcome(
+                    "simplefin",
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "provider.connect",
+                );
+                Err(ApiErrorResponse::new(
+                    "ALL_INSTITUTIONS_HIDDEN",
+                    "All SimpleFIN institutions are hidden in Sumurai. Restore one to start syncing.",
+                )
+                .into_response(StatusCode::UNPROCESSABLE_ENTITY))
+            }
+            Err(SimpleFinConnectError::NoInstitutionsLinked) => {
+                log_provider_credential_outcome(
+                    "simplefin",
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "provider.connect",
+                );
+                Err(ApiErrorResponse::new(
+                    "NO_INSTITUTIONS",
+                    "No SimpleFIN institutions could be linked. Try again or check your bridge setup.",
+                )
+                .into_response(StatusCode::UNPROCESSABLE_ENTITY))
+            }
+            Err(SimpleFinConnectError::InstitutionsRequireAuth(notices)) => {
+                log_provider_credential_outcome(
+                    "simplefin",
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "provider.connect",
+                );
+                let message = if notices.len() == 1 {
+                    format!(
+                        "{} needs to be re-authenticated in your SimpleFIN dashboard before it can sync.",
+                        notices[0].institution_name
+                    )
+                } else {
+                    "Some SimpleFIN institutions need to be re-authenticated in your SimpleFIN dashboard before they can sync.".to_string()
+                };
+                Err(ApiErrorResponse {
+                    error: "SIMPLEFIN_INSTITUTIONS_REQUIRE_AUTH".to_string(),
+                    message,
+                    code: Some("SIMPLEFIN_AUTH_REQUIRED".to_string()),
+                    details: serde_json::to_value(notices).ok(),
+                }
+                .into_response(StatusCode::UNPROCESSABLE_ENTITY))
+            }
+        },
+        _ => {
             log_provider_credential_outcome(
                 &req.provider,
                 StatusCode::BAD_REQUEST,
@@ -2505,36 +3692,6 @@ async fn connect_authenticated_provider(
             );
             Err(ApiErrorResponse::new("BAD_REQUEST", "Unsupported provider")
                 .into_response(StatusCode::BAD_REQUEST))
-        }
-        Err(TellerConnectError::CredentialStorage(e)) => {
-            log_provider_credential_outcome(
-                "teller",
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "provider.connect",
-            );
-            tracing::error!(
-                "Failed to store Teller credentials for user {}: {}",
-                auth_context.user_id,
-                e
-            );
-            Err(ApiErrorResponse::internal_server_error(
-                "Failed to store credentials",
-            ))
-        }
-        Err(TellerConnectError::ConnectionPersistence(e)) => {
-            log_provider_credential_outcome(
-                "teller",
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "provider.connect",
-            );
-            tracing::error!(
-                "Failed to persist Teller connection for user {}: {}",
-                auth_context.user_id,
-                e
-            );
-            Err(ApiErrorResponse::internal_server_error(
-                "Failed to save connection",
-            ))
         }
     }
 }
@@ -2548,7 +3705,7 @@ async fn connect_authenticated_provider(
         (status = 401, description = "Unauthorized"),
         (status = 500, description = "Internal server error"),
     ),
-    security(("bearer_auth" = [])),
+    security(("auth_cookie" = [])),
     tag = "Financial Providers"
 )]
 async fn get_authenticated_provider_status(
@@ -2559,7 +3716,7 @@ async fn get_authenticated_provider_status(
 
     let provider = match state.db_repository.get_user_by_id(&user_id).await {
         Ok(Some(user)) => user.provider,
-        Ok(None) => state.config.get_default_provider().to_string(),
+        Ok(None) => String::new(),
         Err(e) => {
             tracing::error!("Failed to load user {} for provider status: {}", user_id, e);
             return Err(StatusCode::INTERNAL_SERVER_ERROR);
@@ -2577,6 +3734,83 @@ async fn get_authenticated_provider_status(
 
 #[utoipa::path(
     get,
+    path = "/api/providers/simplefin/ignored-institutions",
+    description = "Lists SimpleFIN bridge institutions the user has hidden in Sumurai.",
+    responses(
+        (status = 200, description = "Ignored institutions", body = crate::models::simplefin::SimpleFinIgnoredInstitutionsResponse),
+        (status = 401, description = "Unauthorized"),
+        (status = 500, description = "Internal server error"),
+    ),
+    security(("auth_cookie" = [])),
+    tag = "Financial Providers"
+)]
+async fn get_authenticated_simplefin_ignored_institutions(
+    State(state): State<AppState>,
+    auth_context: AuthContext,
+) -> Result<Json<crate::models::simplefin::SimpleFinIgnoredInstitutionsResponse>, StatusCode> {
+    let institutions = state
+        .connection_service
+        .list_simplefin_ignored_institutions(&auth_context.user_id)
+        .await
+        .map_err(|e| {
+            tracing::error!(
+                "Failed to list SimpleFIN ignored institutions for user {}: {}",
+                auth_context.user_id,
+                e
+            );
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    Ok(Json(
+        crate::models::simplefin::SimpleFinIgnoredInstitutionsResponse { institutions },
+    ))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/providers/simplefin/ignored-institutions",
+    description = "Removes a SimpleFIN institution from the ignore list so connect/sync can import it again. Idempotent: returns 200 even if the institution was not on the ignore list.",
+    request_body = crate::models::simplefin::SimpleFinRestoreIgnoredInstitutionRequest,
+    responses(
+        (status = 200, description = "Institution restored (or was already not ignored)", body = crate::models::simplefin::SimpleFinRestoreIgnoredInstitutionResponse),
+        (status = 400, description = "Invalid request"),
+        (status = 401, description = "Unauthorized"),
+        (status = 500, description = "Internal server error"),
+    ),
+    security(("auth_cookie" = [])),
+    tag = "Financial Providers"
+)]
+async fn restore_authenticated_simplefin_ignored_institution(
+    State(state): State<AppState>,
+    auth_context: AuthContext,
+    Json(req): Json<crate::models::simplefin::SimpleFinRestoreIgnoredInstitutionRequest>,
+) -> Result<Json<crate::models::simplefin::SimpleFinRestoreIgnoredInstitutionResponse>, StatusCode>
+{
+    let org_conn_id = req.org_conn_id.trim();
+    if org_conn_id.is_empty() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let restored = state
+        .connection_service
+        .restore_simplefin_ignored_institution(&auth_context.user_id, org_conn_id)
+        .await
+        .map_err(|e| {
+            tracing::error!(
+                "Failed to restore SimpleFIN ignored institution for user {}: {}",
+                auth_context.user_id,
+                e
+            );
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    Ok(Json(
+        crate::models::simplefin::SimpleFinRestoreIgnoredInstitutionResponse { restored },
+    ))
+}
+
+#[utoipa::path(
+    get,
     path = "/api/budgets",
     description = "Retrieves all budgets for the authenticated user, leveraging Redis caching when available.",
     responses(
@@ -2584,7 +3818,7 @@ async fn get_authenticated_provider_status(
         (status = 401, description = "Unauthorized"),
         (status = 500, description = "Internal server error", body = ApiErrorResponse),
     ),
-    security(("bearer_auth" = [])),
+    security(("auth_cookie" = [])),
     tag = "Budgets"
 )]
 async fn get_authenticated_budgets(
@@ -2593,8 +3827,7 @@ async fn get_authenticated_budgets(
 ) -> Result<Json<Vec<crate::models::budget::Budget>>, (StatusCode, Json<ApiErrorResponse>)> {
     let user_id = auth_context.user_id;
 
-    let cache_key = format!("budgets:user:{}", user_id);
-    if let Ok(Some(serialized)) = state.cache_service.get_string(&cache_key).await {
+    if let Ok(Some(serialized)) = state.cache_service.get_budgets(&auth_context.jwt_id).await {
         if let Ok(cached) = serde_json::from_str::<Vec<crate::models::budget::Budget>>(&serialized)
         {
             return Ok(Json(cached));
@@ -2610,7 +3843,7 @@ async fn get_authenticated_budgets(
             if let Ok(serialized) = serde_json::to_string(&budgets) {
                 let _ = state
                     .cache_service
-                    .set_with_ttl(&cache_key, &serialized, 300)
+                    .set_budgets(&auth_context.jwt_id, &serialized)
                     .await;
             }
             Ok(Json(budgets))
@@ -2635,7 +3868,7 @@ async fn get_authenticated_budgets(
         (status = 401, description = "Unauthorized"),
         (status = 409, description = "Budget category already exists", body = ApiErrorResponse),
     ),
-    security(("bearer_auth" = [])),
+    security(("auth_cookie" = [])),
     tag = "Budgets"
 )]
 async fn create_authenticated_budget(
@@ -2653,7 +3886,7 @@ async fn create_authenticated_budget(
         Ok(created_budget) => {
             let _ = state
                 .cache_service
-                .invalidate_pattern(&format!("budgets:user:{}", user_id))
+                .clear_budgets(&auth_context.jwt_id)
                 .await;
             Ok(Json(created_budget))
         }
@@ -2691,30 +3924,34 @@ async fn create_authenticated_budget(
         (status = 404, description = "Budget not found", body = ApiErrorResponse),
         (status = 500, description = "Internal server error", body = ApiErrorResponse),
     ),
-    security(("bearer_auth" = [])),
+    security(("auth_cookie" = [])),
     tag = "Budgets"
 )]
 async fn update_authenticated_budget(
     State(state): State<AppState>,
     auth_context: AuthContext,
-    Path(budget_id): Path<String>,
+    AuthorizedBudgetId { budget_id }: AuthorizedBudgetId,
     Json(req): Json<UpdateBudgetRequest>,
 ) -> Result<Json<crate::models::budget::Budget>, (StatusCode, Json<ApiErrorResponse>)> {
     let user_id = auth_context.user_id;
-    let budget_uuid = Uuid::parse_str(&budget_id).map_err(|_| {
-        ApiErrorResponse::new("BAD_REQUEST", "Invalid budget id")
-            .into_response(StatusCode::BAD_REQUEST)
-    })?;
+
+    if req.amount <= rust_decimal::Decimal::ZERO {
+        return Err(ApiErrorResponse::new(
+            "BAD_REQUEST",
+            "Budget amount must be greater than zero",
+        )
+        .into_response(StatusCode::BAD_REQUEST));
+    }
 
     match state
         .budget_service
-        .update_budget_for_user(&*state.db_repository, budget_uuid, user_id, req.amount)
+        .update_budget_for_user(&*state.db_repository, budget_id, user_id, req.amount)
         .await
     {
         Ok(updated_budget) => {
             let _ = state
                 .cache_service
-                .invalidate_pattern(&format!("budgets:user:{}", user_id))
+                .clear_budgets(&auth_context.jwt_id)
                 .await;
             Ok(Json(updated_budget))
         }
@@ -2753,33 +3990,29 @@ async fn update_authenticated_budget(
         (status = 404, description = "Budget not found", body = ApiErrorResponse),
         (status = 500, description = "Internal server error", body = ApiErrorResponse),
     ),
-    security(("bearer_auth" = [])),
+    security(("auth_cookie" = [])),
     tag = "Budgets"
 )]
 async fn delete_authenticated_budget(
     State(state): State<AppState>,
     auth_context: AuthContext,
-    Path(budget_id): Path<String>,
+    AuthorizedBudgetId { budget_id }: AuthorizedBudgetId,
 ) -> Result<Json<DeleteBudgetResponse>, (StatusCode, Json<ApiErrorResponse>)> {
     let user_id = auth_context.user_id;
-    let budget_uuid = Uuid::parse_str(&budget_id).map_err(|_| {
-        ApiErrorResponse::new("BAD_REQUEST", "Invalid budget id")
-            .into_response(StatusCode::BAD_REQUEST)
-    })?;
 
     match state
         .budget_service
-        .delete_budget_for_user(&*state.db_repository, budget_uuid, user_id)
+        .delete_budget_for_user(&*state.db_repository, budget_id, user_id)
         .await
     {
         Ok(_) => {
             let _ = state
                 .cache_service
-                .invalidate_pattern(&format!("budgets:user:{}", user_id))
+                .clear_budgets(&auth_context.jwt_id)
                 .await;
             Ok(Json(DeleteBudgetResponse {
                 deleted: true,
-                budget_id,
+                budget_id: budget_id.to_string(),
             }))
         }
         Err(e) => {
@@ -2810,25 +4043,27 @@ async fn delete_authenticated_budget(
         (status = 200, description = "Provider connection disconnected", body = DisconnectResult),
         (status = 400, description = "Invalid connection_id format"),
         (status = 401, description = "Unauthorized"),
+        (status = 415, description = "Unsupported media type"),
         (status = 500, description = "Internal server error"),
     ),
-    security(("bearer_auth" = [])),
+    security(("auth_cookie" = [])),
     tag = "Financial Providers"
 )]
 async fn disconnect_authenticated_connection(
     State(state): State<AppState>,
     auth_context: AuthContext,
-    Json(req): Json<DisconnectRequest>,
+    req: AuthorizedConnectionRequest<DisconnectRequest>,
 ) -> Result<Json<DisconnectResult>, StatusCode> {
     let user_id = auth_context.user_id;
-    let connection_id = Uuid::parse_str(&req.connection_id).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let connection = req.connection;
 
     match state
         .connection_service
-        .disconnect_connection_by_id(&connection_id, &user_id, &auth_context.jwt_id)
+        .disconnect_owned_connection(&connection, &user_id, &auth_context.jwt_id)
         .await
     {
-        Ok(result) => Ok(Json(result)),
+        Ok(result) if result.success => Ok(Json(result)),
+        Ok(_) => Err(StatusCode::NOT_FOUND),
         Err(e) => {
             tracing::error!("Failed to disconnect: {}", e);
             Err(StatusCode::INTERNAL_SERVER_ERROR)
@@ -2865,7 +4100,7 @@ async fn health_check() -> &'static str {
         (status = 404, description = "User not found"),
         (status = 500, description = "Internal server error"),
     ),
-    security(("bearer_auth" = [])),
+    security(("auth_cookie" = [])),
     tag = "Financial Providers"
 )]
 async fn get_authenticated_provider_info(
@@ -2887,18 +4122,21 @@ async fn get_authenticated_provider_info(
             StatusCode::NOT_FOUND
         })?;
 
-    let default_provider = state.config.get_default_provider().to_lowercase();
-    let available_providers = vec!["plaid".to_string(), "teller".to_string()];
+    let mut available_providers = Vec::new();
+    for provider in ["plaid", "teller", "simplefin"] {
+        if state.provider_registry.get(provider).is_some() {
+            available_providers.push(provider.to_string());
+        }
+    }
 
-    let user_provider = if user.onboarding_completed {
-        user.provider.to_lowercase()
+    let user_provider = if user.provider.is_empty() {
+        None
     } else {
-        default_provider.clone()
+        Some(user.provider)
     };
 
     Ok(Json(ProviderInfoResponse {
         available_providers,
-        default_provider,
         user_provider,
         teller_application_id: state
             .config
@@ -2917,9 +4155,10 @@ async fn get_authenticated_provider_info(
         (status = 200, description = "Provider selected successfully", body = ProviderSelectResponse),
         (status = 400, description = "Invalid provider specified", body = ApiErrorResponse),
         (status = 401, description = "Unauthorized"),
+        (status = 409, description = "Cannot switch while active connections exist", body = ApiErrorResponse),
         (status = 500, description = "Internal server error", body = ApiErrorResponse),
     ),
-    security(("bearer_auth" = [])),
+    security(("auth_cookie" = [])),
     tag = "Financial Providers"
 )]
 async fn select_authenticated_provider(
@@ -2928,26 +4167,67 @@ async fn select_authenticated_provider(
     Json(req): Json<ProviderSelectRequest>,
 ) -> Result<Json<ProviderSelectResponse>, (StatusCode, Json<ApiErrorResponse>)> {
     let user_id = auth_context.user_id;
+    let requested_provider = req.provider;
 
-    let provider = req.provider.trim().to_lowercase();
-
-    if provider != "plaid" && provider != "teller" {
+    if state.provider_registry.get(&requested_provider).is_none() {
         return Err(ApiErrorResponse::new(
             "BAD_REQUEST",
-            "Invalid provider. Must be 'plaid' or 'teller'",
+            &format!("Provider '{}' is not registered", requested_provider),
         )
         .into_response(StatusCode::BAD_REQUEST));
     }
 
+    let _user = match state.db_repository.get_user_by_id(&user_id).await {
+        Ok(Some(user)) => user,
+        Ok(None) => {
+            tracing::error!("User {} not found", user_id);
+            return Err(ApiErrorResponse::internal_server_error("User not found"));
+        }
+        Err(e) => {
+            tracing::error!("Failed to get user {}: {}", user_id, e);
+            return Err(ApiErrorResponse::internal_server_error(
+                "Failed to fetch user",
+            ));
+        }
+    };
+
+    let connections = match state
+        .db_repository
+        .get_all_provider_connections_by_user(&user_id)
+        .await
+    {
+        Ok(conns) => conns,
+        Err(e) => {
+            tracing::error!("Failed to get connections for user {}: {}", user_id, e);
+            return Err(ApiErrorResponse::internal_server_error(
+                "Failed to check active connections",
+            ));
+        }
+    };
+
+    if let Some(conflicting_provider) = connections.iter().find_map(|connection| {
+        (connection.is_connected && connection.provider != requested_provider)
+            .then_some(connection.provider.as_str())
+    }) {
+        return Err(ApiErrorResponse::new(
+            "CONFLICT",
+            &format!(
+                "Disconnect all {} accounts before switching",
+                conflicting_provider
+            ),
+        )
+        .into_response(StatusCode::CONFLICT));
+    }
+
     match state
         .db_repository
-        .update_user_provider(&user_id, &provider)
+        .update_user_provider(&user_id, &requested_provider)
         .await
     {
         Ok(_) => {
-            tracing::info!("User {} selected provider: {}", user_id, provider);
+            tracing::info!("User {} selected provider: {}", user_id, requested_provider);
             Ok(Json(ProviderSelectResponse {
-                user_provider: provider,
+                user_provider: requested_provider,
             }))
         }
         Err(e) => {
@@ -2969,46 +4249,23 @@ async fn select_authenticated_provider(
         (status = 401, description = "Unauthorized"),
         (status = 500, description = "Internal server error"),
     ),
-    security(("bearer_auth" = [])),
+    security(("auth_cookie" = [])),
     tag = "Analytics"
 )]
 async fn get_authenticated_balances_overview(
     State(state): State<AppState>,
     auth_context: AuthContext,
-    uri: Uri,
+    AuthorizedQuery {
+        query: _,
+        authorized_account_ids,
+    }: AuthorizedQuery<BalancesOverviewQuery>,
 ) -> Result<Json<models::analytics::BalancesOverviewResponse>, StatusCode> {
     let user_id = auth_context.user_id;
-
-    let query_string = uri.query().unwrap_or("");
-    let mut account_ids_params = Vec::new();
-    for pair in query_string.split('&') {
-        if let Some((key, value)) = pair.split_once('=') {
-            if matches!(key, "account_ids" | "account_ids[]" | "account_ids%5B%5D") {
-                account_ids_params.push(value.to_string());
-            }
-        }
-    }
-
-    let filtered_account_ids = if !account_ids_params.is_empty() {
-        let validated_account_ids = utils::account_validation::validate_account_ownership(
-            &account_ids_params,
-            &user_id,
-            &state.db_repository,
-        )
-        .await?;
-        Some(
-            validated_account_ids
-                .into_iter()
-                .collect::<std::collections::HashSet<_>>(),
-        )
-    } else {
-        None
-    };
 
     let base_cache_key = format!("{}_balances_overview", auth_context.jwt_id);
     let cache_key = utils::cache_keys::generate_cache_key_with_account_filter(
         &base_cache_key,
-        filtered_account_ids.as_ref(),
+        authorized_account_ids.as_ref(),
     );
     if let Ok(Some(serialized)) = state.cache_service.get_string(&cache_key).await {
         if let Ok(cached) =
@@ -3033,7 +4290,7 @@ async fn get_authenticated_balances_overview(
     let mut name_map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     let mut mixed_currency = false;
     for row in latest_rows.into_iter() {
-        if let Some(ref filter_ids) = filtered_account_ids {
+        if let Some(ref filter_ids) = authorized_account_ids {
             if !filter_ids.contains(&row.account_id) {
                 continue;
             }
@@ -3066,7 +4323,7 @@ async fn get_authenticated_balances_overview(
                 StatusCode::INTERNAL_SERVER_ERROR
             })?;
         for acc in accounts.into_iter() {
-            if let Some(ref filter_ids) = filtered_account_ids {
+            if let Some(ref filter_ids) = authorized_account_ids {
                 if !filter_ids.contains(&acc.id) {
                     continue;
                 }
@@ -3193,13 +4450,16 @@ async fn get_authenticated_balances_overview(
         (status = 401, description = "Unauthorized"),
         (status = 500, description = "Internal server error"),
     ),
-    security(("bearer_auth" = [])),
+    security(("auth_cookie" = [])),
     tag = "Analytics"
 )]
 async fn get_authenticated_net_worth_over_time(
     State(state): State<AppState>,
     auth_context: AuthContext,
-    Query(params): Query<models::analytics::DateRangeQuery>,
+    AuthorizedQuery {
+        query,
+        authorized_account_ids,
+    }: AuthorizedQuery<models::analytics::DateRangeQuery>,
 ) -> Result<Json<models::analytics::NetWorthOverTimeResponse>, StatusCode> {
     use rust_decimal::Decimal;
     use std::collections::{BTreeMap, HashMap, HashSet};
@@ -3207,7 +4467,7 @@ async fn get_authenticated_net_worth_over_time(
     let user_id = auth_context.user_id;
 
     // Parse and validate dates
-    let (start_date, end_date) = match (&params.start_date, &params.end_date) {
+    let (start_date, end_date) = match (&query.start_date, &query.end_date) {
         (Some(s), Some(e)) => {
             let s = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
                 .map_err(|_| StatusCode::BAD_REQUEST)?;
@@ -3221,18 +4481,6 @@ async fn get_authenticated_net_worth_over_time(
         _ => return Err(StatusCode::BAD_REQUEST),
     };
 
-    let filtered_account_ids = if !params.account_ids.is_empty() {
-        let validated_ids = utils::account_validation::validate_account_ownership(
-            &params.account_ids,
-            &user_id,
-            &state.db_repository,
-        )
-        .await?;
-        Some(validated_ids.into_iter().collect::<HashSet<_>>())
-    } else {
-        None
-    };
-
     // Cache lookup
     let base_cache_key = format!(
         "{}_net_worth_over_time_v2_{}_{}",
@@ -3240,7 +4488,7 @@ async fn get_authenticated_net_worth_over_time(
     );
     let cache_key = utils::cache_keys::generate_cache_key_with_account_filter(
         &base_cache_key,
-        filtered_account_ids.as_ref(),
+        authorized_account_ids.as_ref(),
     );
     if let Ok(Some(serialized)) = state.cache_service.get_string(&cache_key).await {
         if let Ok(cached) =
@@ -3268,7 +4516,7 @@ async fn get_authenticated_net_worth_over_time(
     let mut liability_static_account_ids: HashSet<uuid::Uuid> = HashSet::new();
     let mut account_anchor_dates: Vec<chrono::NaiveDate> = Vec::new();
     for acc in accounts.into_iter() {
-        if let Some(ref allowed_ids) = filtered_account_ids {
+        if let Some(ref allowed_ids) = authorized_account_ids {
             if !allowed_ids.contains(&acc.id) {
                 continue;
             }
@@ -3357,7 +4605,7 @@ async fn get_authenticated_net_worth_over_time(
         HashMap::new();
     let mut transaction_anchor_dates: Vec<chrono::NaiveDate> = Vec::new();
     for t in txns.into_iter() {
-        if let Some(ref allowed_ids) = filtered_account_ids {
+        if let Some(ref allowed_ids) = authorized_account_ids {
             if !allowed_ids.contains(&t.account_id) {
                 continue;
             }
@@ -3472,93 +4720,6 @@ async fn get_authenticated_net_worth_over_time(
 }
 
 #[utoipa::path(
-    put,
-    path = "/api/auth/change-password",
-    description = "Allows an authenticated user to rotate their password and invalidate cached credentials.",
-    request_body = ChangePasswordRequest,
-    responses(
-        (status = 200, description = "Password changed successfully", body = ChangePasswordResponse),
-        (status = 401, description = "Current password is incorrect", body = ApiErrorResponse),
-        (status = 500, description = "Internal server error", body = ApiErrorResponse),
-    ),
-    security(("bearer_auth" = [])),
-    tag = "Authentication"
-)]
-async fn change_user_password(
-    State(state): State<AppState>,
-    auth_context: AuthContext,
-    Json(req): Json<auth_models::ChangePasswordRequest>,
-) -> Result<Json<auth_models::ChangePasswordResponse>, (StatusCode, Json<ApiErrorResponse>)> {
-    let user_id = auth_context.user_id;
-
-    let user = state
-        .db_repository
-        .get_user_by_id(&user_id)
-        .await
-        .map_err(|e| {
-            tracing::error!("Database error fetching user {}: {}", user_id, e);
-            ApiErrorResponse::internal_server_error(
-                "Authentication service temporarily unavailable",
-            )
-        })?
-        .ok_or_else(|| {
-            tracing::warn!("User {} not found during password change", user_id);
-            ApiErrorResponse::internal_server_error("User account not found")
-        })?;
-
-    let is_valid = state
-        .auth_service
-        .verify_password(&req.current_password, &user.password_hash)
-        .map_err(|e| {
-            tracing::error!("Password verification failed for user {}: {}", user_id, e);
-            ApiErrorResponse::internal_server_error("Authentication service error")
-        })?;
-
-    if !is_valid {
-        tracing::info!("Invalid current password for user {}", user_id);
-        return Err(ApiErrorResponse::unauthorized(
-            "Current password is incorrect",
-        ));
-    }
-
-    let new_hash = state
-        .auth_service
-        .hash_password(&req.new_password)
-        .map_err(|e| {
-            tracing::error!("Password hashing failed for user {}: {}", user_id, e);
-            ApiErrorResponse::internal_server_error("Failed to process new password")
-        })?;
-
-    state
-        .db_repository
-        .update_user_password(&user_id, &new_hash)
-        .await
-        .map_err(|e| {
-            tracing::error!("Failed to update password for user {}: {}", user_id, e);
-            ApiErrorResponse::internal_server_error("Failed to update password")
-        })?;
-
-    if let Err(e) = state
-        .cache_service
-        .invalidate_pattern(&format!("{}_*", auth_context.jwt_id))
-        .await
-    {
-        tracing::warn!(
-            "Failed to invalidate JWT cache for user {} after password change: {}",
-            user_id,
-            e
-        );
-    }
-
-    tracing::info!("User {} password changed successfully", user_id);
-
-    Ok(Json(auth_models::ChangePasswordResponse {
-        message: "Password changed successfully. Please log in again.".to_string(),
-        requires_reauth: true,
-    }))
-}
-
-#[utoipa::path(
     delete,
     path = "/api/auth/account",
     description = "Deletes the authenticated user's account and associated provider data.",
@@ -3567,7 +4728,7 @@ async fn change_user_password(
         (status = 401, description = "Unauthorized"),
         (status = 500, description = "Internal server error", body = ApiErrorResponse),
     ),
-    security(("bearer_auth" = [])),
+    security(("auth_cookie" = [])),
     tag = "Authentication"
 )]
 async fn delete_user_account(
@@ -3666,325 +4827,1037 @@ async fn delete_user_account(
 }
 
 #[utoipa::path(
-    get,
-    path = "/api/categories",
-    description = "Returns all user-defined custom categories.",
+    post,
+    path = "/api/auth/passkey/enroll/begin",
+    description = "Begin passkey enrollment for the authenticated user (settings or migration). Requires an auth_token cookie; complete with enroll/finish.",
     responses(
-        (status = 200, description = "List of user categories", body = Vec<UserCategory>),
-        (status = 401, description = "Unauthorized"),
+        (status = 200, description = "Registration challenge", body = auth_models::PasskeyRegisterBeginResponse),
+        (status = 401, description = "Unauthorized", body = ApiErrorResponse),
         (status = 500, description = "Internal server error", body = ApiErrorResponse),
     ),
-    security(("bearer_auth" = [])),
-    tag = "Categories"
+    tag = "Authentication"
 )]
-async fn get_authenticated_user_categories(
+async fn begin_passkey_enroll(
     State(state): State<AppState>,
     auth_context: AuthContext,
-) -> Result<Json<Vec<UserCategory>>, (StatusCode, Json<ApiErrorResponse>)> {
+) -> Result<Json<auth_models::PasskeyRegisterBeginResponse>, (StatusCode, Json<ApiErrorResponse>)> {
     let user_id = auth_context.user_id;
-    match state.db_repository.get_user_categories(user_id).await {
-        Ok(categories) => Ok(Json(categories)),
-        Err(e) => {
-            tracing::error!("Failed to get categories for user {}: {}", user_id, e);
-            Err(ApiErrorResponse::internal_server_error("Failed to fetch categories"))
+
+    let user = state
+        .db_repository
+        .get_user_by_id(&user_id)
+        .await
+        .map_err(|e| {
+            tracing::error!(
+                "Failed to load user {} for passkey enrollment: {}",
+                user_id,
+                e
+            );
+            ApiErrorResponse::internal_server_error("Failed to begin passkey enrollment")
+        })?
+        .ok_or_else(|| ApiErrorResponse::unauthorized("Authentication failed"))?;
+
+    let existing = state
+        .db_repository
+        .list_webauthn_credentials_for_user(&user_id)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to list credentials for user {}: {}", user_id, e);
+            ApiErrorResponse::internal_server_error("Failed to retrieve existing credentials")
+        })?;
+
+    let existing_ids: Vec<Vec<u8>> = existing.iter().map(|c| c.credential_id.clone()).collect();
+
+    let (challenge, reg_state) = state
+        .webauthn_service
+        .begin_registration(user_id, &user.email, &user.email, &existing_ids)
+        .map_err(|e| {
+            tracing::error!("begin_registration failed for user {}: {}", user_id, e);
+            ApiErrorResponse::internal_server_error("Failed to begin passkey enrollment")
+        })?;
+
+    let state_value = serde_json::to_value(&reg_state).map_err(|e| {
+        tracing::error!("Failed to serialize registration state: {}", e);
+        ApiErrorResponse::internal_server_error("Failed to serialize registration state")
+    })?;
+
+    let challenge_payload = serde_json::to_string(&AuthenticatedEnrollmentChallengePayload {
+        user_id,
+        state: state_value,
+    })
+    .map_err(|e| {
+        tracing::error!("Failed to serialize enrollment challenge payload: {}", e);
+        ApiErrorResponse::internal_server_error("Failed to serialize registration state")
+    })?;
+
+    let session_id = Uuid::new_v4().to_string();
+
+    state
+        .cache_service
+        .set_webauthn_challenge(&session_id, &challenge_payload)
+        .await
+        .map_err(|e| {
+            tracing::error!(
+                "Failed to store challenge for session {}: {}",
+                session_id,
+                e
+            );
+            ApiErrorResponse::internal_server_error("Failed to store registration challenge")
+        })?;
+
+    let challenge_json = serde_json::to_value(&challenge).map_err(|e| {
+        tracing::error!("Failed to serialize challenge: {}", e);
+        ApiErrorResponse::internal_server_error("Failed to serialize challenge")
+    })?;
+
+    Ok(Json(auth_models::PasskeyRegisterBeginResponse {
+        session_id,
+        challenge: challenge_json,
+    }))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/auth/passkey/enroll/finish",
+    description = "Complete authenticated passkey enrollment and return the enrolled passkey.",
+    request_body = auth_models::PasskeyRegisterFinishRequest,
+    responses(
+        (status = 200, description = "Passkey enrolled", body = auth_models::PasskeyItem),
+        (status = 400, description = "Invalid response or expired challenge", body = ApiErrorResponse),
+        (status = 401, description = "Unauthorized", body = ApiErrorResponse),
+        (status = 500, description = "Internal server error", body = ApiErrorResponse),
+    ),
+    tag = "Authentication"
+)]
+async fn finish_passkey_enroll(
+    State(state): State<AppState>,
+    auth_context: AuthContext,
+    Json(req): Json<auth_models::PasskeyRegisterFinishRequest>,
+) -> Result<Json<auth_models::PasskeyItem>, (StatusCode, Json<ApiErrorResponse>)> {
+    use webauthn_rs::prelude::{PasskeyRegistration, RegisterPublicKeyCredential};
+
+    let user_id = auth_context.user_id;
+
+    let challenge_json = state
+        .cache_service
+        .take_webauthn_challenge(&req.session_id)
+        .await
+        .map_err(|e| {
+            tracing::error!(
+                "Failed to retrieve challenge for session {}: {}",
+                req.session_id,
+                e
+            );
+            ApiErrorResponse::internal_server_error("Failed to retrieve challenge")
+        })?
+        .ok_or_else(|| ApiErrorResponse::bad_request("Challenge not found or already used"))?;
+
+    let payload = serde_json::from_str::<AuthenticatedEnrollmentChallengePayload>(&challenge_json)
+        .map_err(|e| {
+            tracing::error!("Failed to deserialize enrollment challenge payload: {}", e);
+            ApiErrorResponse::bad_request("Invalid enrollment challenge")
+        })?;
+
+    if payload.user_id != user_id {
+        return Err(ApiErrorResponse::unauthorized(
+            "Challenge does not belong to the authenticated user",
+        ));
+    }
+
+    let reg_state: PasskeyRegistration = serde_json::from_value(payload.state).map_err(|e| {
+        tracing::error!("Failed to deserialize registration state: {}", e);
+        ApiErrorResponse::bad_request("Invalid challenge state")
+    })?;
+
+    let credential_response: RegisterPublicKeyCredential = serde_json::from_value(req.response)
+        .map_err(|e| {
+            tracing::error!("Failed to deserialize credential response: {}", e);
+            ApiErrorResponse::bad_request("Invalid credential response")
+        })?;
+
+    let passkey = state
+        .webauthn_service
+        .finish_registration(&reg_state, &credential_response)
+        .map_err(|e| {
+            tracing::warn!("finish_registration failed for user {}: {}", user_id, e);
+            ApiErrorResponse::bad_request("Passkey verification failed")
+        })?;
+
+    let credential_id = passkey.cred_id().to_vec();
+    let passkey_json = serde_json::to_value(&passkey).map_err(|e| {
+        tracing::error!("Failed to serialize passkey: {}", e);
+        ApiErrorResponse::internal_server_error("Failed to serialize passkey")
+    })?;
+
+    let credential = state
+        .db_repository
+        .insert_webauthn_credential(&user_id, credential_id, passkey_json, &req.name)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to insert credential for user {}: {}", user_id, e);
+            ApiErrorResponse::internal_server_error("Failed to save passkey")
+        })?;
+
+    let enrolled_user = state
+        .db_repository
+        .get_user_by_id(&user_id)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to fetch user {} after enrollment: {}", user_id, e);
+            ApiErrorResponse::internal_server_error("Failed to complete passkey enrollment")
+        })?
+        .ok_or_else(|| ApiErrorResponse::internal_server_error("User not found"))?;
+
+    if enrolled_user.password_hash.is_some() {
+        state
+            .db_repository
+            .clear_user_password_hash(&user_id)
+            .await
+            .map_err(|e| {
+                tracing::error!(
+                    "Failed to clear password hash for user {} after passkey enrollment: {}",
+                    user_id,
+                    e
+                );
+                ApiErrorResponse::internal_server_error("Failed to complete passkey enrollment")
+            })?;
+    }
+
+    tracing::info!("User {} enrolled an additional passkey", user_id);
+
+    Ok(Json(auth_models::PasskeyItem {
+        id: credential.id,
+        name: credential.name,
+        created_at: credential.created_at,
+        last_used_at: credential.last_used_at,
+    }))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/auth/passkey/register/finish",
+    description = "Complete passkey signup or recovery enrollment without an auth cookie. Returns an auth_token cookie on success. Authenticated enrollment uses enroll/finish instead.",
+    request_body = auth_models::PasskeyRegisterFinishRequest,
+    responses(
+        (status = 200, description = "Signup or recovery completed", body = auth_models::AuthResponse),
+        (status = 400, description = "Invalid response or expired challenge", body = ApiErrorResponse),
+        (status = 401, description = "Unauthorized", body = ApiErrorResponse),
+        (status = 500, description = "Internal server error", body = ApiErrorResponse),
+    ),
+    tag = "Authentication"
+)]
+async fn finish_passkey_registration(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<auth_models::PasskeyRegisterFinishRequest>,
+) -> Result<axum::response::Response, (StatusCode, Json<ApiErrorResponse>)> {
+    use axum::response::IntoResponse;
+    use webauthn_rs::prelude::{PasskeyRegistration, RegisterPublicKeyCredential};
+
+    let challenge_json = state
+        .cache_service
+        .take_webauthn_challenge(&req.session_id)
+        .await
+        .map_err(|e| {
+            tracing::error!(
+                "Failed to retrieve challenge for session {}: {}",
+                req.session_id,
+                e
+            );
+            ApiErrorResponse::internal_server_error("Failed to retrieve challenge")
+        })?
+        .ok_or_else(|| ApiErrorResponse::bad_request("Challenge not found or already used"))?;
+
+    let authenticated_user_id = extract_auth_cookie_token(&headers)
+        .and_then(|token| state.auth_service.validate_token(&token).ok())
+        .and_then(|claims| Uuid::parse_str(&claims.sub).ok());
+
+    if authenticated_user_id.is_some() {
+        return Err(ApiErrorResponse::bad_request(
+            "Authenticated passkey enrollment must use /api/auth/passkey/enroll/finish",
+        ));
+    }
+
+    let payload =
+        serde_json::from_str::<RegistrationChallengePayload>(&challenge_json).map_err(|e| {
+            tracing::error!(
+                "Failed to deserialize registration challenge payload: {}",
+                e
+            );
+            ApiErrorResponse::bad_request("Invalid registration challenge")
+        })?;
+
+    let reg_state: PasskeyRegistration = serde_json::from_value(payload.state).map_err(|e| {
+        tracing::error!("Failed to deserialize registration state: {}", e);
+        ApiErrorResponse::bad_request("Invalid challenge state")
+    })?;
+
+    let user_id = payload.user_id;
+    let recovery_signin = payload.existing_user_recovery;
+    let complete_signup = !recovery_signin;
+    let pending_user_info = if complete_signup {
+        Some((payload.email.clone(), payload.display_name.clone()))
+    } else {
+        None
+    };
+
+    if !complete_signup {
+        let passkeys = state
+            .db_repository
+            .list_webauthn_credentials_for_user(&user_id)
+            .await
+            .map_err(|e| {
+                tracing::error!(
+                    "Failed to list passkeys for user {} during passkey enrollment: {}",
+                    user_id,
+                    e
+                );
+                ApiErrorResponse::internal_server_error("Failed to complete passkey enrollment")
+            })?;
+
+        if has_usable_passkey(&passkeys) {
+            return Err(ApiErrorResponse::bad_request(
+                "Passkey sign-in is already available for this account",
+            ));
         }
+    }
+
+    if recovery_signin {
+        let user = state
+            .db_repository
+            .get_user_by_id(&user_id)
+            .await
+            .map_err(|e| {
+                tracing::error!(
+                    "Failed to load user {} for recovery enrollment: {}",
+                    user_id,
+                    e
+                );
+                ApiErrorResponse::internal_server_error("Failed to complete passkey enrollment")
+            })?
+            .ok_or_else(|| ApiErrorResponse::bad_request("Account not found"))?;
+
+        if user
+            .password_hash
+            .as_ref()
+            .is_some_and(|hash| !hash.is_empty())
+        {
+            return Err(ApiErrorResponse::bad_request(
+                "Password sign-in is available for this account",
+            ));
+        }
+    }
+
+    let credential_response: RegisterPublicKeyCredential = serde_json::from_value(req.response)
+        .map_err(|e| {
+            tracing::error!("Failed to deserialize credential response: {}", e);
+            ApiErrorResponse::bad_request("Invalid credential response")
+        })?;
+
+    let passkey = state
+        .webauthn_service
+        .finish_registration(&reg_state, &credential_response)
+        .map_err(|e| {
+            tracing::warn!("finish_registration failed for user {}: {}", user_id, e);
+            ApiErrorResponse::bad_request("Passkey verification failed")
+        })?;
+
+    let credential_id = passkey.cred_id().to_vec();
+    let passkey_json = serde_json::to_value(&passkey).map_err(|e| {
+        tracing::error!("Failed to serialize passkey: {}", e);
+        ApiErrorResponse::internal_server_error("Failed to serialize passkey")
+    })?;
+
+    if complete_signup {
+        let (email, _display_name) = pending_user_info
+            .ok_or_else(|| ApiErrorResponse::internal_server_error("Missing signup context"))?;
+        let new_user = User {
+            id: user_id,
+            email,
+            password_hash: None,
+            provider: String::new(),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            onboarding_completed: false,
+        };
+        if let Err(e) = state.db_repository.create_user(&new_user).await {
+            tracing::warn!(
+                auth_operation = "register_finish",
+                auth_result = "failure",
+                failure_reason = "user_creation_failed",
+                user_id = %user_id,
+                error = %e,
+                "User creation failed during passkey finish"
+            );
+            return Err(ApiErrorResponse::conflict(
+                "Email address is already registered",
+            ));
+        }
+    }
+
+    match state
+        .db_repository
+        .insert_webauthn_credential(&user_id, credential_id, passkey_json, &req.name)
+        .await
+    {
+        Ok(_) => {}
+        Err(e) => {
+            tracing::error!("Failed to insert credential for user {}: {}", user_id, e);
+            if complete_signup {
+                if let Err(del_err) = state.db_repository.delete_user(&user_id).await {
+                    tracing::error!(
+                        "Failed to clean up user {} after credential insert failure: {}",
+                        user_id,
+                        del_err
+                    );
+                }
+            }
+            return Err(ApiErrorResponse::internal_server_error(
+                "Failed to save passkey",
+            ));
+        }
+    };
+
+    let enrolled_user = state
+        .db_repository
+        .get_user_by_id(&user_id)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to fetch user {} after enrollment: {}", user_id, e);
+            ApiErrorResponse::internal_server_error("Failed to complete passkey enrollment")
+        })?
+        .ok_or_else(|| ApiErrorResponse::internal_server_error("User not found"))?;
+
+    if enrolled_user.password_hash.is_some() {
+        state
+            .db_repository
+            .clear_user_password_hash(&user_id)
+            .await
+            .map_err(|e| {
+                tracing::error!(
+                    "Failed to clear password hash for user {} after passkey enrollment: {}",
+                    user_id,
+                    e
+                );
+                ApiErrorResponse::internal_server_error("Failed to complete passkey enrollment")
+            })?;
+    }
+
+    let user = enrolled_user;
+
+    let auth_token = state.auth_service.generate_token(user_id).map_err(|e| {
+        tracing::error!("Token generation failed for user {}: {}", user_id, e);
+        ApiErrorResponse::internal_server_error("Failed to generate authentication token")
+    })?;
+
+    let ttl = (auth_token.expires_at - Utc::now()).num_seconds().max(0) as u64;
+    if ttl > 0 {
+        if let Err(e) = state
+            .cache_service
+            .set_session_valid(&auth_token.jwt_id, ttl)
+            .await
+        {
+            tracing::warn!("Failed to set session validity in cache: {}", e);
+        }
+        if let Err(e) = state
+            .cache_service
+            .set_jwt_token(&auth_token.jwt_id, &auth_token.token, ttl)
+            .await
+        {
+            tracing::warn!("Failed to cache JWT token: {}", e);
+        }
+    }
+
+    if complete_signup {
+        tracing::info!("User {} completed passkey signup", user_id);
+    } else {
+        tracing::info!("User {} completed passkey recovery sign-in", user_id);
+    }
+
+    let mut response_headers = auth_cookie_headers(build_auth_cookie(
+        &auth_token.token,
+        auth_token.expires_at,
+        &state.config,
+    ));
+    response_headers.insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+
+    let body = serde_json::to_string(&auth_models::AuthResponse {
+        user_id: user_id.to_string(),
+        expires_at: auth_token.expires_at.to_rfc3339(),
+        onboarding_completed: user.onboarding_completed,
+        requires_passkey_enrollment: false,
+    })
+    .map_err(|e| {
+        tracing::error!("Failed to serialize auth response: {}", e);
+        ApiErrorResponse::internal_server_error("Failed to serialize response")
+    })?;
+
+    Ok((
+        StatusCode::OK,
+        response_headers,
+        axum::body::Body::from(body),
+    )
+        .into_response())
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/auth/passkey",
+    description = "List all enrolled passkeys for the authenticated user.",
+    responses(
+        (status = 200, description = "List of passkeys", body = Vec<auth_models::PasskeyItem>),
+        (status = 401, description = "Unauthorized", body = ApiErrorResponse),
+        (status = 500, description = "Internal server error", body = ApiErrorResponse),
+    ),
+    tag = "Authentication"
+)]
+async fn list_user_passkeys(
+    State(state): State<AppState>,
+    auth_context: AuthContext,
+) -> Result<Json<Vec<auth_models::PasskeyItem>>, (StatusCode, Json<ApiErrorResponse>)> {
+    let user_id = auth_context.user_id;
+
+    let credentials = state
+        .db_repository
+        .list_webauthn_credentials_for_user(&user_id)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to list passkeys for user {}: {}", user_id, e);
+            ApiErrorResponse::internal_server_error("Failed to retrieve passkeys")
+        })?;
+
+    let items = credentials
+        .into_iter()
+        .filter(is_usable_credential)
+        .map(|c| auth_models::PasskeyItem {
+            id: c.id,
+            name: c.name,
+            created_at: c.created_at,
+            last_used_at: c.last_used_at,
+        })
+        .collect();
+
+    Ok(Json(items))
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/auth/passkey/{id}",
+    description = "Remove an enrolled passkey. Returns 409 if it is the last credential.",
+    params(("id" = Uuid, Path, description = "Passkey ID")),
+    responses(
+        (status = 204, description = "Passkey removed"),
+        (status = 404, description = "Passkey not found", body = ApiErrorResponse),
+        (status = 409, description = "Cannot remove last passkey", body = ApiErrorResponse),
+        (status = 401, description = "Unauthorized", body = ApiErrorResponse),
+        (status = 500, description = "Internal server error", body = ApiErrorResponse),
+    ),
+    tag = "Authentication"
+)]
+async fn delete_user_passkey(
+    State(state): State<AppState>,
+    auth_context: AuthContext,
+    axum::extract::Path(id): axum::extract::Path<Uuid>,
+) -> Result<StatusCode, (StatusCode, Json<ApiErrorResponse>)> {
+    let user_id = auth_context.user_id;
+
+    let existing = state
+        .db_repository
+        .list_webauthn_credentials_for_user(&user_id)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to list passkeys for user {}: {}", user_id, e);
+            ApiErrorResponse::internal_server_error("Failed to retrieve passkeys")
+        })?;
+
+    let target = existing
+        .iter()
+        .find(|credential| credential.id == id)
+        .ok_or_else(|| ApiErrorResponse::not_found("Passkey not found"))?;
+
+    if is_usable_credential(target) {
+        let remaining_usable = existing
+            .iter()
+            .filter(|credential| credential.id != id && is_usable_credential(credential))
+            .count();
+
+        if remaining_usable == 0 {
+            return Err(ApiErrorResponse::conflict(
+                "Cannot remove the last enrolled passkey",
+            ));
+        }
+    } else if count_usable_credentials(&existing) == 0 {
+        return Err(ApiErrorResponse::conflict(
+            "Cannot remove the last enrolled passkey",
+        ));
+    }
+
+    let deleted = state
+        .db_repository
+        .delete_webauthn_credential(&user_id, &id)
+        .await
+        .map_err(|e| {
+            tracing::error!(
+                "Failed to delete passkey {} for user {}: {}",
+                id,
+                user_id,
+                e
+            );
+            ApiErrorResponse::internal_server_error("Failed to delete passkey")
+        })?;
+
+    if deleted {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(ApiErrorResponse::not_found("Passkey not found"))
     }
 }
 
 #[utoipa::path(
     post,
-    path = "/api/categories",
-    description = "Creates a new user-defined custom category.",
-    request_body = CreateCategoryRequest,
+    path = "/api/auth/login/password",
+    description = "Sign in with email and password when the account has no enrolled passkey. Returns the same auth_token cookie as passkey login. Rejected when a passkey exists or the password does not match.",
+    request_body = auth_models::PasswordLoginRequest,
     responses(
-        (status = 200, description = "Category created", body = UserCategory),
-        (status = 400, description = "Invalid request", body = ApiErrorResponse),
-        (status = 409, description = "Category name already exists", body = ApiErrorResponse),
-        (status = 401, description = "Unauthorized"),
+        (status = 200, description = "Authentication successful", body = auth_models::AuthResponse),
+        (status = 401, description = "Invalid credentials", body = ApiErrorResponse),
+        (status = 429, description = "Too many requests", body = ApiErrorResponse),
         (status = 500, description = "Internal server error", body = ApiErrorResponse),
     ),
-    security(("bearer_auth" = [])),
-    tag = "Categories"
+    tag = "Authentication"
 )]
-async fn create_authenticated_user_category(
+async fn login_with_password(
     State(state): State<AppState>,
-    auth_context: AuthContext,
-    Json(req): Json<CreateCategoryRequest>,
-) -> Result<Json<UserCategory>, (StatusCode, Json<ApiErrorResponse>)> {
-    let user_id = auth_context.user_id;
-    let name = req.name.trim().to_string();
-    if name.is_empty() {
-        return Err(
-            ApiErrorResponse::new("BAD_REQUEST", "Category name must not be empty")
-                .into_response(StatusCode::BAD_REQUEST),
-        );
-    }
-    match state
-        .db_repository
-        .create_user_category(user_id, name)
-        .await
-    {
-        Ok(category) => Ok(Json(category)),
+    Json(req): Json<auth_models::PasswordLoginRequest>,
+) -> Result<(HeaderMap, Json<auth_models::AuthResponse>), (StatusCode, Json<ApiErrorResponse>)> {
+    const INVALID_CREDENTIALS: &str = "Invalid email or password";
+
+    let user = match state.db_repository.get_user_by_email(&req.email).await {
+        Ok(Some(user)) => user,
+        Ok(None) => {
+            return Err(ApiErrorResponse::unauthorized(INVALID_CREDENTIALS));
+        }
         Err(e) => {
-            tracing::error!("Failed to create category for user {}: {}", user_id, e);
-            if e.to_string().contains("already exists") {
-                Err(
-                    ApiErrorResponse::new("CONFLICT", "Category name already exists")
-                        .into_response(StatusCode::CONFLICT),
-                )
-            } else {
-                Err(ApiErrorResponse::internal_server_error("Failed to create category"))
-            }
+            tracing::error!(
+                "Failed to look up user by email during password login: {}",
+                e
+            );
+            return Err(ApiErrorResponse::internal_server_error(
+                "Authentication service error",
+            ));
+        }
+    };
+
+    let passkeys = state
+        .db_repository
+        .list_webauthn_credentials_for_user(&user.id)
+        .await
+        .map_err(|e| {
+            tracing::error!(
+                "Failed to list passkeys for user {} during password login: {}",
+                user.id,
+                e
+            );
+            ApiErrorResponse::internal_server_error("Authentication service error")
+        })?;
+
+    if has_usable_passkey(&passkeys) && !seed_user_password_fallback(&user) {
+        return Err(ApiErrorResponse::unauthorized(INVALID_CREDENTIALS));
+    }
+
+    let password_hash = match user.password_hash.as_deref() {
+        Some(hash) if !hash.is_empty() => hash,
+        _ => return Err(ApiErrorResponse::unauthorized(INVALID_CREDENTIALS)),
+    };
+
+    let password_valid = state
+        .auth_service
+        .verify_password(&req.password, password_hash)
+        .map_err(|e| {
+            tracing::error!("Password verification error for user {}: {}", user.id, e);
+            ApiErrorResponse::internal_server_error("Authentication service error")
+        })?;
+
+    if !password_valid {
+        return Err(ApiErrorResponse::unauthorized(INVALID_CREDENTIALS));
+    }
+
+    let user_id = user.id;
+    let auth_token = state.auth_service.generate_token(user_id).map_err(|e| {
+        tracing::error!("Token generation failed for user {}: {}", user_id, e);
+        ApiErrorResponse::internal_server_error("Failed to generate authentication token")
+    })?;
+
+    let ttl = (auth_token.expires_at - Utc::now()).num_seconds().max(0) as u64;
+    if ttl > 0 {
+        if let Err(e) = state
+            .cache_service
+            .set_session_valid(&auth_token.jwt_id, ttl)
+            .await
+        {
+            tracing::warn!("Failed to set session validity in cache: {}", e);
+        }
+        if let Err(e) = state
+            .cache_service
+            .set_jwt_token(&auth_token.jwt_id, &auth_token.token, ttl)
+            .await
+        {
+            tracing::warn!("Failed to cache JWT token: {}", e);
         }
     }
+
+    tracing::info!(
+        "User {} authenticated via legacy password login (migration)",
+        user_id
+    );
+
+    Ok((
+        auth_cookie_headers(build_auth_cookie(
+            &auth_token.token,
+            auth_token.expires_at,
+            &state.config,
+        )),
+        Json(auth_models::AuthResponse {
+            user_id: user_id.to_string(),
+            expires_at: auth_token.expires_at.to_rfc3339(),
+            onboarding_completed: user.onboarding_completed,
+            requires_passkey_enrollment: !seed_user_password_fallback(&user),
+        }),
+    ))
 }
 
 #[utoipa::path(
-    delete,
-    path = "/api/categories/{id}",
-    description = "Deletes a user-defined custom category.",
-    params(("id" = String, Path, description = "Category ID")),
+    post,
+    path = "/api/auth/passkey/login/begin",
+    description = "Begin passkey authentication. Returns a challenge for any email; response shape is identical for unknown emails to prevent user enumeration.",
+    request_body = auth_models::PasskeyLoginBeginRequest,
     responses(
-        (status = 200, description = "Category deleted", body = DeleteCategoryResponse),
-        (status = 400, description = "Invalid ID", body = ApiErrorResponse),
-        (status = 401, description = "Unauthorized"),
+        (status = 200, description = "Authentication challenge", body = auth_models::PasskeyLoginBeginResponse),
+        (status = 429, description = "Too many requests", body = ApiErrorResponse),
         (status = 500, description = "Internal server error", body = ApiErrorResponse),
     ),
-    security(("bearer_auth" = [])),
-    tag = "Categories"
+    tag = "Authentication"
 )]
-async fn delete_authenticated_user_category(
+async fn begin_passkey_login(
     State(state): State<AppState>,
-    auth_context: AuthContext,
-    Path(category_id): Path<String>,
-) -> Result<Json<DeleteCategoryResponse>, (StatusCode, Json<ApiErrorResponse>)> {
-    let user_id = auth_context.user_id;
-    let category_uuid = Uuid::parse_str(&category_id).map_err(|_| {
-        ApiErrorResponse::new("BAD_REQUEST", "Invalid category id")
-            .into_response(StatusCode::BAD_REQUEST)
-    })?;
-    match state
-        .db_repository
-        .delete_user_category(category_uuid, user_id)
-        .await
-    {
-        Ok(_) => Ok(Json(DeleteCategoryResponse {
-            deleted: true,
-            id: category_id,
-        })),
+    Json(req): Json<auth_models::PasskeyLoginBeginRequest>,
+) -> Result<Json<auth_models::PasskeyLoginBeginResponse>, (StatusCode, Json<ApiErrorResponse>)> {
+    let email = req.email.trim().to_lowercase();
+
+    let user_lookup = match state.db_repository.get_user_by_email(&email).await {
+        Ok(user) => user,
         Err(e) => {
             tracing::error!(
-                "Failed to delete category {} for user {}: {}",
-                category_id,
-                user_id,
+                "Failed to look up user by email during passkey login begin: {}",
                 e
             );
-            Err(ApiErrorResponse::internal_server_error("Failed to delete category"))
+            return Err(ApiErrorResponse::internal_server_error(
+                "Authentication service error",
+            ));
         }
+    };
+
+    let Some(user) = user_lookup else {
+        return Ok(Json(auth_models::PasskeyLoginBeginResponse {
+            session_id: String::new(),
+            challenge: serde_json::Value::Null,
+            account_exists: false,
+            passkey_available: false,
+            password_available: false,
+        }));
+    };
+
+    let creds = state
+        .db_repository
+        .list_webauthn_credentials_for_user(&user.id)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to list credentials for user {}: {}", user.id, e);
+            ApiErrorResponse::internal_server_error("Authentication service error")
+        })?;
+
+    if seed_user_password_fallback(&user) {
+        return Ok(Json(auth_models::PasskeyLoginBeginResponse {
+            session_id: String::new(),
+            challenge: serde_json::Value::Null,
+            account_exists: true,
+            passkey_available: false,
+            password_available: true,
+        }));
     }
+
+    let passkeys = usable_passkeys(&creds);
+    let password_available = passkeys.is_empty()
+        && user
+            .password_hash
+            .as_ref()
+            .is_some_and(|hash| !hash.is_empty());
+
+    if passkeys.is_empty() {
+        if password_available {
+            return Ok(Json(auth_models::PasskeyLoginBeginResponse {
+                session_id: String::new(),
+                challenge: serde_json::Value::Null,
+                account_exists: true,
+                passkey_available: false,
+                password_available: true,
+            }));
+        }
+
+        let existing_ids: Vec<Vec<u8>> = creds.iter().map(|c| c.credential_id.clone()).collect();
+
+        let (challenge, reg_state) = state
+            .webauthn_service
+            .begin_registration(user.id, &user.email, &user.email, &existing_ids)
+            .map_err(|e| {
+                tracing::error!("begin_registration failed for user {}: {}", user.id, e);
+                ApiErrorResponse::internal_server_error("Failed to begin passkey registration")
+            })?;
+
+        let state_value = serde_json::to_value(&reg_state).map_err(|e| {
+            tracing::error!("Failed to serialize registration state: {}", e);
+            ApiErrorResponse::internal_server_error("Failed to serialize registration state")
+        })?;
+
+        let payload = serde_json::to_string(&RegistrationChallengePayload {
+            user_id: user.id,
+            email: user.email.clone(),
+            display_name: user.email.clone(),
+            state: state_value,
+            existing_user_recovery: true,
+        })
+        .map_err(|e| {
+            tracing::error!("Failed to serialize registration challenge payload: {}", e);
+            ApiErrorResponse::internal_server_error("Failed to store registration challenge")
+        })?;
+
+        let session_id = Uuid::new_v4().to_string();
+
+        state
+            .cache_service
+            .set_webauthn_challenge(&session_id, &payload)
+            .await
+            .map_err(|e| {
+                tracing::error!(
+                    "Failed to store challenge for session {}: {}",
+                    session_id,
+                    e
+                );
+                ApiErrorResponse::internal_server_error("Failed to store registration challenge")
+            })?;
+
+        let challenge_json = serde_json::to_value(&challenge).map_err(|e| {
+            tracing::error!("Failed to serialize challenge: {}", e);
+            ApiErrorResponse::internal_server_error("Failed to serialize challenge")
+        })?;
+
+        return Ok(Json(auth_models::PasskeyLoginBeginResponse {
+            session_id,
+            challenge: challenge_json,
+            account_exists: true,
+            passkey_available: false,
+            password_available: false,
+        }));
+    }
+
+    let user_id = user.id;
+    let (challenge, auth_state) = state
+        .webauthn_service
+        .begin_authentication(&passkeys)
+        .map_err(|e| {
+            tracing::error!("begin_authentication failed: {}", e);
+            ApiErrorResponse::internal_server_error("Failed to begin authentication")
+        })?;
+
+    let state_value = serde_json::to_value(&auth_state).map_err(|e| {
+        tracing::error!("Failed to serialize auth state: {}", e);
+        ApiErrorResponse::internal_server_error("Failed to serialize authentication state")
+    })?;
+
+    let payload = serde_json::to_string(&LoginChallengePayload {
+        user_id,
+        state: state_value,
+    })
+    .map_err(|e| {
+        tracing::error!("Failed to serialize challenge payload: {}", e);
+        ApiErrorResponse::internal_server_error("Failed to store authentication challenge")
+    })?;
+
+    let session_id = Uuid::new_v4().to_string();
+
+    state
+        .cache_service
+        .set_webauthn_challenge(&session_id, &payload)
+        .await
+        .map_err(|e| {
+            tracing::error!(
+                "Failed to store challenge for session {}: {}",
+                session_id,
+                e
+            );
+            ApiErrorResponse::internal_server_error("Failed to store authentication challenge")
+        })?;
+
+    let challenge_json = serde_json::to_value(&challenge).map_err(|e| {
+        tracing::error!("Failed to serialize challenge: {}", e);
+        ApiErrorResponse::internal_server_error("Failed to serialize challenge")
+    })?;
+
+    Ok(Json(auth_models::PasskeyLoginBeginResponse {
+        session_id,
+        challenge: challenge_json,
+        account_exists: true,
+        passkey_available: true,
+        password_available: false,
+    }))
 }
 
 #[utoipa::path(
-    put,
-    path = "/api/transactions/{id}/category",
-    description = "Sets or updates the custom category override for a transaction.",
-    params(("id" = String, Path, description = "Transaction ID")),
-    request_body = UpdateTransactionCategoryRequest,
+    post,
+    path = "/api/auth/passkey/login/finish",
+    description = "Complete passkey authentication and receive an auth_token cookie.",
+    request_body = auth_models::PasskeyLoginFinishRequest,
     responses(
-        (status = 200, description = "Category override set"),
-        (status = 400, description = "Invalid request", body = ApiErrorResponse),
-        (status = 401, description = "Unauthorized"),
+        (status = 200, description = "Authentication successful", body = auth_models::AuthResponse),
+        (status = 400, description = "Challenge not found, expired, or invalid response", body = ApiErrorResponse),
+        (status = 401, description = "Authentication failed", body = ApiErrorResponse),
         (status = 500, description = "Internal server error", body = ApiErrorResponse),
     ),
-    security(("bearer_auth" = [])),
-    tag = "Categories"
+    tag = "Authentication"
 )]
-async fn set_authenticated_transaction_category(
+async fn finish_passkey_login(
     State(state): State<AppState>,
-    auth_context: AuthContext,
-    Path(transaction_id): Path<String>,
-    Json(req): Json<UpdateTransactionCategoryRequest>,
-) -> Result<StatusCode, (StatusCode, Json<ApiErrorResponse>)> {
-    let user_id = auth_context.user_id;
-    let txn_uuid = Uuid::parse_str(&transaction_id).map_err(|_| {
-        ApiErrorResponse::new("BAD_REQUEST", "Invalid transaction id")
-            .into_response(StatusCode::BAD_REQUEST)
-    })?;
-    let name = req.category_name.trim().to_string();
-    if name.is_empty() {
-        return Err(
-            ApiErrorResponse::new("BAD_REQUEST", "Category name must not be empty")
-                .into_response(StatusCode::BAD_REQUEST),
-        );
-    }
-    match state
-        .db_repository
-        .set_transaction_category_override(txn_uuid, user_id, name)
+    Json(req): Json<auth_models::PasskeyLoginFinishRequest>,
+) -> Result<(HeaderMap, Json<auth_models::AuthResponse>), (StatusCode, Json<ApiErrorResponse>)> {
+    use webauthn_rs::prelude::{PasskeyAuthentication, PublicKeyCredential};
+
+    let challenge_json = state
+        .cache_service
+        .take_webauthn_challenge(&req.session_id)
         .await
-    {
-        Ok(_) => Ok(StatusCode::NO_CONTENT),
-        Err(e) => {
+        .map_err(|e| {
             tracing::error!(
-                "Failed to set category override for transaction {} user {}: {}",
-                transaction_id,
+                "Failed to retrieve challenge for session {}: {}",
+                req.session_id,
+                e
+            );
+            ApiErrorResponse::internal_server_error("Failed to retrieve challenge")
+        })?
+        .ok_or_else(|| ApiErrorResponse::bad_request("Challenge not found or already used"))?;
+
+    let payload: LoginChallengePayload = serde_json::from_str(&challenge_json).map_err(|e| {
+        tracing::error!("Failed to deserialize challenge payload: {}", e);
+        ApiErrorResponse::bad_request("Invalid challenge state")
+    })?;
+
+    if payload.user_id == Uuid::nil() {
+        return Err(ApiErrorResponse::unauthorized("Authentication failed"));
+    }
+
+    let user_id = payload.user_id;
+
+    let auth_state: PasskeyAuthentication = serde_json::from_value(payload.state).map_err(|e| {
+        tracing::error!("Failed to deserialize authentication state: {}", e);
+        ApiErrorResponse::bad_request("Invalid authentication state")
+    })?;
+
+    let credential_response: PublicKeyCredential =
+        serde_json::from_value(req.response).map_err(|e| {
+            tracing::error!("Failed to deserialize credential response: {}", e);
+            ApiErrorResponse::bad_request("Invalid credential response")
+        })?;
+
+    let auth_result = state
+        .webauthn_service
+        .finish_authentication(&auth_state, &credential_response)
+        .map_err(|e| {
+            tracing::warn!("finish_authentication failed for user {}: {}", user_id, e);
+            ApiErrorResponse::unauthorized("Authentication failed")
+        })?;
+
+    let cred_id_bytes: Vec<u8> = auth_result.cred_id().to_vec();
+    let new_count = auth_result.counter();
+
+    let matching = state
+        .db_repository
+        .find_webauthn_credentials_by_credential_ids(&user_id, &[cred_id_bytes])
+        .await
+        .map_err(|e| {
+            tracing::error!(
+                "Failed to find matched credential for user {}: {}",
                 user_id,
                 e
             );
-            Err(ApiErrorResponse::internal_server_error(
-                "Failed to set category override",
-            ))
+            ApiErrorResponse::internal_server_error("Authentication service error")
+        })?;
+
+    if let Some(credential) = matching.first() {
+        if let Err(e) = state
+            .db_repository
+            .update_webauthn_credential_counter_and_last_used(&user_id, &credential.id, new_count)
+            .await
+        {
+            tracing::warn!(
+                "Failed to update sign counter for credential {}: {}",
+                credential.id,
+                e
+            );
         }
     }
-}
 
-#[utoipa::path(
-    delete,
-    path = "/api/transactions/{id}/category",
-    description = "Removes the custom category override for a transaction, restoring the provider category.",
-    params(("id" = String, Path, description = "Transaction ID")),
-    responses(
-        (status = 200, description = "Category override removed"),
-        (status = 400, description = "Invalid ID", body = ApiErrorResponse),
-        (status = 401, description = "Unauthorized"),
-        (status = 500, description = "Internal server error", body = ApiErrorResponse),
-    ),
-    security(("bearer_auth" = [])),
-    tag = "Categories"
-)]
-async fn remove_authenticated_transaction_category(
-    State(state): State<AppState>,
-    auth_context: AuthContext,
-    Path(transaction_id): Path<String>,
-) -> Result<StatusCode, (StatusCode, Json<ApiErrorResponse>)> {
-    let user_id = auth_context.user_id;
-    let txn_uuid = Uuid::parse_str(&transaction_id).map_err(|_| {
-        ApiErrorResponse::new("BAD_REQUEST", "Invalid transaction id")
-            .into_response(StatusCode::BAD_REQUEST)
-    })?;
-    match state
+    let user = state
         .db_repository
-        .remove_transaction_category_override(txn_uuid, user_id)
+        .get_user_by_id(&user_id)
         .await
-    {
-        Ok(_) => Ok(StatusCode::NO_CONTENT),
-        Err(e) => {
+        .map_err(|e| {
             tracing::error!(
-                "Failed to remove category override for transaction {} user {}: {}",
-                transaction_id,
+                "Failed to fetch user {} after authentication: {}",
                 user_id,
                 e
             );
-            Err(ApiErrorResponse::internal_server_error(
-                "Failed to remove category override",
-            ))
-        }
-    }
-}
+            ApiErrorResponse::internal_server_error("Authentication service error")
+        })?
+        .ok_or_else(|| ApiErrorResponse::unauthorized("Authentication failed"))?;
 
-async fn get_authenticated_category_rules(
-    State(state): State<AppState>,
-    auth_context: AuthContext,
-) -> Result<Json<Vec<CategoryRule>>, (StatusCode, Json<ApiErrorResponse>)> {
-    match state.db_repository.get_category_rules(auth_context.user_id).await {
-        Ok(rules) => Ok(Json(rules)),
-        Err(e) => {
-            tracing::error!("Failed to get category rules: {}", e);
-            Err(ApiErrorResponse::internal_server_error("Failed to fetch category rules"))
-        }
-    }
-}
-
-async fn create_authenticated_category_rule(
-    State(state): State<AppState>,
-    auth_context: AuthContext,
-    Json(req): Json<CreateCategoryRuleRequest>,
-) -> Result<Json<CategoryRule>, (StatusCode, Json<ApiErrorResponse>)> {
-    let user_id = auth_context.user_id;
-    let pattern = req.pattern.trim().to_string();
-    let category_name = req.category_name.trim().to_string();
-    tracing::info!(user_id = %user_id, pattern = %pattern, category_name = %category_name, "create_category_rule called");
-    if pattern.is_empty() || category_name.is_empty() {
-        return Err(
-            ApiErrorResponse::new("BAD_REQUEST", "Pattern and category name must not be empty")
-                .into_response(StatusCode::BAD_REQUEST),
-        );
-    }
-    match state
-        .db_repository
-        .create_category_rule(user_id, pattern, category_name)
-        .await
-    {
-        Ok(rule) => Ok(Json(rule)),
-        Err(e) => {
-            tracing::error!("Failed to create category rule for user {}: {}", user_id, e);
-            if e.to_string().contains("already exists") {
-                Err(
-                    ApiErrorResponse::new("CONFLICT", "Rule pattern already exists")
-                        .into_response(StatusCode::CONFLICT),
-                )
-            } else {
-                Err(ApiErrorResponse::internal_server_error("Failed to create category rule"))
-            }
-        }
-    }
-}
-
-async fn update_authenticated_category_rule(
-    State(state): State<AppState>,
-    auth_context: AuthContext,
-    Path(rule_id): Path<String>,
-    Json(req): Json<UpdateCategoryRuleRequest>,
-) -> Result<Json<CategoryRule>, (StatusCode, Json<ApiErrorResponse>)> {
-    let user_id = auth_context.user_id;
-    let rule_uuid = Uuid::parse_str(&rule_id).map_err(|_| {
-        ApiErrorResponse::new("BAD_REQUEST", "Invalid rule id")
-            .into_response(StatusCode::BAD_REQUEST)
+    let auth_token = state.auth_service.generate_token(user_id).map_err(|e| {
+        tracing::error!("Token generation failed for user {}: {}", user_id, e);
+        ApiErrorResponse::internal_server_error("Failed to generate authentication token")
     })?;
-    match state
-        .db_repository
-        .update_category_rule(
-            rule_uuid,
-            user_id,
-            req.pattern.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
-            req.category_name.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
-        )
-        .await
-    {
-        Ok(rule) => Ok(Json(rule)),
-        Err(e) => {
-            tracing::error!("Failed to update rule {} for user {}: {}", rule_id, user_id, e);
-            if e.to_string().contains("not found") {
-                Err(ApiErrorResponse::new("NOT_FOUND", "Rule not found")
-                    .into_response(StatusCode::NOT_FOUND))
-            } else {
-                Err(ApiErrorResponse::internal_server_error("Failed to update category rule"))
-            }
-        }
-    }
-}
 
-async fn delete_authenticated_category_rule(
-    State(state): State<AppState>,
-    auth_context: AuthContext,
-    Path(rule_id): Path<String>,
-) -> Result<Json<DeleteCategoryRuleResponse>, (StatusCode, Json<ApiErrorResponse>)> {
-    let user_id = auth_context.user_id;
-    let rule_uuid = Uuid::parse_str(&rule_id).map_err(|_| {
-        ApiErrorResponse::new("BAD_REQUEST", "Invalid rule id")
-            .into_response(StatusCode::BAD_REQUEST)
-    })?;
-    match state
-        .db_repository
-        .delete_category_rule(rule_uuid, user_id)
-        .await
-    {
-        Ok(_) => Ok(Json(DeleteCategoryRuleResponse {
-            deleted: true,
-            id: rule_id,
-        })),
-        Err(e) => {
-            tracing::error!("Failed to delete rule {} for user {}: {}", rule_id, user_id, e);
-            Err(ApiErrorResponse::internal_server_error("Failed to delete category rule"))
+    let ttl = (auth_token.expires_at - Utc::now()).num_seconds().max(0) as u64;
+    if ttl > 0 {
+        if let Err(e) = state
+            .cache_service
+            .set_session_valid(&auth_token.jwt_id, ttl)
+            .await
+        {
+            tracing::warn!("Failed to set session validity in cache: {}", e);
+        }
+        if let Err(e) = state
+            .cache_service
+            .set_jwt_token(&auth_token.jwt_id, &auth_token.token, ttl)
+            .await
+        {
+            tracing::warn!("Failed to cache JWT token: {}", e);
         }
     }
+
+    tracing::info!("User {} authenticated successfully via passkey", user_id);
+
+    Ok((
+        auth_cookie_headers(build_auth_cookie(
+            &auth_token.token,
+            auth_token.expires_at,
+            &state.config,
+        )),
+        Json(auth_models::AuthResponse {
+            user_id: user_id.to_string(),
+            expires_at: auth_token.expires_at.to_rfc3339(),
+            onboarding_completed: user.onboarding_completed,
+            requires_passkey_enrollment: false,
+        }),
+    ))
 }

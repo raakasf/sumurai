@@ -1,22 +1,25 @@
-import { jest } from '@jest/globals';
+import { jest } from 'bun:test';
 import { ApiClient, AuthenticationError } from '@/services/ApiClient';
 import { TransactionService } from '@/services/TransactionService';
-import type { Transaction } from '@/types/api';
+import type { Transaction, TransactionsInsightsResponse } from '@/types/api';
 
 describe('TransactionService', () => {
   let getSpy: jest.SpiedFunction<typeof ApiClient.get>;
+  let putSpy: jest.SpiedFunction<typeof ApiClient.put>;
 
   beforeEach(() => {
     jest.clearAllMocks();
     getSpy = jest.spyOn(ApiClient, 'get');
+    putSpy = jest.spyOn(ApiClient, 'put');
   });
 
   afterEach(() => {
     getSpy.mockRestore();
+    putSpy.mockRestore();
   });
 
   describe('getTransactions', () => {
-    it('should call authenticated API endpoint without parameters', async () => {
+    it('fetches and flattens all pages when pagination is not requested', async () => {
       const mockBackendTransactions = [
         {
           id: '1',
@@ -49,30 +52,144 @@ describe('TransactionService', () => {
           account_mask: '1234',
         },
       ];
-      getSpy.mockResolvedValue(mockBackendTransactions as any);
+      getSpy.mockResolvedValue({
+        transactions: mockBackendTransactions,
+        total: 1,
+        page: 1,
+        page_size: 200,
+      } as any);
 
       const result = await TransactionService.getTransactions();
 
-      expect(ApiClient.get).toHaveBeenCalledWith('/transactions');
+      expect(ApiClient.get).toHaveBeenCalledWith('/transactions?page=1&page_size=200');
       expect(result).toEqual(expectedFrontendTransactions);
     });
 
-    it('should pass filter parameters to backend for server-side processing', async () => {
-      const filters = {
+    it('passes filters and returns a paginated response when page parameters are provided', async () => {
+      const mockBackendTransactions = [
+        {
+          id: '1',
+          date: '2024-01-15',
+          merchant_name: 'Coffee Shop',
+          amount: -5.5,
+          category_primary: 'FOOD_AND_DRINK',
+          category_detailed: 'COFFEE_SHOPS',
+          category_confidence: 'HIGH',
+          provider: 'plaid',
+          account_name: 'Everyday Checking',
+          account_type: 'depository',
+          account_mask: '1234',
+        },
+        {
+          id: '2',
+          date: '2024-01-16',
+          merchant_name: 'Bakery',
+          amount: -12.25,
+          category_primary: 'FOOD_AND_DRINK',
+          category_detailed: 'GROCERIES',
+          category_confidence: 'HIGH',
+          provider: 'plaid',
+          account_name: 'Everyday Checking',
+          account_type: 'depository',
+          account_mask: '1234',
+        },
+      ];
+      getSpy.mockResolvedValue({
+        transactions: mockBackendTransactions,
+        total: 25,
+        page: 2,
+        page_size: 10,
+      } as any);
+
+      const result = await TransactionService.getTransactions({
+        page: 2,
+        page_size: 10,
         startDate: '2024-01-01',
         endDate: '2024-01-31',
-        categoryId: 'food',
-        searchTerm: 'grocery',
-      };
-      const mockBackendTransactions: any[] = [];
-      getSpy.mockResolvedValue(mockBackendTransactions as any);
-
-      const result = await TransactionService.getTransactions(filters);
+        categoryId: 'FOOD_AND_DRINK',
+        searchTerm: 'coffee',
+      });
 
       expect(ApiClient.get).toHaveBeenCalledWith(
-        '/transactions?startDate=2024-01-01&endDate=2024-01-31&categoryId=food&searchTerm=grocery'
+        '/transactions?start_date=2024-01-01&end_date=2024-01-31&category_primary=FOOD_AND_DRINK&search=coffee&page=2&page_size=10'
       );
-      expect(result).toEqual([]);
+      expect(result).toEqual({
+        transactions: [
+          {
+            id: '1',
+            date: '2024-01-15',
+            name: 'Coffee Shop',
+            merchant: 'Coffee Shop',
+            amount: -5.5,
+            category: {
+              primary: 'FOOD_AND_DRINK',
+              detailed: 'COFFEE_SHOPS',
+              confidence_level: 'HIGH',
+            },
+            account_name: 'Everyday Checking',
+            account_type: 'depository',
+            account_mask: '1234',
+          },
+          {
+            id: '2',
+            date: '2024-01-16',
+            name: 'Bakery',
+            merchant: 'Bakery',
+            amount: -12.25,
+            category: {
+              primary: 'FOOD_AND_DRINK',
+              detailed: 'GROCERIES',
+              confidence_level: 'HIGH',
+            },
+            account_name: 'Everyday Checking',
+            account_type: 'depository',
+            account_mask: '1234',
+          },
+        ],
+        total: 25,
+        page: 2,
+        page_size: 10,
+      });
+    });
+
+    it('should fetch transaction categories', async () => {
+      getSpy.mockResolvedValue(['FOOD_AND_DRINK', 'TRANSPORTATION'] as any);
+
+      const result = await TransactionService.getTransactionCategories();
+
+      expect(ApiClient.get).toHaveBeenCalledWith('/transactions/categories');
+      expect(result).toEqual(['FOOD_AND_DRINK', 'TRANSPORTATION']);
+    });
+
+    it('should fetch transaction insights without pagination parameters', async () => {
+      const mockInsights: TransactionsInsightsResponse = {
+        total_count: 3,
+        total_spent: 60,
+        average_amount: 20,
+        largest: {
+          amount: 30,
+          merchant: 'Coffee Collective',
+        },
+        recurring_count: 1,
+        recurring_merchants: ['Coffee Collective'],
+        top_categories: ['FOOD_AND_DRINK'],
+      };
+      getSpy.mockResolvedValue(mockInsights as any);
+
+      const result = await TransactionService.getTransactionsInsights({
+        searchTerm: 'coffee',
+        startDate: '2024-03-01',
+        endDate: '2024-03-31',
+        categoryPrimary: 'FOOD_AND_DRINK',
+        accountIds: ['account1'],
+        page: 2,
+        page_size: 10,
+      });
+
+      expect(ApiClient.get).toHaveBeenCalledWith(
+        '/transactions/insights?start_date=2024-03-01&end_date=2024-03-31&category_primary=FOOD_AND_DRINK&search=coffee&account_ids%5B%5D=account1'
+      );
+      expect(result).toEqual(mockInsights);
     });
 
     it('should handle authentication errors', async () => {
@@ -81,100 +198,15 @@ describe('TransactionService', () => {
       await expect(TransactionService.getTransactions()).rejects.toThrow(AuthenticationError);
     });
 
-    it('should serialize account_ids parameter when provided', async () => {
-      const filters = {
-        accountIds: ['acc_1', 'acc_2', 'acc_3'],
-      };
-      const mockBackendTransactions: any[] = [];
-      getSpy.mockResolvedValue(mockBackendTransactions as any);
+    it('updates a transaction category without duplicating the api base path', async () => {
+      putSpy.mockResolvedValue(undefined as any);
 
-      const result = await TransactionService.getTransactions(filters);
+      await TransactionService.updateTransactionCategory('tx-1', 'Coffee', true);
 
-      expect(ApiClient.get).toHaveBeenCalledWith(
-        '/transactions?account_ids%5B%5D=acc_1&account_ids%5B%5D=acc_2&account_ids%5B%5D=acc_3'
-      );
-      expect(result).toEqual([]);
-    });
-
-    it('should combine account_ids with other filters', async () => {
-      const filters = {
-        startDate: '2024-01-01',
-        endDate: '2024-01-31',
-        accountIds: ['acc_1', 'acc_2'],
-      };
-      const mockBackendTransactions: any[] = [];
-      getSpy.mockResolvedValue(mockBackendTransactions as any);
-
-      const result = await TransactionService.getTransactions(filters);
-
-      expect(ApiClient.get).toHaveBeenCalledWith(
-        '/transactions?startDate=2024-01-01&endDate=2024-01-31&account_ids%5B%5D=acc_1&account_ids%5B%5D=acc_2'
-      );
-      expect(result).toEqual([]);
-    });
-
-    it('normalizes teller specific metadata without client filtering', async () => {
-      const backendTransactions = [
-        {
-          id: '1',
-          date: '2024-01-15',
-          merchant_name: 'Ledger Update',
-          amount: -100,
-          category_primary: 'GENERAL',
-          provider: 'teller',
-          running_balance: 900.12,
-          account_name: 'Main Checking',
-          account_type: 'depository',
-        },
-        {
-          id: '2',
-          date: '2023-12-01',
-          merchant_name: 'Legacy Payment',
-          amount: 50,
-          category_primary: 'UTILITIES',
-          provider: 'teller',
-          running_balance: 950.12,
-          account_name: 'Main Checking',
-          account_type: 'depository',
-        },
-      ];
-      const expectedFrontendTransactions: Transaction[] = [
-        {
-          id: '1',
-          date: '2024-01-15',
-          name: 'Ledger Update',
-          merchant: 'Ledger Update',
-          amount: -100,
-          category: {
-            primary: 'GENERAL',
-          },
-          running_balance: 900.12,
-          account_name: 'Main Checking',
-          account_type: 'depository',
-          account_mask: undefined,
-        },
-        {
-          id: '2',
-          date: '2023-12-01',
-          name: 'Legacy Payment',
-          merchant: 'Legacy Payment',
-          amount: 50,
-          category: {
-            primary: 'UTILITIES',
-          },
-          running_balance: 950.12,
-          account_name: 'Main Checking',
-          account_type: 'depository',
-          account_mask: undefined,
-        },
-      ];
-      jest.mocked(ApiClient.get).mockResolvedValue(backendTransactions);
-
-      const result = await TransactionService.getTransactions();
-
-      expect(result).toEqual(expectedFrontendTransactions);
-      expect(result).toHaveLength(2);
-      expect(result[0]).not.toHaveProperty('provider');
+      expect(putSpy).toHaveBeenCalledWith('/transactions/tx-1/category', {
+        category_name: 'Coffee',
+        is_custom: true,
+      });
     });
   });
 });

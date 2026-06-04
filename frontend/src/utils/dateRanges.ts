@@ -1,3 +1,7 @@
+/**
+ * Preset date ranges used by analytics filters.
+ */
+
 export type DateRangeKey =
   | 'current-month'
   | 'past-2-months'
@@ -41,13 +45,22 @@ export function computeMonthRange(selection: MonthYearSelection): { start: strin
 export function computeDateRange(key?: DateRangeKey): { start?: string; end?: string } {
   const now = new Date();
   const y = now.getFullYear();
-  const m = now.getMonth(); // 0-based
-  const firstOfMonth = (year: number, month0: number) => localDate(year, month0, 1);
-  const lastOfMonth = (year: number, month0: number) => localDate(year, month0 + 1, 0);
+  const m = now.getMonth();
+  const firstOfMonth = (year: number, month0: number) => new Date(year, month0, 1);
+  const lastOfMonth = (year: number, month0: number) => new Date(year, month0 + 1, 0);
+  const fmt = (d: Date) => {
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
+  };
 
   switch (key) {
     case 'current-month': {
-      return { start: fmt(firstOfMonth(y, m)), end: fmt(lastOfMonth(y, m)) };
+      const end = now;
+      const start = new Date(now);
+      start.setDate(start.getDate() - 29);
+      return { start: fmt(start), end: fmt(end) };
     }
     case 'past-2-months': {
       const start = firstOfMonth(y, m - 1);

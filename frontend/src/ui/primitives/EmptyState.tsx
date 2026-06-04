@@ -1,5 +1,29 @@
 import type React from 'react';
+import {
+  surface as semanticSurfaces,
+  text as semanticTextRecipes,
+  font as uiTypographyRecipes,
+} from '@/ui/recipes';
 import { cn } from './utils';
+
+export const emptyStateRecipes = {
+  iconWrapper: [
+    'flex',
+    'h-12 w-12 md:h-16 md:w-16 lg:h-20 lg:w-20',
+    'items-center',
+    'justify-center',
+    'rounded-full',
+    ...semanticSurfaces.card,
+    semanticTextRecipes.muted,
+    'transition-colors duration-300 ease-out',
+    'hover:shadow-[0_0_30px_var(--color-effect-accent-hover),0_0_60px_var(--color-effect-accent-hover)]',
+    'dark:text-slate-300',
+    'dark:hover:shadow-[0_0_30px_var(--color-effect-accent-hover),0_0_60px_var(--color-effect-accent-hover)]',
+    'cursor-pointer',
+  ],
+  title: `${uiTypographyRecipes.cardTitle} ${semanticTextRecipes.primary} transition-colors duration-500`,
+  description: `${uiTypographyRecipes.body} max-w-sm ${semanticTextRecipes.body} transition-colors duration-500`,
+} as const;
 
 export interface EmptyStateProps extends React.HTMLAttributes<HTMLDivElement> {
   icon: React.ComponentType<{ className?: string }>;
@@ -40,64 +64,16 @@ export function EmptyState({
   return (
     <div
       className={cn(
-        'flex',
-        'flex-col',
-        'items-center',
-        'justify-center',
-        'gap-4',
-        'px-6',
-        'py-20',
-        'text-center',
-        'sm:px-12',
+        'flex flex-col items-center justify-center gap-4 px-6 py-20 text-center md:px-12',
         className
       )}
       {...props}
     >
-      <div
-        className={cn(
-          'flex',
-          'h-12 w-12 md:h-16 md:w-16 lg:h-20 lg:w-20',
-          'items-center',
-          'justify-center',
-          'rounded-full',
-          'bg-gradient-to-br',
-          'from-slate-400/10 via-slate-300/15 to-slate-500/10',
-          'text-slate-600',
-          'transition-all duration-300 ease-out',
-          'hover:scale-110 hover:-translate-y-1',
-          'hover:shadow-[0_0_30px_rgba(59,130,246,0.4),0_0_60px_rgba(59,130,246,0.2)]',
-          'dark:text-slate-300',
-          'dark:from-slate-500/10 dark:via-slate-600/15 dark:to-slate-700/10',
-          'dark:hover:shadow-[0_0_30px_rgba(96,165,250,0.5),0_0_60px_rgba(96,165,250,0.25)]',
-          'cursor-pointer'
-        )}
-      >
+      <div className={cn(...emptyStateRecipes.iconWrapper)}>
         <Icon className={cn('h-6 w-6 md:h-8 md:w-8 lg:h-10 lg:w-10')} />
       </div>
-      <div
-        className={cn(
-          'text-lg',
-          'font-semibold',
-          'text-slate-700',
-          'transition-colors',
-          'duration-500',
-          'dark:text-slate-200'
-        )}
-      >
-        {title}
-      </div>
-      <div
-        className={cn(
-          'text-sm',
-          'text-slate-500',
-          'transition-colors',
-          'duration-500',
-          'dark:text-slate-400',
-          'max-w-sm'
-        )}
-      >
-        {description}
-      </div>
+      <div className={cn(emptyStateRecipes.title)}>{title}</div>
+      <div className={cn(emptyStateRecipes.description)}>{description}</div>
       {action && <div className={cn('mt-2')}>{action}</div>}
     </div>
   );

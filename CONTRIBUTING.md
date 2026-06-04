@@ -1,69 +1,16 @@
 # Contributing to Sumurai
 
-Thanks for your interest in improving Sumurai! This guide helps you get set up quickly, follow the project workflow, and submit high‑quality PRs.
+Thanks for helping improve Sumurai. This guide covers the current workflow, local validation commands, and the conventions used in this repository.
 
-> Heads‑up: End‑to‑end validation happens only at `http://localhost:8080` via Nginx → backend proxy. Vite dev (`:5173`) is fine for UI iteration, but not for full flows.
+> Heads-up: both `http://localhost:8080` and `http://localhost:3001` support end-to-end validation locally. `8080` runs through Nginx; `3001` uses Next dev rewrites to proxy `/api` and `/health` to the backend.
 
 ## Prerequisites
 
-- Node 20+ and npm 9+
-- Rust (stable) and Cargo
+- Node 24.10+ and Bun 1.3.14+
+- Rust stable and Cargo
 - Docker and Docker Compose
-- cross (for macOS → Linux backend builds)
-- sqlx‑cli (for running migrations locally)
 - OpenSSL
 - mkcert (optional, for trusted local HTTPS)
-
-<details>
-<summary>macOS (Homebrew)</summary>
-
-```bash
-brew install rustup-init
-rustup-init
-cargo install cross --git https://github.com/cross-rs/cross
-
-brew install node@20
-brew install --cask docker
-brew install openssl
-brew install mkcert nss
-```
-
-</details>
-
-<details>
-<summary>Windows (Chocolatey)</summary>
-
-```powershell
-choco install rustup.install -y
-rustup-init -y
-cargo install cross --git https://github.com/cross-rs/cross
-
-choco install nodejs-lts -y
-choco install docker-desktop -y
-choco install openssl-light -y
-choco install mkcert -y
-```
-
-</details>
-
-<details>
-<summary>Linux (Debian/Ubuntu)</summary>
-
-```bash
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-. "$HOME/.cargo/env"
-cargo install cross --git https://github.com/cross-rs/cross
-
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-sudo apt-get install -y nodejs
-
-sudo apt-get update
-sudo apt-get install -y docker.io docker-compose-plugin openssl
-# Install mkcert from your distro package manager or:
-# https://github.com/FiloSottile/mkcert#installation
-```
-
-</details>
 
 ## Getting Started
 
@@ -75,188 +22,348 @@ cd sumurai
 git checkout -b feat/my-change
 ```
 
-### Full Stack (Docker)
-
-The fastest way to boot everything:
+Before the first backend build, fetch the model assets:
 
 ```bash
-./scripts/build-backend.sh           # cross‑compile backend (x86_64 Linux)
-docker compose up -d --build         # frontend + backend + redis + postgres
-# Open http://localhost:8080
+./backend/scripts/fetch-models.sh
 ```
 
-E2E demo credentials:
-- Username: `me@test.com`
-- Password: `Test1234!`
+The backend Docker build performs the same fetch automatically, but local `cargo build` expects the assets to be present first.
 
-### Frontend Development
+## Open source and AI-assisted contributions
+
+This project treats **GitHub Actions as the merge gate**. The default Git hook trades some parity for contributor time.
+
+**`bun run precommit` (Husky):** frontend **Biome check**, `typecheck`, **design guard**, and **`bun test`**, then **`bun run backend:ci`**. It does **not** run `bun install` in `frontend/`, Storybook static build, Vitest browser tests, or Playwright iframe smoke. Typecheck already includes `*.stories.tsx` under `src/` with the app.
+
+For **full parity** with `.github/workflows/ci.yml` frontend steps before you push (for example Storybook/Vite/Playwright paths), run **`bun run backend:ci && bun run frontend:ci`** manually.
+
+**Draft pull requests:** the **`ci`** workflow **does not** run GitHub-hosted jobs while the PR is marked draft. Mark the PR ready for review to trigger it (aside from what you run locally with `npm run precommit`). **CodeQL** runs on a weekly schedule only, not on pull requests.
+
+On GitHub, backend or frontend jobs can be **skipped per path filters**; `precommit` still runs **both** stacks locally.
+
+**If you only changed one side**, you can narrow scope while developing:
+
+```bash
+bun run backend:ci
+```
+
+```bash
+bun run frontend:ci
+```
+
+For finer slices while iterating, use the commands in **Frontend Development** and **Backend Validation** below.
+
+**Design-only edits:** changing repo-root `DESIGN.md` triggers the **frontend** CI job (path filter), so token and design guard failures show up there even when no files under `frontend/` changed.
+
+**Skipping hooks:** `git commit --no-verify` is available, but **CI must pass** before maintainers can merge. If an automated or AI-generated patch skips the hook, treat the GitHub `ci` workflow as the review checklist.
+
+**If you use AI coding tools:** follow this file, `AGENTS.md`, and existing patterns; keep changes small; do not commit `.env` or secrets; and ensure new behavior has tests in the existing `frontend/tests/` or `backend/src/tests/` layout.
+
+## Full Stack
+
+Start the **default OSS** stack (GHCR images, no Seq):
+
+```bash
+docker compose up -d --build
+```
+
+For **source-built** local development (console traces, Lax cookies in compose):
+
+```bash
+docker compose -f docker-compose.dev.yml up -d --build
+```
+
+Dev compose uses separate Postgres/Redis volumes (`postgres_data_dev`, `redis_data_dev`) from the default OSS stack (`postgres_data_oss`, `redis_data_oss`). The first run after switching stacks starts with a fresh database; migrations and `SEED_DEMO_USER` recreate the demo account. The dev backend image is built with the `dev-seed` Cargo feature so `me@test.com` can sign in with password only (no passkey enrollment).
+
+For the **production-oriented** stack with Seq, use `docker-compose.prod.yml` and [docs/PRODUCTION_TLS.md](docs/PRODUCTION_TLS.md).
+
+Demo credentials: `me@test.com` / `Test1234!`
+
+## Frontend Development
+
+`frontend/package.json` is the canonical frontend command surface. From the repo root, use the thin wrappers:
+
+```bash
+bun run frontend:build
+bun run frontend:test
+bun run frontend:typecheck
+bun run frontend:lint
+```
+
+Or directly in `frontend/`:
 
 ```bash
 cd frontend
-npm install
-npm run dev               # Next.js dev server on :3001
-npm run build             # production build (static export to ./out)
-npm test                  # unit tests (Jest + RTL)
+bun install
+bun run dev
+bun run build
+bun run test
 ```
 
-Notes:
-- Validate integrated flows at `http://localhost:8080` (Docker) or use `npm run dev` for local development.
-- For E2E testing, use `docker compose up -d --build` to run the full stack with Nginx proxy.
+- `bun run dev` starts the Next.js dev server on `http://localhost:3001`.
+- `http://localhost:3001` proxies `/api` and `/health` to the backend for local end-to-end flows.
+- `http://localhost:8080` remains the Nginx-backed integrated stack.
+- Supported local host platforms are macOS, Linux, and Windows through Docker Compose.
 
-### Trusted Local HTTPS
+### Storybook
 
-For browser-trusted HTTPS on the Docker stack, generate a local certificate with mkcert:
+Component stories live under `frontend/src` as `*.stories.tsx`. From the repo root:
 
 ```bash
-./scripts/setup-local-https.sh
-docker compose up -d --build
-# Open https://localhost:8443
+bun run storybook
+bun run storybook:build
+bun run frontend:storybook-test
 ```
 
-The script installs the mkcert local CA if needed and writes certificates to `.certs/mkcert/`, which is gitignored. Nginx automatically uses those certificates when present; otherwise it falls back to the existing self-signed first-boot certificate or your Let's Encrypt certificate.
+The root Storybook commands delegate to `frontend/` (same as `cd frontend && npm run …`). `storybook` serves `http://localhost:6006`. `storybook:build` writes `frontend/storybook-static` (used by CI Storybook iframe smoke tests). `frontend:storybook-test` runs the Storybook Vitest project from the repo root. Storybook MCP needs Storybook running first; see `AGENTS.md`.
 
-If you need to open the site from another device on your LAN, generate the certificate on the machine running Docker and include that machine's LAN address or local hostname:
+## Backend Validation
+
+Run backend validation from the repository root (workspace lockfile is `Cargo.lock`):
 
 ```bash
-LOCAL_HTTPS_HOSTS="$(hostname -I | awk '{print $1}') $(hostname -s).local" ./scripts/setup-local-https.sh
-docker compose restart nginx
+bun run backend:ci
 ```
 
-Install the Docker host's mkcert root CA from `$(mkcert -CAROOT)/rootCA.pem` on each device that should trust the local site.
-
-### Backend Development
-
-Run with local Redis (Redis is required; no in‑memory fallback):
+Or run individual steps:
 
 ```bash
-docker compose up -d redis
-REDIS_URL=redis://localhost:6379 cargo run
+cargo fmt -p sumurai-backend -p entity --check
+cargo check --workspace --locked --all-targets
+cargo clippy -p sumurai-backend -p entity --locked --all-targets --no-deps -- -D warnings
+cargo test -p sumurai-backend --locked
 ```
 
-Common cargo commands:
+## Backend Docker image
+
+The backend image is built from the **repository root** (not `backend/` alone). Compose and CI use `docker build -f backend/Dockerfile .`.
+
+The Rust workspace lockfile is **`Cargo.lock`** at the repo root. Workspace members are `backend`, `backend/entity`, `backend/migration`, and `cli`.
+
+[`backend/Dockerfile`](backend/Dockerfile) uses [cargo-chef](https://github.com/LukeMathWalker/cargo-chef) to cache dependency compilation:
+
+1. **Planner** — copies root `Cargo.toml` / `Cargo.lock`, workspace crate manifests, and minimal `src` stubs (not application source), then runs `cargo chef prepare`.
+2. **Builder** — `cargo chef cook` from `recipe.json`, then copies full `backend/` and `cli/` sources and builds `sumurai-backend`, `migration`, and `sumurai` binaries.
+3. **Runtime** — ONNX assets plus the release binaries and entrypoint scripts.
+
+Only manifest or lockfile changes should invalidate the planner/cook layers; ordinary Rust edits in `backend/src/` rebuild in the final `cargo build` step.
+
+Local dev stack: `docker compose -f docker-compose.dev.yml up -d --build` rebuilds from source. Published images are built by `.github/workflows/publish-images.yml` after semantic-release tags a release.
+
+## Working with the database
+
+Schema and migrations live in `backend/migration/` (migrations) and `backend/entity/` (entities). **All schema application runs through Docker Compose** — `backend/scripts/docker-entrypoint.sh` runs `docker-migrate.sh` (legacy SQLx cutover or fresh schema), then the backend applies pending migrations via `Migrator::up` in `backend/src/main.rs`.
+
+Do not run `cargo run -p migration` against a legacy SQLx database outside Compose.
+
+### Add a migration
+
+1. Create `backend/migration/src/m<YYYYMMDD>_<name>.rs` implementing `MigrationTrait` (use `SchemaManager` builders; use `execute_unprepared` for RLS policy DDL the builder cannot express).
+2. Register the module in `backend/migration/src/lib.rs` and append it to `Migrator::migrations()`.
+3. Apply via Docker: `docker compose -f docker-compose.dev.yml up -d --build`
+4. Regenerate entities (see below)
+
+Example migration skeleton:
+
+```rust
+use sea_orm_migration::prelude::*;
+
+#[derive(DeriveMigrationName)]
+pub struct Migration;
+
+#[async_trait::async_trait]
+impl MigrationTrait for Migration {
+    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .alter_table(
+                Table::alter()
+                    .table(Users::Table)
+                    .add_column(ColumnDef::new(Users::Nickname).string().null())
+                    .to_owned(),
+            )
+            .await
+    }
+
+    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .alter_table(
+                Table::alter()
+                    .table(Users::Table)
+                    .drop_column(Users::Nickname)
+                    .to_owned(),
+            )
+            .await
+    }
+}
+
+#[derive(DeriveIden)]
+enum Users {
+    Table,
+    Nickname,
+}
+```
+
+### Regenerate entities
+
+After a migration is applied through Docker, point `sea-orm-cli` at that database:
 
 ```bash
-cargo check
-cargo test
-RUST_BACKTRACE=1 cargo test some_test -- --nocapture
-cargo build --release
+cargo install sea-orm-cli --locked
+sea-orm-cli generate entity \
+  --database-url "$DATABASE_URL" \
+  --output-dir backend/entity/src \
+  --entity-format dense
 ```
 
-### Database Migrations
+Use the same `DATABASE_URL` as the dev stack (for example from `.env.example` and your local compose env). Run this from a machine that can reach Postgres, or exec into the backend container after `docker compose -f docker-compose.dev.yml up -d --build`.
 
-Using a local Postgres instance:
+Review generated `Relation` impls; hand-edit only when the generator misses a composite or polymorphic link. Re-export modules from `backend/entity/src/prelude.rs` if you add tables.
+
+### Write queries
+
+- Tenant-scoped reads/writes go through `PostgresRepository::with_tenant` and use entity DSL inside the closure (`entity::transaction::Entity::find()`, etc.).
+- Convert `entity::Model` to domain types via `backend/src/models/conversions.rs` — handlers and services never import `entity::*`.
+- When the DSL is insufficient (complex CTEs, aggregates), use the escape hatch in `repository_service.rs`:
+
+```rust
+Model::find_by_statement(Statement::from_sql_and_values(
+    DbBackend::Postgres,
+    r#"SELECT …"#,
+    vec![…],
+))
+```
+
+Document why the escape hatch was needed in the PR.
+
+### Column walkthrough (end to end)
+
+1. Add a migration file and register it in `Migrator::migrations()`.
+2. Apply via Docker: `docker compose -f docker-compose.dev.yml up -d --build backend`
+3. Regenerate entities (see **Regenerate entities** above).
+4. Use the new `Column` variant in `repository_service.rs` (inside `with_tenant` when tenant-scoped).
+5. Add or extend a `From<entity::…::Model>` mapping in `conversions.rs` if the API exposes the field.
+6. Run `cargo test -p sumurai-backend --locked` from the repository root.
+
+## Recovery
+
+If a user loses every enrolled passkey, an operator with database access can clear their credentials so the user is prompted to enroll again on the next sign-in. The user account and financial data are not deleted.
+
+The `sumurai` CLI ships in the backend Docker image at `/app/sumurai`. It connects with `DATABASE_URL` using the same superuser connection as migrations, so it bypasses row-level security for operator maintenance.
 
 ```bash
-# Example: adjust host/port/user/password as needed
-DATABASE_URL=postgresql://postgres:password@localhost:5432/accounting \
-  sqlx migrate run
+docker compose -f docker-compose.dev.yml exec backend /app/sumurai reset-passkeys user@example.com
 ```
 
-### Repo Structure (quick tour)
+You can pass an email address or the user's UUID. On success the command prints:
 
-- `frontend/` — React 19 + TypeScript + Next.js; Tailwind; Recharts
-- `backend/` — Rust + Axum + SQLx; Redis caching; RLS policies
-- `scripts/` — build helpers (e.g., `build-backend.sh`)
-- `docs/` — images/diagrams used in README
+`Passkeys cleared for user@example.com. User will be prompted to enroll a new passkey on next sign-in.`
 
-See `README.md` for architecture details and endpoint mapping.
+If no matching user exists, the command exits with a non-zero status and an error message.
+
+For local development without Docker, build the CLI from the repository root and point it at Postgres:
+
+```bash
+cargo build --release -p sumurai-cli
+DATABASE_URL=postgres://… ./target/release/sumurai reset-passkeys user@example.com
+```
+
+## Repository Layout
+
+- `frontend/` - Next.js 16, React 19, TypeScript 6, Tailwind 4, Biome 2, Recharts 3
+- `backend/` - Rust 1.95, Axum, SeaORM, Redis, PostgreSQL, provider integrations, OpenTelemetry
+- `cli/` - operator CLI (`sumurai reset-passkeys`, …)
+- `docs/` - architecture, screenshots, compliance, and reference documents
 
 ## Coding Standards
 
-- TypeScript: keep types precise; prefer hooks and services per the existing patterns. Run `tsc -b` to type‑check.
-- Rust: prefer small, testable units; follow trait‑based DI for services. Use idiomatic error handling.
-- Formatting/Linting: use project defaults (e.g., `cargo fmt`, `cargo clippy`, TypeScript/ESLint if configured). Keep changes focused and minimal.
-- Tests: write or update unit tests when changing business logic (frontend or backend). Aim for Given/When/Then clarity.
-- Secrets: never commit real secrets or `.env` files. Redis is mandatory in all code paths.
+- TypeScript: keep types precise, follow the existing hooks and service patterns, and use `tsc -b` for type checks.
+- Rust: keep units small and testable, prefer idiomatic error handling, and use `cargo fmt` and `cargo clippy`.
+- Tests: keep them in the existing test folders and update them when business logic changes.
+- Secrets: never commit real secrets or `.env` files.
 
-## Branch, Commits, and PRs
+## Branches, Commits, and PRs
 
-- Branch from `main` and keep PRs small and focused.
-- Commit style: Conventional Commits. Examples:
-  - `feat: add budgets summary chart`
-  - `fix: handle empty transaction lists`
-  - `refactor: extract transaction filter utils`
-  - Use `feat!:` or include a `BREAKING CHANGE:` section in the PR description for breaking changes.
-- Open a PR when ready; CI should be green before requesting review.
-- Merge strategy: squash‑and‑merge on `main`.
-- Releases: created automatically on `main` via semantic‑release; do not push tags manually.
+- Branch from `main` and keep PRs focused.
+- Use Conventional Commits, for example `feat: add budgets summary chart` or `fix: handle empty transactions`.
+- Use `feat!:` or `BREAKING CHANGE:` for breaking changes.
+- Keep CI green before requesting review.
+- Merge strategy is squash-and-merge on `main`.
 
-### PR Checklist
+## PR Checklist
 
-- [ ] Feature/bug has a linked issue (or a brief rationale in the PR)
-- [ ] Follows existing patterns and style; minimal blast radius
-- [ ] Includes tests for changed business logic (if applicable)
-- [ ] Builds and runs locally (`docker compose up -d --build` works)
-- [ ] No secrets or credentials committed; docs updated if user‑facing behavior changed
+- Feature or bug has a linked issue or a short rationale
+- Code follows the existing patterns and keeps the blast radius small
+- Tests were added or updated where needed
+- The relevant validation commands pass locally
+- No secrets or credentials were committed
 
 ## Troubleshooting
 
-- Logs: `docker compose logs -f <service>`
-- Reset local data: `docker compose down -v` (removes volumes)
-- Common gotchas:
-  - Backend fails fast without Redis; start Redis first for local runs.
-  - Validate E2E only at `http://localhost:8080` (SPA + API proxy).
+- Use `docker compose logs -f <service>` for logs.
+- Use `docker compose down -v` to reset local data.
+- Redis is required for the backend to start in Docker.
+- Validate end-to-end behavior through either `http://localhost:3001` or `http://localhost:8080`.
 
 ## Environment Variables
 
-Everything reads from `.env`. Most variables have defaults in `docker-compose.yml`.
+Set the values you actually need in [`.env.example`](.env.example). Everything else is defined in Docker Compose.
 
-| Variable | Required | Default | Notes |
-| --- | --- | --- | --- |
-| **Core Secrets** | | | |
-| `JWT_SECRET` | Yes | — | 32+ hex chars. `openssl rand -hex 32` |
-| `ENCRYPTION_KEY` | Yes | — | 64 hex chars. `openssl rand -hex 32` |
-| `POSTGRES_PASSWORD` | Yes | — | Any value for local dev |
-| `SEQ_PASSWORD` | Yes | — | Any value for local dev |
-| `SEQ_API_KEY` | Yes | — | Any value for local dev |
-| **Teller** | | | |
-| `TELLER_APPLICATION_ID` | Yes | — | From Teller dashboard |
-| `TELLER_CERT_PATH` | Yes | — | Path to client cert (PEM). Store in `.certs/` |
-| `TELLER_KEY_PATH` | Yes | — | Path to private key (PEM). Store in `.certs/` |
-| **Optional** | | | |
-| `CORS_ALLOWED_ORIGINS` | No | `http://localhost:8080` | Comma-separated origins |
-| `DOMAIN` | No | `localhost` | Hostname for nginx and Let's Encrypt |
-| `SSL_PORT` | No | `8443` | HTTPS port (use 443 in production) |
-| `LE_EMAIL` | No | — | Email for Let's Encrypt |
-| `DATABASE_URL` | No | Computed | Override for non-Docker databases |
-| `REDIS_URL` | No | `redis://redis:6379` | Override for external Redis |
-| `POSTGRES_USER` | No | `postgres` | Database user |
-| `POSTGRES_DB` | No | `accounting` | Database name |
-| `DEFAULT_PROVIDER` | No | `teller` | Bank data provider |
-| `TELLER_ENV` | No | `sandbox` | `sandbox`, `development`, or `production` |
-| `BACKEND_RUST_LOG` | No | `info` | Rust log level |
+Required values:
+
+- `JWT_SECRET`
+- `ENCRYPTION_KEY`
+- `POSTGRES_PASSWORD`
+
+Plaid values when using Plaid:
+
+- `PLAID_CLIENT_ID`
+- `PLAID_SECRET`
+
+Teller values when using Teller:
+
+- `TELLER_APPLICATION_ID`
+
+Optional values:
+
+- `NGROK_AUTHTOKEN`
+- `NGROK_URL`
+- `SEQ_PASSWORD`
+- `SEQ_API_KEY`
+- `CLEAR_SESSIONS_ON_BOOT` set to `true` only when you intentionally want backend startup to invalidate all active sessions
+
+## Authentication Rate Limiting
+
+Login and register under `/api/auth/` are rate limited in the Axum backend with progressive lockouts after repeated 429s. Nginx also applies a looser edge limit on `/api/auth` so only unusually high request rates are rejected before proxying to the backend.
 
 ## Teller Setup
 
-1. Create a Teller developer account at https://teller.io.
-2. Download the mTLS certificate and private key. Store in `.certs/teller/` (gitignored).
-3. Set `TELLER_APPLICATION_ID`, `TELLER_CERT_PATH`, and `TELLER_KEY_PATH` in `.env`.
-4. Set `TELLER_ENV` (`sandbox`, `development`, `production`).
-5. Launch Teller Connect from the Connect tab to link accounts.
+1. Create a Teller developer account at [https://teller.io](https://teller.io).
+2. Download the mTLS certificate and private key.
+3. Set `TELLER_APPLICATION_ID`.
+4. Open Teller from the UI to link accounts.
 
-For sandbox testing, use Teller's documented test credentials. Ensure localhost origins are allowed in your Teller dashboard.
+## Sandbox Credentials
+
+Use these sandbox credentials for local provider flows with `me@test.com` / `Test1234!`:
+
+- SimpleFIN
+  - Start the stack, choose SimpleFIN in the provider picker, and paste a setup token from [beta-bridge.simplefin.org/info/developers](https://beta-bridge.simplefin.org/info/developers) when prompted. The shared beta demo bridge works with any account.
+- Teller
+  - Teller Connect sandbox (when prompted): `username` / `password`
+- Plaid
+  - Plaid Link sandbox (when prompted): `user_good` / `pass_good`
+
+If a sandbox provider prompts for 2FA, click through with empty fields.
+
+For sandbox testing, allow the local origin in your Teller dashboard.
 
 ## HTTPS with Let's Encrypt
 
-1. Set `DOMAIN` and `LE_EMAIL` in `.env`.
-2. Start the stack:
-   ```bash
-   docker compose up -d --build
-   ```
-3. Request a certificate:
-   ```bash
-   docker compose run --rm -e DOMAIN=$DOMAIN -e LE_EMAIL=$LE_EMAIL certbot \
-     certonly --webroot -w /var/www/certbot \
-     -d $DOMAIN --email $LE_EMAIL --agree-tos --no-eff-email
-   ```
-4. Restart nginx:
-   ```bash
-   docker compose restart nginx
-   ```
-5. Access via `https://$DOMAIN:8443`.
+See [docs/PRODUCTION_TLS.md](docs/PRODUCTION_TLS.md) for the current production TLS workflow.
 
 ## License and Contributions
 
-By contributing, you agree your contributions are licensed under the project’s license (Apache 2.0). See `LICENSE` for details.
+By contributing, you agree your contributions are licensed under the project’s license. See `LICENSE` for details.
 
-If you’re unsure about scope or approach, open a draft PR early or start a discussion in the issue to align before implementation.
+If you are unsure about scope or approach, open a draft PR early or start a discussion in the issue tracker.

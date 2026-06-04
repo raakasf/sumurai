@@ -1,118 +1,56 @@
-import { render } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
+import React from 'react';
 import { Button } from '@/ui/primitives/Button';
+import { control, font } from '@/ui/recipes';
 
 describe('Button', () => {
-  describe('variants', () => {
-    it('renders primary variant correctly', () => {
-      const { container } = render(<Button variant="primary">Primary</Button>);
-      const button = container.querySelector('button');
-      expect(button?.className).toMatchSnapshot();
-    });
+  it('defaults to the md control size', () => {
+    render(<Button>Save</Button>);
 
-    it('renders secondary variant correctly', () => {
-      const { container } = render(<Button variant="secondary">Secondary</Button>);
-      const button = container.querySelector('button');
-      expect(button?.className).toMatchSnapshot();
-    });
-
-    it('renders ghost variant correctly', () => {
-      const { container } = render(<Button variant="ghost">Ghost</Button>);
-      const button = container.querySelector('button');
-      expect(button?.className).toMatchSnapshot();
-    });
-
-    it('renders icon variant correctly', () => {
-      const { container } = render(<Button variant="icon">Icon</Button>);
-      const button = container.querySelector('button');
-      expect(button?.className).toMatchSnapshot();
-    });
-
-    it('renders danger variant correctly', () => {
-      const { container } = render(<Button variant="danger">Danger</Button>);
-      const button = container.querySelector('button');
-      expect(button?.className).toMatchSnapshot();
-    });
-
-    it('renders success variant correctly', () => {
-      const { container } = render(<Button variant="success">Success</Button>);
-      const button = container.querySelector('button');
-      expect(button?.className).toMatchSnapshot();
-    });
-
-    it('renders connect variant correctly', () => {
-      const { container } = render(<Button variant="connect">Connect</Button>);
-      const button = container.querySelector('button');
-      expect(button?.className).toMatchSnapshot();
-    });
-
-    it('renders tab variant correctly', () => {
-      const { container } = render(<Button variant="tab">Tab</Button>);
-      const button = container.querySelector('button');
-      expect(button?.className).toMatchSnapshot();
-    });
-
-    it('renders tabActive variant correctly', () => {
-      const { container } = render(<Button variant="tabActive">Active Tab</Button>);
-      const button = container.querySelector('button');
-      expect(button?.className).toMatchSnapshot();
-    });
+    const button = screen.getByRole('button', { name: 'Save' });
+    expect(button.className).toContain(control.height.md);
+    expect(button.className).toContain(control.paddingX.md);
+    expect(button.className).toContain(font.bodyStrong);
   });
 
-  describe('sizes', () => {
-    it('renders xs size correctly', () => {
-      const { container } = render(<Button size="xs">XS</Button>);
-      const button = container.querySelector('button');
-      expect(button?.className).toMatchSnapshot();
-    });
+  it.each([
+    ['sm', control.height.sm, control.paddingX.sm, font.captionStrong],
+    ['md', control.height.md, control.paddingX.md, font.bodyStrong],
+    ['lg', control.height.lg, control.paddingX.lg, font.bodyStrong],
+  ] as const)('renders the %s control size', (_, height, paddingX, label) => {
+    render(<Button size={_}>Submit</Button>);
 
-    it('renders sm size correctly', () => {
-      const { container } = render(<Button size="sm">SM</Button>);
-      const button = container.querySelector('button');
-      expect(button?.className).toMatchSnapshot();
-    });
-
-    it('renders md size correctly', () => {
-      const { container } = render(<Button size="md">MD</Button>);
-      const button = container.querySelector('button');
-      expect(button?.className).toMatchSnapshot();
-    });
-
-    it('renders lg size correctly', () => {
-      const { container } = render(<Button size="lg">LG</Button>);
-      const button = container.querySelector('button');
-      expect(button?.className).toMatchSnapshot();
-    });
-
-    it('renders icon size correctly', () => {
-      const { container } = render(<Button size="icon">I</Button>);
-      const button = container.querySelector('button');
-      expect(button?.className).toMatchSnapshot();
-    });
+    const button = screen.getByRole('button', { name: 'Submit' });
+    expect(button.className).toContain(height);
+    expect(button.className).toContain(paddingX);
+    expect(button.className).toContain(label);
   });
 
-  describe('states', () => {
-    it('renders loading state correctly', () => {
-      const { container } = render(<Button loading>Loading</Button>);
-      const button = container.querySelector('button');
-      expect(button?.disabled).toBe(true);
-    });
+  it('renders filter chip pills with shared button affordances', () => {
+    render(
+      <Button variant="filterChip" size="sm" shape="pill">
+        Food
+      </Button>
+    );
 
-    it('renders disabled state correctly', () => {
-      const { container } = render(<Button disabled>Disabled</Button>);
-      const button = container.querySelector('button');
-      expect(button?.disabled).toBe(true);
-    });
+    const button = screen.getByRole('button', { name: 'Food' });
+    expect(button.className).toContain('rounded-full');
+    expect(button.className).toContain('cursor-pointer');
+    expect(button.className).toContain('focus-visible:ring-2');
+    expect(button.className).toContain('active:scale-[0.98]');
   });
 
-  describe('custom className', () => {
-    it('merges custom className with variant classes', () => {
-      const { container } = render(
-        <Button variant="primary" className="custom-class">
-          Custom
-        </Button>
-      );
-      const button = container.querySelector('button');
-      expect(button?.className).toContain('custom-class');
-    });
+  it('renders square controls with the shared square recipe', () => {
+    render(
+      <Button size="md" shape="square">
+        Edit
+      </Button>
+    );
+
+    const button = screen.getByRole('button', { name: 'Edit' });
+    expect(button.className).toContain(control.square.md);
+    expect(button.className).toContain('p-0');
+    expect(button.className).not.toContain(control.paddingX.md);
+    expect(button.querySelector('span')?.className).toContain(control.glyph.md);
   });
 });

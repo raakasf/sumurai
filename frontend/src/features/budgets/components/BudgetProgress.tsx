@@ -1,55 +1,42 @@
 import { useCurrency } from '@/hooks/useCurrency';
 import { cn } from '@/ui/primitives';
+import { budgetProgress as budgetProgressRecipes, status, text } from '@/ui/recipes';
+import { fmtUSD } from '../../../utils/format';
 
 export function BudgetProgress({ amount, spent }: { amount: number; spent: number }) {
-  const { format } = useCurrency();
-  const percent = amount > 0 ? (spent / amount) * 100 : 0;
+  const percent = amount > 0 ? (spent / amount) * 100 : spent > 0 ? 100 : 0;
   const isOver = spent > amount;
   const remaining = Math.max(0, amount - spent);
+  const clampedPercent = Math.min(100, Math.max(0, percent));
+  const fillWidthPercent = clampedPercent > 0 && clampedPercent < 4 ? 4 : clampedPercent;
+
   return (
-    <div className="space-y-2.5">
+    <div className={cn('space-y-2.5')}>
       <div
-        className={cn(
-          'relative',
-          'h-2.5',
-          'overflow-hidden',
-          'rounded-full',
-          'bg-slate-200/70',
-          'shadow-[inset_0_1px_2px_rgba(15,23,42,0.06)]',
-          'transition-colors',
-          'duration-300',
-          'dark:bg-slate-700/60',
-          'dark:shadow-[inset_0_1px_2px_rgba(2,6,23,0.35)]'
-        )}
+        className={cn(...budgetProgressRecipes.track)}
+        role="progressbar"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={Math.round(clampedPercent)}
+        aria-label="Budget usage"
       >
         <div
-          className={`absolute inset-y-0 left-0 rounded-full transition-all duration-500 ${
-            isOver
-              ? 'bg-gradient-to-r from-rose-400 via-rose-500 to-rose-600 shadow-[0_0_12px_rgba(244,63,94,0.35)]'
-              : 'bg-gradient-to-r from-sky-400 via-cyan-400 to-violet-500 shadow-[0_0_12px_rgba(14,165,233,0.35)]'
-          }`}
-          style={{ width: `${Math.min(100, percent)}%` }}
+          className={cn(
+            ...budgetProgressRecipes.fillBase,
+            ...(isOver ? budgetProgressRecipes.fillOver : budgetProgressRecipes.fillWithin)
+          )}
+          style={{ width: `${fillWidthPercent}%` }}
         />
       </div>
-      <div
-        className={cn(
-          'flex',
-          'items-center',
-          'justify-between',
-          'text-[0.75rem]',
-          'text-slate-500',
-          'transition-colors',
-          'duration-300',
-          'dark:text-slate-400'
-        )}
-      >
-        <span className={cn('font-medium', 'tracking-wide')}>{percent.toFixed(0)}% used</span>
+      <div className={cn(...budgetProgressRecipes.captionRow, text.muted)}>
+        <span className={cn(...budgetProgressRecipes.captionPercent)}>
+          {clampedPercent.toFixed(0)}% used
+        </span>
         <span
-          className={
-            isOver
-              ? 'font-semibold text-red-600 dark:text-red-300'
-              : 'font-semibold text-slate-600 dark:text-slate-300'
-          }
+          className={cn(
+            ...budgetProgressRecipes.captionPercent,
+            ...(isOver ? status.danger.text : text.body)
+          )}
         >
           {isOver ? `-${format(spent - amount)} over` : `${format(remaining)} left`}
         </span>

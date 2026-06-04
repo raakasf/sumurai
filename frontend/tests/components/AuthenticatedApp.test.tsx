@@ -1,225 +1,219 @@
-import { afterAll, beforeAll, jest } from '@jest/globals';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { act, render, screen } from '@testing-library/react';
+import type { ReactNode } from 'react';
+import { AuthenticatedApp } from '@/components/AuthenticatedApp';
 
-beforeAll(() => {
-  jest.useRealTimers();
+const pageSwipeHandlers: Record<
+  string,
+  {
+    onPanStart?: (e: { target: EventTarget | null }) => void;
+    onPanEnd?: (e: unknown, info: { offset: { x: number; y: number } }) => void;
+  }
+> = {};
+
+jest.mock('framer-motion', () => {
+  const R = require('react');
+  return {
+    motion: {
+      div: ({ onPanStart, onPanEnd, children, 'data-testid': testId, style, ...props }: any) => {
+        if (testId && (onPanStart || onPanEnd)) {
+          pageSwipeHandlers[testId] = { onPanStart, onPanEnd };
+        }
+        return R.createElement('div', { 'data-testid': testId, style, ...props }, children);
+      },
+      section: ({ children, ...props }: any) => R.createElement('div', props, children),
+    },
+    AnimatePresence: ({ children }: any) => <>{children}</>,
+  };
 });
 
-afterAll(() => {
-  jest.useRealTimers();
-});
+const appLayoutMock = jest.fn();
 
-const DashboardPageMock = jest.fn(() => <div data-testid="dashboard-page">dashboard</div>);
-const TransactionsPageMock = jest.fn(() => <div data-testid="transactions-page">transactions</div>);
-const BudgetsPageMock = jest.fn(() => <div data-testid="budgets-page">budgets</div>);
-const AccountsPageMock = jest.fn(({ onError }: { onError?: (value: string | null) => void }) => (
-  <div data-testid="accounts-page">
-    <button onClick={() => onError?.('accounts-error')} data-testid="trigger-accounts-error">
-      trigger error
-    </button>
-    <button onClick={() => onError?.(null)} data-testid="clear-accounts-error">
-      clear error
-    </button>
-  </div>
-));
-
-jest.mock('@/views/DashboardPage', () => ({
-  __esModule: true,
-  default: DashboardPageMock,
+jest.mock('@/layouts/AppLayout', () => ({
+  AppLayout: (props: { children: ReactNode; bottomBarContent?: ReactNode; currentTab: string }) => {
+    appLayoutMock(props);
+    return (
+      <div>
+        <div data-testid="bottom-bar">{props.bottomBarContent ?? null}</div>
+        {props.children}
+      </div>
+    );
+  },
 }));
 
-jest.mock('@/views/TransactionsPage', () => ({
-  __esModule: true,
-  default: TransactionsPageMock,
+jest.mock('@/components/ErrorBoundary', () => ({
+  ErrorBoundary: ({ children }: { children: ReactNode }) => <>{children}</>,
 }));
 
-jest.mock('@/views/BudgetsPage', () => ({
-  __esModule: true,
-  default: BudgetsPageMock,
+jest.mock('@/components/HeaderAccountFilter', () => ({
+  HeaderAccountFilter: () => <div data-testid="header-account-filter" />,
 }));
 
 jest.mock('@/views/AccountsPage', () => ({
   __esModule: true,
-  default: AccountsPageMock,
+  default: () => <div>Accounts</div>,
 }));
 
-import { installFetchRoutes } from '@tests/utils/fetchRoutes';
-import { createProviderConnection, createProviderStatus } from '@tests/utils/fixtures';
-import { ThemeTestProvider } from '@tests/utils/ThemeTestProvider';
-import { AuthenticatedApp } from '@/components/AuthenticatedApp';
-import { AccountFilterProvider } from '@/hooks/useAccountFilter';
+jest.mock('@/views/BudgetsPage', () => ({
+  __esModule: true,
+  default: () => <div>Budgets</div>,
+}));
 
-describe('AuthenticatedApp shell', () => {
-  const onLogout = jest.fn();
-  let fetchMock: ReturnType<typeof installFetchRoutes>;
+jest.mock('@/views/DashboardPage', () => ({
+  __esModule: true,
+  default: ({ dateRange }: { dateRange: string }) => <div>{dateRange}</div>,
+}));
 
+jest.mock('@/views/SettingsPage', () => ({
+  __esModule: true,
+  default: () => <div>Settings</div>,
+}));
+
+jest.mock('@/views/TransactionsPage', () => ({
+  __esModule: true,
+  default: () => <div>Transactions</div>,
+}));
+
+jest.mock('@/features/transactions/hooks/useTransactionFilterState', () => ({
+  useTransactionFilterState: () => ({
+    search: '',
+    setSearch: jest.fn(),
+    selectedCategory: null,
+    setSelectedCategory: jest.fn(),
+  }),
+}));
+
+jest.mock('@/features/transactions/hooks/useTransactionCategories', () => ({
+  useTransactionCategories: () => ({
+    categories: ['food_and_drink'],
+    loading: false,
+  }),
+}));
+
+function swipePage(offsetX: number, target: EventTarget | null = null) {
+  act(() => {
+    pageSwipeHandlers['page-swipe-container'].onPanStart?.({ target });
+    pageSwipeHandlers['page-swipe-container'].onPanEnd?.({}, { offset: { x: offsetX, y: 0 } });
+  });
+}
+
+describe('AuthenticatedApp', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
-    localStorage.clear();
-
-    fetchMock = installFetchRoutes({
-      'GET /api/plaid/accounts': [
-        {
-          id: 'account1',
-          name: 'Test Checking',
-          account_type: 'depository',
-          balance_ledger: 1200,
-          balance_available: 1180,
-          balance_current: 1200,
-          mask: '1111',
-          plaid_connection_id: 'conn_1',
-          institution_name: 'Test Bank',
-          provider: 'plaid',
-        },
-        {
-          id: 'account2',
-          name: 'Test Savings',
-          account_type: 'depository',
-          balance_ledger: 5400,
-          balance_available: 5400,
-          balance_current: 5400,
-          mask: '2222',
-          plaid_connection_id: 'conn_1',
-          institution_name: 'Test Bank',
-          provider: 'plaid',
-        },
-      ],
-      'GET /api/providers/accounts': [
-        {
-          id: 'account1',
-          name: 'Test Checking',
-          account_type: 'depository',
-          balance_ledger: 1200,
-          balance_available: 1180,
-          balance_current: 1200,
-          mask: '1111',
-          connection_id: 'conn_1',
-          institution_name: 'Test Bank',
-          provider: 'plaid',
-        },
-        {
-          id: 'account2',
-          name: 'Test Savings',
-          account_type: 'depository',
-          balance_ledger: 5400,
-          balance_available: 5400,
-          balance_current: 5400,
-          mask: '2222',
-          connection_id: 'conn_1',
-          institution_name: 'Test Bank',
-          provider: 'plaid',
-        },
-      ],
-      'GET /api/providers/info': {
-        available_providers: ['plaid', 'teller'],
-        default_provider: 'plaid',
-        user_provider: 'plaid',
-        teller_application_id: 'test-app-id',
-        teller_env: 'sandbox',
-      },
-      'GET /api/providers/status': createProviderStatus({
-        connections: [
-          createProviderConnection({
-            is_connected: true,
-            institution_name: 'Test Bank',
-            connection_id: 'conn_1',
-          }),
-        ],
-      }),
-    });
+    appLayoutMock.mockClear();
   });
 
-  afterEach(() => {
-    cleanup();
-    jest.clearAllMocks();
-    localStorage.clear();
+  it('renders the date range control in the bottom bar for the dashboard tab', () => {
+    render(<AuthenticatedApp onLogout={jest.fn()} isOnline />);
+
+    expect(screen.getByTestId('bottom-bar')).toHaveTextContent('1M');
+    expect(screen.getByText('current-month')).toBeInTheDocument();
   });
 
-  const renderApp = () =>
-    render(
-      <ThemeTestProvider>
-        <AccountFilterProvider>
-          <AuthenticatedApp onLogout={onLogout} />
-        </AccountFilterProvider>
-      </ThemeTestProvider>
-    );
+  it('renders the budget month control in the bottom bar for the budgets tab', () => {
+    render(<AuthenticatedApp onLogout={jest.fn()} isOnline initialTab="budgets" />);
 
-  it('renders dashboard by default', async () => {
-    renderApp();
-    await waitFor(() => {
-      expect(screen.getByTestId('dashboard-page')).toBeInTheDocument();
-    });
-    expect(screen.queryByTestId('transactions-page')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('accounts-page')).not.toBeInTheDocument();
+    expect(screen.getByTestId('budget-month-pill-slider')).toBeInTheDocument();
+    expect(screen.getByText('Budgets')).toBeInTheDocument();
   });
 
-  it('navigates between tabs and toggles budgets visibility without extra props', async () => {
-    const user = userEvent.setup();
-    renderApp();
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: /all accounts/i })).toBeInTheDocument();
-    });
+  it('renders transaction category filters in the bottom bar for the transactions tab', () => {
+    render(<AuthenticatedApp onLogout={jest.fn()} isOnline initialTab="transactions" />);
 
-    expect(screen.queryByTestId('budgets-page')).not.toBeInTheDocument();
-
-    await user.click(screen.getByRole('button', { name: /^transactions$/i }));
-    expect(await screen.findByTestId('transactions-page')).toBeInTheDocument();
-
-    await user.click(screen.getByRole('button', { name: /^budgets$/i }));
-    expect(await screen.findByTestId('budgets-page')).toBeInTheDocument();
-
-    await user.click(screen.getByRole('button', { name: /^accounts$/i }));
-    expect(await screen.findByTestId('accounts-page')).toBeInTheDocument();
-    await waitFor(() => {
-      expect(screen.queryByTestId('budgets-page')).not.toBeInTheDocument();
-    });
+    expect(screen.getByTestId('transactions-search-bar')).toBeInTheDocument();
+    expect(screen.getByText('Transactions')).toBeInTheDocument();
   });
 
-  it('renders accounts tab without errors', async () => {
-    const user = userEvent.setup();
-    renderApp();
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: /all accounts/i })).toBeInTheDocument();
-    });
+  it('handleTabChange updates currentTab on AppLayout in both directions', () => {
+    render(<AuthenticatedApp onLogout={jest.fn()} isOnline initialTab="dashboard" />);
 
-    await user.click(screen.getByRole('button', { name: /^accounts$/i }));
-    expect(await screen.findByTestId('accounts-page')).toBeInTheDocument();
+    const { onTabChange } = appLayoutMock.mock.calls[0][0];
+
+    act(() => {
+      onTabChange('transactions');
+    });
+    expect(appLayoutMock.mock.lastCall[0].currentTab).toBe('transactions');
+
+    act(() => {
+      onTabChange('dashboard');
+    });
+    expect(appLayoutMock.mock.lastCall[0].currentTab).toBe('dashboard');
   });
 
-  it('supports theme toggle and logout', async () => {
-    const user = userEvent.setup();
-    renderApp();
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: /all accounts/i })).toBeInTheDocument();
+  describe('full-page swipe navigation', () => {
+    beforeEach(() => {
+      Object.defineProperty(window, 'matchMedia', {
+        writable: true,
+        value: jest.fn().mockImplementation((query: string) => ({
+          matches: query === '(pointer: coarse)',
+          media: query,
+          addEventListener: jest.fn(),
+          removeEventListener: jest.fn(),
+          addListener: jest.fn(),
+          removeListener: jest.fn(),
+          dispatchEvent: jest.fn(),
+        })),
+      });
     });
 
-    const themeButton = screen.getByLabelText(/toggle theme/i);
-    expect(themeButton).toBeInTheDocument();
-    await user.click(themeButton);
-
-    await user.click(screen.getByRole('button', { name: /logout/i }));
-    expect(onLogout).toHaveBeenCalled();
-  });
-
-  it('includes HeaderAccountFilter in the header', async () => {
-    renderApp();
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: /all accounts/i })).toBeInTheDocument();
-    });
-  });
-
-  it('maintains responsive layout with HeaderAccountFilter', async () => {
-    renderApp();
-    const header = screen.getByRole('banner');
-    expect(header).toBeInTheDocument();
-
-    await waitFor(() => {
-      const accountFilter = screen.getByRole('button', { name: /all accounts/i });
-      expect(accountFilter).toBeInTheDocument();
+    it('swipe left advances to the next tab', () => {
+      render(<AuthenticatedApp onLogout={jest.fn()} isOnline initialTab="dashboard" />);
+      swipePage(-100);
+      expect(appLayoutMock.mock.lastCall[0].currentTab).toBe('transactions');
     });
 
-    const nav = screen.getByRole('navigation', { name: /primary/i });
-    expect(nav).toBeInTheDocument();
+    it('swipe right goes to the previous tab', () => {
+      render(<AuthenticatedApp onLogout={jest.fn()} isOnline initialTab="transactions" />);
+      swipePage(100);
+      expect(appLayoutMock.mock.lastCall[0].currentTab).toBe('dashboard');
+    });
+
+    it('swipe left on the last tab does nothing', () => {
+      render(<AuthenticatedApp onLogout={jest.fn()} isOnline initialTab="accounts" />);
+      const before = appLayoutMock.mock.lastCall[0].currentTab;
+      swipePage(-100);
+      expect(appLayoutMock.mock.lastCall[0].currentTab).toBe(before);
+    });
+
+    it('swipe right on the first tab does nothing', () => {
+      render(<AuthenticatedApp onLogout={jest.fn()} isOnline initialTab="dashboard" />);
+      const before = appLayoutMock.mock.lastCall[0].currentTab;
+      swipePage(100);
+      expect(appLayoutMock.mock.lastCall[0].currentTab).toBe(before);
+    });
+
+    it('swipe below 50px threshold does nothing', () => {
+      render(<AuthenticatedApp onLogout={jest.fn()} isOnline initialTab="dashboard" />);
+      const before = appLayoutMock.mock.lastCall[0].currentTab;
+      swipePage(-30);
+      expect(appLayoutMock.mock.lastCall[0].currentTab).toBe(before);
+    });
+
+    it('swipe is ignored on the settings tab', () => {
+      render(<AuthenticatedApp onLogout={jest.fn()} isOnline initialTab="settings" />);
+      const before = appLayoutMock.mock.lastCall[0].currentTab;
+      swipePage(-100);
+      expect(appLayoutMock.mock.lastCall[0].currentTab).toBe(before);
+    });
+
+    it('swipe is ignored when panning starts inside a data-no-swipe element', () => {
+      render(<AuthenticatedApp onLogout={jest.fn()} isOnline initialTab="dashboard" />);
+      const noSwipeEl = document.createElement('div');
+      noSwipeEl.dataset.noSwipe = '';
+      document.body.appendChild(noSwipeEl);
+      swipePage(-100, noSwipeEl);
+      expect(appLayoutMock.mock.lastCall[0].currentTab).toBe('dashboard');
+      document.body.removeChild(noSwipeEl);
+    });
+
+    it('swipe is ignored when panning starts inside a child of a data-no-swipe element', () => {
+      render(<AuthenticatedApp onLogout={jest.fn()} isOnline initialTab="dashboard" />);
+      const noSwipeEl = document.createElement('div');
+      noSwipeEl.dataset.noSwipe = '';
+      const child = document.createElement('span');
+      noSwipeEl.appendChild(child);
+      document.body.appendChild(noSwipeEl);
+      swipePage(-100, child);
+      expect(appLayoutMock.mock.lastCall[0].currentTab).toBe('dashboard');
+      document.body.removeChild(noSwipeEl);
+    });
   });
 });

@@ -1,8 +1,9 @@
 use crate::models::cache::{
     BankConnectionSyncStatus, CachedBankAccounts, CachedBankConnection, CachedTransaction,
 };
+use crate::models::transaction::Transaction;
 use crate::models::{account::Account, plaid::ProviderConnection};
-use crate::services::cache_service::{CacheService, MockCacheService};
+use crate::services::cache_service::{synced_transactions_key, CacheService, MockCacheService};
 use chrono::Utc;
 use rust_decimal::Decimal;
 use uuid::Uuid;
@@ -17,6 +18,7 @@ async fn given_bank_connection_when_caching_with_jwt_scope_then_stores_with_corr
         id: connection_id,
         user_id: Uuid::new_v4(),
         item_id: "test-item".to_string(),
+        provider: "plaid".to_string(),
         is_connected: true,
         last_sync_at: Some(Utc::now()),
         connected_at: Some(Utc::now()),
@@ -73,7 +75,7 @@ async fn given_bank_accounts_when_caching_with_jwt_scope_then_stores_with_correc
             balance_current: Some(Decimal::new(150000, 2)),
             mask: Some("1234".to_string()),
             institution_name: None,
-            updated_at: None,
+            provider_conn_id: None,
         },
         Account {
             id: Uuid::new_v4(),
@@ -85,7 +87,7 @@ async fn given_bank_accounts_when_caching_with_jwt_scope_then_stores_with_correc
             balance_current: Some(Decimal::new(300000, 2)),
             mask: Some("5678".to_string()),
             institution_name: None,
-            updated_at: None,
+            provider_conn_id: None,
         },
     ];
 
@@ -146,6 +148,7 @@ fn given_jwt_id_and_connection_id_when_creating_cache_keys_then_uses_underscore_
     let expected_account_mapping_key =
         format!("{}_account_mapping_{}", jwt_id, provider_account_id);
     let expected_transaction_key = format!("{}_transaction_{}", jwt_id, transaction_id);
+    let expected_synced_transactions_key = synced_transactions_key(jwt_id);
 
     // Verify the format matches our expectations
     assert_eq!(
@@ -176,11 +179,48 @@ fn given_jwt_id_and_connection_id_when_creating_cache_keys_then_uses_underscore_
         expected_transaction_key,
         format!("{}_transaction_{}", jwt_id, transaction_id)
     );
+    assert_eq!(
+        expected_synced_transactions_key,
+        format!("{}_synced_transactions", jwt_id)
+    );
+}
+
+#[tokio::test]
+async fn given_transaction_when_adding_with_jwt_scope_then_passes_jwt_id_to_boundary() {
+    let mut cache_service = MockCacheService::new();
+    let jwt_id = "scoped-jwt-xyz";
+    let transaction = Transaction {
+        id: Uuid::new_v4(),
+        account_id: Uuid::new_v4(),
+        user_id: None,
+        provider_account_id: None,
+        provider_transaction_id: Some("txn_1".to_string()),
+        amount: Decimal::new(100, 0),
+        date: Utc::now().date_naive(),
+        merchant_name: None,
+        category_primary: "General".to_string(),
+        category_detailed: "General".to_string(),
+        category_confidence: "HIGH".to_string(),
+        payment_channel: None,
+        pending: false,
+        created_at: Some(Utc::now()),
+    };
+
+    cache_service
+        .expect_add_transaction()
+        .with(
+            mockall::predicate::eq(jwt_id),
+            mockall::predicate::eq(transaction.clone()),
+        )
+        .times(1)
+        .returning(|_, _| Box::pin(async { Ok(()) }));
+
+    let result = cache_service.add_transaction(jwt_id, &transaction).await;
+    assert!(result.is_ok());
 }
 
 #[test]
 fn given_cached_transaction_when_serializing_then_includes_timestamp() {
-    use crate::models::transaction::Transaction;
     use chrono::Utc;
     use rust_decimal::Decimal;
     use uuid::Uuid;

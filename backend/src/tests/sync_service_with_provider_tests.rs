@@ -1,4 +1,8 @@
-use crate::models::{account::Account, plaid::ProviderConnection, transaction::Transaction};
+use crate::models::{
+    account::Account,
+    plaid::ProviderConnection,
+    transaction::{ProviderTransactionsResult, Transaction},
+};
 use crate::providers::{
     FinancialDataProvider, InstitutionInfo, ProviderCredentials, ProviderRegistry,
 };
@@ -43,8 +47,11 @@ impl FinancialDataProvider for MockProvider {
         _credentials: &ProviderCredentials,
         _start_date: NaiveDate,
         _end_date: NaiveDate,
-    ) -> Result<Vec<Transaction>> {
-        Ok(self.transactions.clone())
+    ) -> Result<ProviderTransactionsResult> {
+        Ok(ProviderTransactionsResult {
+            transactions: self.transactions.clone(),
+            page_count: 1,
+        })
     }
 
     async fn get_institution_info(
@@ -75,7 +82,7 @@ async fn given_sync_service_with_provider_when_sync_then_maps_accounts_correctly
         balance_current: None,
         mask: None,
         institution_name: None,
-        updated_at: None,
+        provider_conn_id: None,
     }];
 
     let transaction = Transaction {
@@ -103,12 +110,13 @@ async fn given_sync_service_with_provider_when_sync_then_maps_accounts_correctly
         "mock",
         Arc::clone(&provider),
     )]));
-    let sync_service = SyncService::new(registry, "mock");
+    let sync_service = SyncService::new(registry);
 
     let connection = ProviderConnection {
         id: Uuid::new_v4(),
         user_id: Uuid::new_v4(),
         item_id: "item_123".to_string(),
+        provider: "mock".to_string(),
         is_connected: true,
         last_sync_at: None,
         connected_at: Some(Utc::now()),
@@ -131,11 +139,12 @@ async fn given_sync_service_with_provider_when_sync_then_maps_accounts_correctly
         private_key: None,
     };
 
-    let (result_transactions, _cursor) = sync_service
-        .sync_bank_connection_transactions(&credentials, &connection, &accounts)
+    let (result_transactions, _cursor, page_count) = sync_service
+        .sync_bank_connection_transactions(&credentials, &connection, &accounts, None)
         .await
         .unwrap();
 
     assert_eq!(result_transactions.len(), 1);
     assert_eq!(result_transactions[0].account_id, account_id);
+    assert_eq!(page_count, 1);
 }
