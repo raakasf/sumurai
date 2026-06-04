@@ -48,6 +48,20 @@ export interface TellerProviderInfoState {
 
 const emptyProviders: FinancialProvider[] = [];
 
+const normalizeProvider = (provider?: string | null): FinancialProvider | null => {
+  const normalized = provider?.trim().toLowerCase();
+  return normalized === 'plaid' || normalized === 'teller' ? normalized : null;
+};
+
+const normalizeCatalogue = (catalogue: TellerProviderCatalogue): TellerProviderCatalogue => ({
+  ...catalogue,
+  available_providers: catalogue.available_providers
+    .map((provider) => normalizeProvider(provider))
+    .filter((provider): provider is FinancialProvider => provider !== null),
+  default_provider: normalizeProvider(catalogue.default_provider) ?? 'plaid',
+  user_provider: normalizeProvider(catalogue.user_provider) ?? undefined,
+});
+
 export function useTellerProviderInfo(
   options: UseTellerProviderInfoOptions = {}
 ): TellerProviderInfoState {
@@ -69,7 +83,7 @@ export function useTellerProviderInfo(
     try {
       const info = await gateway.fetchInfo();
       console.log('useTellerProviderInfo - received from API:', info);
-      setCatalogue(info);
+      setCatalogue(normalizeCatalogue(info));
     } catch (err) {
       console.warn('Failed to fetch provider information', err);
       setError('Unable to load provider information');
@@ -82,18 +96,20 @@ export function useTellerProviderInfo(
   const chooseProvider = useCallback(
     async (provider: FinancialProvider) => {
       try {
-        const result = await gateway.selectProvider(provider);
+        const selectedProvider = normalizeProvider(provider) ?? provider;
+        const result = await gateway.selectProvider(selectedProvider);
+        const userProvider = normalizeProvider(result.user_provider) ?? selectedProvider;
         setCatalogue((prev) => {
           if (!prev) {
             return {
-              available_providers: [result.user_provider],
-              default_provider: result.user_provider,
-              user_provider: result.user_provider,
+              available_providers: [userProvider],
+              default_provider: userProvider,
+              user_provider: userProvider,
             };
           }
           return {
             ...prev,
-            user_provider: result.user_provider,
+            user_provider: userProvider,
           };
         });
       } catch (err) {

@@ -62,6 +62,7 @@ pub struct Transaction {
     "account_name": "Demo Checking",
     "account_type": "depository",
     "account_mask": "1234",
+    "provider": "teller",
     "custom_category": null
 }))]
 pub struct TransactionWithAccount {
@@ -83,6 +84,7 @@ pub struct TransactionWithAccount {
     pub account_name: String,
     pub account_type: String,
     pub account_mask: Option<String>,
+    pub provider: Option<String>,
     pub custom_category: Option<String>,
     pub rule_category: Option<String>,
 }

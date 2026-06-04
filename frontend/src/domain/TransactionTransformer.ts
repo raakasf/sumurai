@@ -1,4 +1,5 @@
 import type { Transaction, TransactionCategory, TransactionLocation } from '../types/api';
+import type { FinancialProvider } from '../types/api';
 
 export interface BackendTransaction {
   id: string;
@@ -12,6 +13,7 @@ export interface BackendTransaction {
   account_name: string;
   account_type: string;
   account_mask?: string;
+  provider?: FinancialProvider;
   running_balance?: number;
   location?: TransactionLocation;
   custom_category?: string;
@@ -43,6 +45,7 @@ export class TransactionTransformer {
       account_name: bt.account_name,
       account_type: bt.account_type,
       account_mask: bt.account_mask,
+      provider: bt.provider,
       running_balance: bt.running_balance,
       location: bt.location,
       custom_category: bt.custom_category,

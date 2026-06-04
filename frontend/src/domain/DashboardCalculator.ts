@@ -10,6 +10,7 @@ interface ChargeTransaction {
   date: string;
   merchant?: string;
   name?: string;
+  provider?: string;
 }
 
 export interface UpcomingChargePrediction {
@@ -208,7 +209,10 @@ export class DashboardCalculator {
     if (!Number.isFinite(amount)) return 0;
     const accountType = transaction.account_type?.toLowerCase() ?? '';
     const isCreditAccount = accountType === 'credit' || accountType === 'credit card';
-    return isCreditAccount ? amount : -amount;
+    if (transaction.provider === 'teller' && isCreditAccount) {
+      return amount;
+    }
+    return -amount;
   }
 
   private static getIntervals(transactions: ChargeTransaction[]): number[] {

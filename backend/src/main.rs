@@ -1031,9 +1031,9 @@ async fn get_authenticated_transactions(
     request_body = LinkTokenRequest,
     responses(
         (status = 200, description = "Link token created successfully", body = LinkTokenResponse),
-        (status = 400, description = "Unsupported provider"),
+        (status = 400, description = "Unsupported provider", body = ApiErrorResponse),
         (status = 401, description = "Unauthorized"),
-        (status = 500, description = "Failed to create link token"),
+        (status = 500, description = "Failed to create link token", body = ApiErrorResponse),
     ),
     security(("bearer_auth" = [])),
     tag = "Plaid"
@@ -1042,7 +1042,7 @@ async fn create_authenticated_link_token(
     State(state): State<AppState>,
     auth_context: AuthContext,
     Json(_req): Json<LinkTokenRequest>,
-) -> Result<Json<LinkTokenResponse>, StatusCode> {
+) -> Result<Json<LinkTokenResponse>, (StatusCode, Json<ApiErrorResponse>)> {
     let provider = state.config.get_default_provider();
 
     match state
@@ -1057,7 +1057,8 @@ async fn create_authenticated_link_token(
                 p,
                 auth_context.user_id
             );
-            Err(StatusCode::BAD_REQUEST)
+            Err(ApiErrorResponse::new("BAD_REQUEST", "Unsupported provider")
+                .into_response(StatusCode::BAD_REQUEST))
         }
         Err(LinkTokenError::ProviderRequest(e)) => {
             tracing::error!(
@@ -1066,7 +1067,15 @@ async fn create_authenticated_link_token(
                 auth_context.user_id,
                 e
             );
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
+            let error_message = e.to_string();
+            let response_message = if provider == "plaid"
+                && error_message.contains("INVALID_API_KEYS")
+            {
+                "Plaid rejected the configured API keys. Check PLAID_CLIENT_ID and PLAID_SECRET for the selected PLAID_ENV, then restart the backend."
+            } else {
+                "Failed to create bank connection token"
+            };
+            Err(ApiErrorResponse::internal_server_error(response_message))
         }
     }
 }
@@ -1696,7 +1705,9 @@ async fn sync_authenticated_provider_transactions(
         }
     };
 
-    if connection.item_id.starts_with("teller_") {
+    let connection_provider = provider_for_connection(&connection.item_id);
+
+    if connection_provider == "teller" {
         match state
             .connection_service
             .sync_teller_connection(&user_id, &auth_context.jwt_id, &mut connection)
@@ -1757,7 +1768,7 @@ async fn sync_authenticated_provider_transactions(
     }
 
     let sync_params = SyncConnectionParams {
-        provider: state.config.get_default_provider(),
+        provider: connection_provider,
         user_id: &user_id,
         jwt_id: &auth_context.jwt_id,
     };
@@ -2336,6 +2347,7 @@ fn apply_category_rules(transactions: &mut [TransactionWithAccount], rules: &[Ca
 async fn load_connection_statuses(
     state: &AppState,
     user_id: &Uuid,
+    provider: &str,
 ) -> Result<Vec<ProviderConnectionStatus>, StatusCode> {
     let connections = state
         .db_repository
@@ -2348,7 +2360,7 @@ async fn load_connection_statuses(
 
     Ok(connections
         .into_iter()
-        .filter(|conn| conn.is_connected)
+        .filter(|conn| conn.is_connected && provider_for_connection(&conn.item_id) == provider)
         .map(|conn| ProviderConnectionStatus {
             is_connected: conn.is_connected,
             last_sync_at: conn.last_sync_at.map(|dt| dt.to_rfc3339()),
@@ -2359,6 +2371,14 @@ async fn load_connection_statuses(
             sync_in_progress: false,
         })
         .collect())
+}
+
+fn provider_for_connection(item_id: &str) -> &'static str {
+    if item_id.starts_with("teller_") {
+        "teller"
+    } else {
+        "plaid"
+    }
 }
 
 #[utoipa::path(
@@ -2464,7 +2484,8 @@ async fn get_authenticated_provider_status(
         }
     };
 
-    let connections = load_connection_statuses(&state, &user_id).await?;
+    let provider = provider.to_lowercase();
+    let connections = load_connection_statuses(&state, &user_id, &provider).await?;
 
     Ok(Json(ProviderStatusResponse {
         provider,
@@ -2784,18 +2805,18 @@ async fn get_authenticated_provider_info(
             StatusCode::NOT_FOUND
         })?;
 
-    let default_provider = state.config.get_default_provider();
+    let default_provider = state.config.get_default_provider().to_lowercase();
     let available_providers = vec!["plaid".to_string(), "teller".to_string()];
 
     let user_provider = if user.onboarding_completed {
-        user.provider
+        user.provider.to_lowercase()
     } else {
-        default_provider.to_string()
+        default_provider.clone()
     };
 
     Ok(Json(ProviderInfoResponse {
         available_providers,
-        default_provider: default_provider.to_string(),
+        default_provider,
         user_provider,
         teller_application_id: state
             .config
@@ -2826,7 +2847,7 @@ async fn select_authenticated_provider(
 ) -> Result<Json<ProviderSelectResponse>, (StatusCode, Json<ApiErrorResponse>)> {
     let user_id = auth_context.user_id;
 
-    let provider = req.provider;
+    let provider = req.provider.trim().to_lowercase();
 
     if provider != "plaid" && provider != "teller" {
         return Err(ApiErrorResponse::new(

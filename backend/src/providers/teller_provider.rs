@@ -61,11 +61,33 @@ impl TellerHttpClient for ReqwestTellerClient {
             .basic_auth(access_token, Some(""))
             .send()
             .await?;
-        let payload = response.json::<serde_json::Value>().await?;
+        let status = response.status();
+        let body = response.text().await?;
+        if !status.is_success() {
+            return Err(anyhow::anyhow!(
+                "Teller request to {} failed with {}: {}",
+                url,
+                status,
+                summarize_teller_payload(&body)
+            ));
+        }
+
+        let payload: serde_json::Value = serde_json::from_str(&body).map_err(|e| {
+            anyhow::anyhow!(
+                "Teller request to {} returned invalid JSON: {}; body: {}",
+                url,
+                e,
+                summarize_teller_payload(&body)
+            )
+        })?;
         if let Some(array) = payload.as_array() {
             Ok(array.to_vec())
         } else {
-            Err(anyhow::anyhow!("Expected array response from {}", url))
+            Err(anyhow::anyhow!(
+                "Expected array response from {}; body: {}",
+                url,
+                summarize_teller_value(&payload)
+            ))
         }
     }
 
@@ -80,7 +102,74 @@ impl TellerHttpClient for ReqwestTellerClient {
             .basic_auth(access_token, Some(""))
             .send()
             .await?;
-        Ok(response.json::<serde_json::Value>().await?)
+        let status = response.status();
+        let body = response.text().await?;
+        if !status.is_success() {
+            return Err(anyhow::anyhow!(
+                "Teller request to {} failed with {}: {}",
+                url,
+                status,
+                summarize_teller_payload(&body)
+            ));
+        }
+
+        serde_json::from_str(&body).map_err(|e| {
+            anyhow::anyhow!(
+                "Teller request to {} returned invalid JSON: {}; body: {}",
+                url,
+                e,
+                summarize_teller_payload(&body)
+            )
+        })
+    }
+}
+
+fn summarize_teller_payload(body: &str) -> String {
+    match serde_json::from_str::<serde_json::Value>(body) {
+        Ok(value) => summarize_teller_value(&value),
+        Err(_) => truncate_for_log(body.trim()),
+    }
+}
+
+fn summarize_teller_value(value: &serde_json::Value) -> String {
+    let summary = match value {
+        serde_json::Value::Object(map) => {
+            let error = map
+                .get("error")
+                .or_else(|| map.get("code"))
+                .and_then(|v| v.as_str());
+            let message = map
+                .get("message")
+                .or_else(|| map.get("error_description"))
+                .or_else(|| map.get("detail"))
+                .and_then(|v| v.as_str());
+
+            match (error, message) {
+                (Some(error), Some(message)) => format!("{error}: {message}"),
+                (Some(error), None) => error.to_string(),
+                (None, Some(message)) => message.to_string(),
+                (None, None) => value.to_string(),
+            }
+        }
+        _ => value.to_string(),
+    };
+
+    truncate_for_log(&summary)
+}
+
+fn truncate_for_log(value: &str) -> String {
+    const MAX_LOG_BODY_CHARS: usize = 500;
+    let sanitized = value.replace(['\n', '\r'], " ");
+    if sanitized.chars().count() > MAX_LOG_BODY_CHARS {
+        format!(
+            "{}...",
+            sanitized
+                .chars()
+                .take(MAX_LOG_BODY_CHARS)
+                .collect::<String>()
+        )
+    } else {
+        sanitized
     }
 }
 

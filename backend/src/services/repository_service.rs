@@ -1062,6 +1062,7 @@ impl DatabaseRepository for PostgresRepository {
             account_name: String,
             account_type: String,
             account_mask: Option<String>,
+            provider: Option<String>,
             custom_category: Option<String>,
         }
 
@@ -1077,9 +1078,15 @@ impl DatabaseRepository for PostgresRepository {
                    t.merchant_name, t.category_primary, t.category_detailed,
                    t.category_confidence, t.payment_channel, t.pending, t.created_at,
                    a.name as account_name, a.account_type, a.mask as account_mask,
+                   CASE
+                     WHEN pc.item_id LIKE 'teller_%' THEN 'teller'
+                     WHEN pc.item_id IS NOT NULL THEN 'plaid'
+                     ELSE NULL
+                   END as provider,
                    tco.category_name as custom_category
             FROM transactions t
             INNER JOIN accounts a ON t.account_id = a.id
+            LEFT JOIN provider_connections pc ON a.provider_connection_id = pc.id
             LEFT JOIN transaction_category_overrides tco
                 ON t.id = tco.transaction_id AND tco.user_id = $1
             WHERE t.user_id = $1
@@ -1112,6 +1119,7 @@ impl DatabaseRepository for PostgresRepository {
                 account_name: r.account_name,
                 account_type: r.account_type,
                 account_mask: r.account_mask,
+                provider: r.provider,
                 custom_category: r.custom_category,
                 rule_category: None, // populated by the handler after applying category rules
             })
