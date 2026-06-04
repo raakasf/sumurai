@@ -6,7 +6,7 @@ import { useTheme } from '../context/ThemeContext';
 import { useScrollDetection } from '../hooks/useScrollDetection';
 import { AppFooter, AppTitleBar } from '../ui/primitives';
 
-type TabKey = 'dashboard' | 'transactions' | 'budgets' | 'accounts' | 'settings';
+type TabKey = 'dashboard' | 'trends' | 'transactions' | 'budgets' | 'accounts' | 'settings';
 
 interface AppLayoutProps {
   children: ReactNode;

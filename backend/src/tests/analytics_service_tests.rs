@@ -402,6 +402,82 @@ fn given_credit_card_payment_variants_when_calculating_monthly_totals_then_exclu
 }
 
 #[test]
+fn given_transactions_when_calculating_category_trends_then_groups_effective_categories_by_month() {
+    let analytics = AnalyticsService::new();
+    let mut rule_category = create_test_transaction_with_account(
+        dec!(-40.00),
+        NaiveDate::from_ymd_opt(2024, 2, 20).unwrap(),
+        "Shops",
+        None,
+    );
+    rule_category.rule_category = Some("Home Improvement".to_string());
+    let txns = vec![
+        create_test_transaction_with_account(
+            dec!(100.00),
+            NaiveDate::from_ymd_opt(2024, 1, 15).unwrap(),
+            "Shops",
+            Some("Home Improvement"),
+        ),
+        create_test_transaction_with_account(
+            dec!(25.50),
+            NaiveDate::from_ymd_opt(2024, 1, 20).unwrap(),
+            "Shops",
+            Some("Home Improvement"),
+        ),
+        rule_category,
+        create_test_transaction_with_account(
+            dec!(300.00),
+            NaiveDate::from_ymd_opt(2024, 2, 21).unwrap(),
+            "Credit Card Payments",
+            None,
+        ),
+    ];
+
+    let result = analytics.calculate_monthly_category_totals_with_account(
+        &txns,
+        Some(NaiveDate::from_ymd_opt(2024, 1, 1).unwrap()),
+        Some(NaiveDate::from_ymd_opt(2024, 2, 29).unwrap()),
+    );
+
+    assert_eq!(result.len(), 2);
+    assert_eq!(result[0].month, "2024-01");
+    assert_eq!(result[0].category, "Home Improvement");
+    assert_eq!(result[0].amount, dec!(125.50));
+    assert_eq!(result[1].month, "2024-02");
+    assert_eq!(result[1].category, "Home Improvement");
+    assert_eq!(result[1].amount, dec!(40.00));
+}
+
+#[test]
+fn given_transactions_outside_range_when_calculating_category_trends_then_excludes_them() {
+    let analytics = AnalyticsService::new();
+    let txns = vec![
+        create_test_transaction_with_account(
+            dec!(100.00),
+            NaiveDate::from_ymd_opt(2024, 1, 15).unwrap(),
+            "Food",
+            None,
+        ),
+        create_test_transaction_with_account(
+            dec!(75.00),
+            NaiveDate::from_ymd_opt(2024, 3, 15).unwrap(),
+            "Food",
+            None,
+        ),
+    ];
+
+    let result = analytics.calculate_monthly_category_totals_with_account(
+        &txns,
+        Some(NaiveDate::from_ymd_opt(2024, 3, 1).unwrap()),
+        Some(NaiveDate::from_ymd_opt(2024, 3, 31).unwrap()),
+    );
+
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].month, "2024-03");
+    assert_eq!(result[0].amount, dec!(75.00));
+}
+
+#[test]
 fn given_transactions_when_grouping_by_category_with_frontend_logic_then_handles_uncategorized() {
     let _analytics = AnalyticsService::new();
     let txns = [

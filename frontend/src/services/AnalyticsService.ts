@@ -1,6 +1,7 @@
 import type { BalancesOverview } from '../types/analytics';
 import type {
   AnalyticsCategoryResponse,
+  AnalyticsCategoryTrendResponse,
   AnalyticsMonthlyTotalsResponse,
   AnalyticsSpendingResponse,
   AnalyticsTopMerchantsResponse,
@@ -55,6 +56,21 @@ export class AnalyticsService {
     const qs = params.toString();
     if (qs) endpoint = `/analytics/monthly-totals?${qs}`;
     return ApiClient.get<AnalyticsMonthlyTotalsResponse[]>(endpoint);
+  }
+
+  static async getCategoryTrends(
+    startDate?: string,
+    endDate?: string,
+    accountIds?: string[]
+  ): Promise<AnalyticsCategoryTrendResponse[]> {
+    let endpoint = '/analytics/category-trends';
+    const params = new URLSearchParams();
+    if (startDate) params.append('start_date', startDate);
+    if (endDate) params.append('end_date', endDate);
+    appendAccountQueryParams(params, accountIds);
+    const qs = params.toString();
+    if (qs) endpoint += `?${qs}`;
+    return ApiClient.get<AnalyticsCategoryTrendResponse[]>(endpoint);
   }
 
   static async getTopMerchantsByDateRange(

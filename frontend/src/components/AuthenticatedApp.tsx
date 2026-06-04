@@ -6,13 +6,14 @@ import BudgetsPage from '@/views/BudgetsPage';
 import DashboardPage from '@/views/DashboardPage';
 import SettingsPage from '@/views/SettingsPage';
 import TransactionsPage from '@/views/TransactionsPage';
+import TrendsPage from '@/views/TrendsPage';
 import { AppLayout } from '../layouts/AppLayout';
 import { GradientShell } from '../ui/primitives';
 import { getCurrentMonthSelection, type MonthYearSelection } from '../utils/dateRanges';
 import { ErrorBoundary } from './ErrorBoundary';
 import Card from './ui/Card';
 
-export type TabKey = 'dashboard' | 'transactions' | 'budgets' | 'accounts' | 'settings';
+export type TabKey = 'dashboard' | 'trends' | 'transactions' | 'budgets' | 'accounts' | 'settings';
 
 interface AuthenticatedAppProps {
   onLogout: () => void;
@@ -64,6 +65,7 @@ export function AuthenticatedApp({ onLogout, initialTab }: AuthenticatedAppProps
               transition={{ duration: 0.28, ease: [0.25, 0.1, 0.25, 1] }}
             >
               {tab === 'dashboard' && <DashboardPage period={period} onPeriodChange={setPeriod} />}
+              {tab === 'trends' && <TrendsPage />}
               {tab === 'transactions' && (
                 <TransactionsPage
                   initialAccountId={transactionAccountId}

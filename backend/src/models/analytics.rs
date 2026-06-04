@@ -15,6 +15,15 @@ pub struct MonthlySpending {
     pub total: Decimal,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
+#[schema(example = json!({"month": "2024-01", "category": "Home Improvement", "amount": "450.00"}))]
+pub struct CategoryMonthlySpending {
+    pub month: String,
+    pub category: String,
+    #[schema(value_type = String)]
+    pub amount: Decimal,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, ToSchema)]
 #[schema(example = json!({"name": "groceries", "value": "450.00"}))]
 pub struct CategorySpending {

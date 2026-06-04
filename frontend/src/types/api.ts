@@ -165,6 +165,12 @@ export interface AnalyticsMonthlyTotalsResponse {
   amount: number;
 }
 
+export interface AnalyticsCategoryTrendResponse {
+  month: string;
+  category: string;
+  amount: number | string;
+}
+
 export interface AnalyticsTopMerchantsResponse {
   name: string;
   amount: number;

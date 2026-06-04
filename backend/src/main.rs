@@ -39,8 +39,8 @@ mod utils;
 pub use tests::test_fixtures;
 
 use crate::models::analytics::{
-    BalanceCategory, BalancesOverviewResponse, CategorySpending, DailySpending, MonthlySpending,
-    NetWorthOverTimeResponse, TopMerchant,
+    BalanceCategory, BalancesOverviewResponse, CategoryMonthlySpending, CategorySpending,
+    DailySpending, MonthlySpending, NetWorthOverTimeResponse, TopMerchant,
 };
 use crate::models::app_state::AppState;
 use crate::models::auth::{AuthContext, AuthMiddlewareState};
@@ -304,6 +304,10 @@ pub fn create_app(state: AppState) -> Router {
         .route(
             "/api/analytics/monthly-totals",
             get(get_authenticated_monthly_totals),
+        )
+        .route(
+            "/api/analytics/category-trends",
+            get(get_authenticated_category_trends),
         )
         .route(
             "/api/analytics/top-merchants",
@@ -2238,6 +2242,84 @@ async fn get_authenticated_monthly_totals(
         }
         Err(e) => {
             tracing::error!("Failed to get transactions for user {}: {}", user_id, e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/analytics/category-trends",
+    description = "Returns monthly spending totals grouped by effective category.",
+    params(("start_date" = Option<String>, Query, description = "Start date in YYYY-MM-DD format"),
+           ("end_date" = Option<String>, Query, description = "End date in YYYY-MM-DD format"),
+           ("account_ids" = Option<Vec<String>>, Query, description = "Filter by account IDs")),
+    responses(
+        (status = 200, description = "Monthly category spending totals", body = Vec<CategoryMonthlySpending>),
+        (status = 401, description = "Unauthorized"),
+        (status = 500, description = "Internal server error"),
+    ),
+    security(("bearer_auth" = [])),
+    tag = "Analytics"
+)]
+async fn get_authenticated_category_trends(
+    State(state): State<AppState>,
+    auth_context: AuthContext,
+    Query(params): Query<DateRangeQuery>,
+) -> Result<Json<Vec<CategoryMonthlySpending>>, StatusCode> {
+    let user_id = auth_context.user_id;
+    let start_date = params
+        .start_date
+        .as_deref()
+        .and_then(|value| chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d").ok());
+    let end_date = params
+        .end_date
+        .as_deref()
+        .and_then(|value| chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d").ok());
+
+    let filtered_account_ids = if params.account_ids.is_empty() {
+        None
+    } else {
+        Some(
+            utils::account_validation::validate_account_ownership(
+                &params.account_ids,
+                &user_id,
+                &state.db_repository,
+            )
+            .await?
+            .into_iter()
+            .collect::<std::collections::HashSet<_>>(),
+        )
+    };
+
+    match state
+        .db_repository
+        .get_transactions_with_account_for_user(&user_id)
+        .await
+    {
+        Ok(mut transactions) => {
+            if let Some(ref allowed_ids) = filtered_account_ids {
+                transactions.retain(|transaction| allowed_ids.contains(&transaction.account_id));
+            }
+            let rules = state
+                .db_repository
+                .get_category_rules(user_id)
+                .await
+                .unwrap_or_default();
+            apply_category_rules(&mut transactions, &rules);
+
+            Ok(Json(
+                state
+                    .analytics_service
+                    .calculate_monthly_category_totals_with_account(
+                        &transactions,
+                        start_date,
+                        end_date,
+                    ),
+            ))
+        }
+        Err(error) => {
+            tracing::error!("Failed to get transactions for user {}: {}", user_id, error);
             Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
     }

@@ -103,6 +103,7 @@ use utoipa::OpenApi;
         crate::get_authenticated_spending_by_date_range,
         crate::get_authenticated_category_spending,
         crate::get_authenticated_monthly_totals,
+        crate::get_authenticated_category_trends,
         crate::get_authenticated_top_merchants,
         crate::get_authenticated_balances_overview,
         crate::get_authenticated_net_worth_over_time,

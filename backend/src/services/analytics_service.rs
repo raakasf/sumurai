@@ -1,5 +1,6 @@
 use crate::models::analytics::{
-    BalanceCategory, CategorySpending, DailySpending, MonthlySpending, TopMerchant,
+    BalanceCategory, CategoryMonthlySpending, CategorySpending, DailySpending, MonthlySpending,
+    TopMerchant,
 };
 use crate::models::transaction::{Transaction, TransactionWithAccount};
 use chrono::Datelike;
@@ -377,6 +378,50 @@ impl AnalyticsService {
             result.truncate(months as usize);
         }
 
+        result
+    }
+
+    pub fn calculate_monthly_category_totals_with_account(
+        &self,
+        transactions: &[TransactionWithAccount],
+        start_date: Option<chrono::NaiveDate>,
+        end_date: Option<chrono::NaiveDate>,
+    ) -> Vec<CategoryMonthlySpending> {
+        let mut totals = std::collections::HashMap::new();
+
+        for transaction in transactions {
+            if !Self::is_spending_transaction_with_account(transaction) {
+                continue;
+            }
+            if start_date.is_some_and(|start| transaction.date < start)
+                || end_date.is_some_and(|end| transaction.date > end)
+            {
+                continue;
+            }
+
+            let month = format!(
+                "{}-{:02}",
+                transaction.date.year(),
+                transaction.date.month()
+            );
+            let category = Self::get_effective_category_name(transaction);
+            *totals.entry((month, category)).or_insert(Decimal::ZERO) +=
+                Self::get_spending_amount_with_account(transaction);
+        }
+
+        let mut result: Vec<CategoryMonthlySpending> = totals
+            .into_iter()
+            .map(|((month, category), amount)| CategoryMonthlySpending {
+                month,
+                category,
+                amount: Self::round_amount(amount),
+            })
+            .collect();
+        result.sort_by(|a, b| {
+            a.month
+                .cmp(&b.month)
+                .then_with(|| a.category.cmp(&b.category))
+        });
         result
     }
 

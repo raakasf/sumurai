@@ -26,10 +26,11 @@ const titleBarVariants = cva(
   }
 );
 
-type TabKey = 'dashboard' | 'transactions' | 'budgets' | 'accounts' | 'settings';
+type TabKey = 'dashboard' | 'trends' | 'transactions' | 'budgets' | 'accounts' | 'settings';
 
 const TABS: Array<{ key: TabKey; label: string }> = [
   { key: 'dashboard', label: 'Dashboard' },
+  { key: 'trends', label: 'Trends' },
   { key: 'transactions', label: 'Transactions' },
   { key: 'budgets', label: 'Budgets' },
   { key: 'accounts', label: 'Accounts' },
