@@ -180,13 +180,17 @@ export function usePlaidLinkFlow(options: UsePlaidLinkFlowOptions = {}): UsePlai
 
       clearError();
       try {
-        await PlaidService.disconnect(connectionId);
+        const result = await PlaidService.disconnect(connectionId);
+        if (!result.success) {
+          throw new Error(result.message || 'Connection was not disconnected');
+        }
         setToast(`${connection.institutionName} disconnected successfully`);
         await plaidConnections.refresh();
         dispatchAccountsChanged();
       } catch (error: unknown) {
         const message = `Failed to disconnect ${connection.institutionName}: ${error instanceof Error ? error.message : 'Unknown error'}`;
         handleError(message);
+        throw error;
       }
     },
     [clearError, handleError, plaidConnections, enabled]

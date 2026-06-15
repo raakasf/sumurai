@@ -33,7 +33,10 @@ mod tests {
 
     #[test]
     fn star_prefix() {
-        assert!(glob_match("MD DIR ACH CONTRIB*", "MD DIR ACH CONTRIB 042726 000029851959044 171 A6068227701"));
+        assert!(glob_match(
+            "MD DIR ACH CONTRIB*",
+            "MD DIR ACH CONTRIB 042726 000029851959044 171 A6068227701"
+        ));
         assert!(!glob_match("MD DIR ACH CONTRIB*", "AMAZON PRIME"));
     }
 

@@ -29,6 +29,7 @@ pub struct ConnectionService {
 pub enum TellerConnectError {
     #[allow(dead_code)]
     InvalidProvider(String),
+    InvalidConnection,
     CredentialStorage(Error),
     ConnectionPersistence(Error),
 }
@@ -131,15 +132,15 @@ impl ConnectionService {
 
         let deleted_transactions = self
             .db_repository
-            .delete_provider_transactions(&conn.item_id)
+            .delete_provider_transactions(user_id, &conn.item_id)
             .await?;
         let deleted_accounts = self
             .db_repository
-            .delete_provider_accounts(&conn.item_id)
+            .delete_provider_accounts(user_id, &conn.item_id)
             .await?;
 
         self.db_repository
-            .delete_provider_credentials(&conn.item_id)
+            .delete_provider_credentials(user_id, &conn.item_id)
             .await?;
 
         self.db_repository
@@ -180,7 +181,21 @@ impl ConnectionService {
             .resolve_provider("teller")
             .ok_or_else(|| TellerConnectError::InvalidProvider("teller".to_string()))?;
 
-        let item_id = format!("teller_{}", request.enrollment_id);
+        let mut connection = if let Some(connection_id) = request.connection_id.as_deref() {
+            let connection_id = Uuid::parse_str(connection_id)
+                .map_err(|_| TellerConnectError::InvalidConnection)?;
+            let connection = self
+                .db_repository
+                .get_provider_connection_by_id(&connection_id, user_id)
+                .await
+                .map_err(TellerConnectError::ConnectionPersistence)?;
+
+            connection.ok_or(TellerConnectError::InvalidConnection)?
+        } else {
+            ProviderConnection::new(*user_id, &format!("teller_{}", request.enrollment_id))
+        };
+
+        let item_id = connection.item_id.clone();
         self.db_repository
             .store_provider_credentials_for_user(user_id, &item_id, &request.access_token)
             .await
@@ -191,13 +206,14 @@ impl ConnectionService {
             .clone()
             .unwrap_or_else(|| "Connected Bank".to_string());
 
-        let mut connection = ProviderConnection::new(*user_id, &item_id);
         connection.mark_connected(&institution_name);
         connection.institution_id = Some("teller".to_string());
-        connection.transaction_count = 0;
-        connection.account_count = 0;
-        connection.last_sync_at = None;
-        connection.sync_cursor = None;
+        if request.connection_id.is_none() {
+            connection.transaction_count = 0;
+            connection.account_count = 0;
+            connection.last_sync_at = None;
+            connection.sync_cursor = None;
+        }
 
         self.db_repository
             .save_provider_connection(&connection)
@@ -243,6 +259,29 @@ impl ConnectionService {
         }
 
         if !persisted_accounts.is_empty() {
+            match self
+                .db_repository
+                .merge_duplicate_provider_accounts(user_id, &connection.id)
+                .await
+            {
+                Ok(merged_count) if merged_count > 0 => {
+                    tracing::info!(
+                        connection_id = %connection.id,
+                        merged_count,
+                        "Merged duplicate Teller accounts after connect"
+                    );
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to merge duplicate Teller accounts for user {} connection {}: {}",
+                        user_id,
+                        connection.id,
+                        e
+                    );
+                }
+            }
+
             connection.account_count = persisted_accounts.len() as i32;
 
             if let Err(e) = self
@@ -620,6 +659,29 @@ impl ConnectionService {
             }
         }
 
+        match self
+            .db_repository
+            .merge_duplicate_provider_accounts(user_id, &connection.id)
+            .await
+        {
+            Ok(merged_count) if merged_count > 0 => {
+                tracing::info!(
+                    connection_id = %connection.id,
+                    merged_count,
+                    "Merged duplicate Teller accounts after sync"
+                );
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to merge duplicate Teller accounts for user {} connection {}: {}",
+                    user_id,
+                    connection.id,
+                    e
+                );
+            }
+        }
+
         let db_accounts = self
             .db_repository
             .get_accounts_for_user(user_id)
@@ -646,7 +708,6 @@ impl ConnectionService {
             .get_transactions(&provider_credentials, sync_start_date, sync_end_date)
             .await
             .map_err(TellerSyncError::ProviderRequest)?;
-
 
         let mut synced_transactions: Vec<Transaction> = Vec::new();
 
@@ -692,6 +753,29 @@ impl ConnectionService {
             }
 
             synced_transactions.push(transaction);
+        }
+
+        match self
+            .db_repository
+            .merge_duplicate_provider_transactions(user_id, &connection.id)
+            .await
+        {
+            Ok(merged_count) if merged_count > 0 => {
+                tracing::info!(
+                    connection_id = %connection.id,
+                    merged_count,
+                    "Merged duplicate Teller transactions after sync"
+                );
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to merge duplicate Teller transactions for user {} connection {}: {}",
+                    user_id,
+                    connection.id,
+                    e
+                );
+            }
         }
 
         let total_transactions = match self.db_repository.get_transactions_for_user(user_id).await {

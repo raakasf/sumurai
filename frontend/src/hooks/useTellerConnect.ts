@@ -34,6 +34,7 @@ interface StoreEnrollmentRequest {
   access_token: string;
   enrollment_id: string;
   institution_name: string;
+  connection_id?: string;
 }
 
 interface StoreEnrollmentResponse {
@@ -172,7 +173,7 @@ export interface UseTellerConnectOptions {
 
 export interface UseTellerConnectResult {
   ready: boolean;
-  open: () => void;
+  open: (connectionId?: string) => void;
 }
 
 export function useTellerConnect(options: UseTellerConnectOptions): UseTellerConnectResult {
@@ -189,6 +190,7 @@ export function useTellerConnect(options: UseTellerConnectOptions): UseTellerCon
   const onExitRef = useRef<UseTellerConnectOptions['onExit']>(onExit);
   const onErrorRef = useRef<UseTellerConnectOptions['onError']>(onError);
   const pendingOpenRef = useRef(false);
+  const connectionIdRef = useRef<string | undefined>(undefined);
 
   useEffect(() => {
     onConnectedRef.current = onConnected;
@@ -232,15 +234,19 @@ export function useTellerConnect(options: UseTellerConnectOptions): UseTellerCon
                 access_token: enrollment.accessToken,
                 enrollment_id: enrollment.enrollment.id,
                 institution_name: enrollment.enrollment.institution.name,
+                connection_id: connectionIdRef.current,
               });
+              connectionIdRef.current = undefined;
               await onConnectedRef.current?.();
             } catch (err) {
+              connectionIdRef.current = undefined;
               console.warn('Failed to persist Teller enrollment', err);
               await onErrorRef.current?.(err);
               throw err;
             }
           },
           onExit: () => {
+            connectionIdRef.current = undefined;
             void onExitRef.current?.();
           },
         });
@@ -270,7 +276,8 @@ export function useTellerConnect(options: UseTellerConnectOptions): UseTellerCon
     };
   }, [applicationId, environment, gateway]);
 
-  const open = useCallback(() => {
+  const open = useCallback((connectionId?: string) => {
+    connectionIdRef.current = connectionId;
     if (instance) {
       instance.open();
       return;

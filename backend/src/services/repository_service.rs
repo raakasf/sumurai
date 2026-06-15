@@ -65,6 +65,16 @@ pub trait DatabaseRepository: Send + Sync {
         end_date: chrono::NaiveDate,
     ) -> Result<Vec<ManualAccountBalanceHistoryPoint>>;
     async fn upsert_account(&self, account: &Account) -> Result<()>;
+    async fn merge_duplicate_provider_accounts(
+        &self,
+        user_id: &Uuid,
+        connection_id: &Uuid,
+    ) -> Result<i64>;
+    async fn merge_duplicate_provider_transactions(
+        &self,
+        user_id: &Uuid,
+        connection_id: &Uuid,
+    ) -> Result<i64>;
     async fn upsert_transaction(&self, transaction: &Transaction) -> Result<()>;
 
     async fn store_provider_credentials_for_user(
@@ -90,10 +100,10 @@ pub trait DatabaseRepository: Send + Sync {
         connection_id: &Uuid,
         user_id: &Uuid,
     ) -> Result<Option<ProviderConnection>>;
-    async fn delete_provider_transactions(&self, item_id: &str) -> Result<i32>;
-    async fn delete_provider_accounts(&self, item_id: &str) -> Result<i32>;
+    async fn delete_provider_transactions(&self, user_id: &Uuid, item_id: &str) -> Result<i32>;
+    async fn delete_provider_accounts(&self, user_id: &Uuid, item_id: &str) -> Result<i32>;
     async fn delete_provider_connection(&self, user_id: &Uuid, item_id: &str) -> Result<()>;
-    async fn delete_provider_credentials(&self, item_id: &str) -> Result<()>;
+    async fn delete_provider_credentials(&self, user_id: &Uuid, item_id: &str) -> Result<()>;
     async fn get_budgets_for_user(&self, user_id: Uuid) -> Result<Vec<Budget>>;
     async fn create_budget_for_user(&self, budget: Budget) -> Result<Budget>;
 
@@ -371,6 +381,163 @@ impl DatabaseRepository for PostgresRepository {
         Ok(())
     }
 
+    async fn merge_duplicate_provider_accounts(
+        &self,
+        user_id: &Uuid,
+        connection_id: &Uuid,
+    ) -> Result<i64> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("SELECT set_config('app.current_user_id', $1, true)")
+            .bind(user_id.to_string())
+            .execute(&mut *tx)
+            .await?;
+
+        let merged_count = sqlx::query_scalar::<_, i64>(
+            r#"
+            WITH ranked_accounts AS (
+                SELECT
+                    id,
+                    FIRST_VALUE(id) OVER (
+                        PARTITION BY provider_connection_id, LOWER(name), COALESCE(mask, ''), account_type
+                        ORDER BY (balance_current IS NOT NULL) DESC, updated_at DESC, id DESC
+                    ) AS canonical_id,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY provider_connection_id, LOWER(name), COALESCE(mask, ''), account_type
+                        ORDER BY (balance_current IS NOT NULL) DESC, updated_at DESC, id DESC
+                    ) AS row_number
+                FROM accounts
+                WHERE user_id = $1
+                  AND provider_connection_id = $2
+                  AND provider_account_id IS NOT NULL
+            ),
+            duplicate_accounts AS (
+                SELECT id, canonical_id
+                FROM ranked_accounts
+                WHERE row_number > 1
+            ),
+            moved_transactions AS (
+                UPDATE transactions t
+                SET account_id = d.canonical_id
+                FROM duplicate_accounts d
+                WHERE t.account_id = d.id
+                  AND t.user_id = $1
+                RETURNING t.id
+            ),
+            deleted_accounts AS (
+                DELETE FROM accounts a
+                USING duplicate_accounts d
+                WHERE a.id = d.id
+                RETURNING a.id
+            )
+            SELECT COUNT(*)::BIGINT FROM deleted_accounts
+            "#,
+        )
+        .bind(user_id)
+        .bind(connection_id)
+        .fetch_one(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+        Ok(merged_count)
+    }
+
+    async fn merge_duplicate_provider_transactions(
+        &self,
+        user_id: &Uuid,
+        connection_id: &Uuid,
+    ) -> Result<i64> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("SELECT set_config('app.current_user_id', $1, true)")
+            .bind(user_id.to_string())
+            .execute(&mut *tx)
+            .await?;
+
+        let merged_count = sqlx::query_scalar::<_, i64>(
+            r#"
+            WITH transaction_candidates AS (
+                SELECT
+                    t.id,
+                    t.account_id,
+                    t.amount,
+                    t.date,
+                    LOWER(REGEXP_REPLACE(COALESCE(t.merchant_name, ''), '[^[:alnum:]]+', '', 'g')) AS merchant_key,
+                    COALESCE(t.merchant_name, '') AS merchant_name,
+                    t.created_at
+                FROM transactions t
+                INNER JOIN accounts a ON a.id = t.account_id
+                WHERE t.user_id = $1
+                  AND a.provider_connection_id = $2
+                  AND t.provider_transaction_id IS NOT NULL
+            ),
+            duplicate_pairs AS (
+                SELECT DISTINCT
+                    CASE
+                        WHEN LENGTH(newer.merchant_key) > LENGTH(older.merchant_key)
+                            OR (
+                                LENGTH(newer.merchant_key) = LENGTH(older.merchant_key)
+                                AND newer.created_at >= older.created_at
+                            )
+                        THEN newer.id
+                        ELSE older.id
+                    END AS canonical_id,
+                    CASE
+                        WHEN LENGTH(newer.merchant_key) > LENGTH(older.merchant_key)
+                            OR (
+                                LENGTH(newer.merchant_key) = LENGTH(older.merchant_key)
+                                AND newer.created_at >= older.created_at
+                            )
+                        THEN older.id
+                        ELSE newer.id
+                    END AS duplicate_id
+                FROM transaction_candidates older
+                INNER JOIN transaction_candidates newer
+                    ON newer.account_id = older.account_id
+                    AND newer.amount = older.amount
+                    AND newer.date = older.date
+                    AND newer.id <> older.id
+                    AND older.merchant_key <> ''
+                    AND newer.merchant_key <> ''
+                    AND (
+                        older.merchant_key = newer.merchant_key
+                        OR POSITION(older.merchant_key IN newer.merchant_key) > 0
+                        OR POSITION(newer.merchant_key IN older.merchant_key) > 0
+                    )
+            ),
+            moved_overrides AS (
+                INSERT INTO transaction_category_overrides (
+                    transaction_id, user_id, category_name, created_at
+                )
+                SELECT
+                    d.canonical_id,
+                    tco.user_id,
+                    tco.category_name,
+                    tco.created_at
+                FROM transaction_category_overrides tco
+                INNER JOIN duplicate_pairs d ON d.duplicate_id = tco.transaction_id
+                WHERE tco.user_id = $1
+                ON CONFLICT (transaction_id, user_id)
+                DO NOTHING
+                RETURNING transaction_id
+            ),
+            deleted_transactions AS (
+                DELETE FROM transactions t
+                USING duplicate_pairs d
+                WHERE t.id = d.duplicate_id
+                  AND t.user_id = $1
+                RETURNING t.id
+            )
+            SELECT COUNT(*)::BIGINT FROM deleted_transactions
+            "#,
+        )
+        .bind(user_id)
+        .bind(connection_id)
+        .fetch_one(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+        Ok(merged_count)
+    }
+
     async fn create_manual_account(&self, account: &Account) -> Result<Account> {
         let mut tx = self.pool.begin().await?;
         if let Some(user_id) = account.user_id {
@@ -548,11 +715,13 @@ impl DatabaseRepository for PostgresRepository {
 
         Ok(rows
             .into_iter()
-            .map(|(account_id, as_of_date, balance_current)| ManualAccountBalanceHistoryPoint {
-                account_id,
-                as_of_date,
-                balance_current,
-            })
+            .map(
+                |(account_id, as_of_date, balance_current)| ManualAccountBalanceHistoryPoint {
+                    account_id,
+                    as_of_date,
+                    balance_current,
+                },
+            )
             .collect())
     }
 
@@ -888,14 +1057,21 @@ impl DatabaseRepository for PostgresRepository {
         ))
     }
 
-    async fn delete_provider_transactions(&self, item_id: &str) -> Result<i32> {
+    async fn delete_provider_transactions(&self, user_id: &Uuid, item_id: &str) -> Result<i32> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("SELECT set_config('app.current_user_id', $1, true)")
+            .bind(user_id.to_string())
+            .execute(&mut *tx)
+            .await?;
+
         let connection_id: Option<Uuid> =
             sqlx::query_scalar("SELECT id FROM provider_connections WHERE item_id = $1")
                 .bind(item_id)
-                .fetch_optional(&self.pool)
+                .fetch_optional(&mut *tx)
                 .await?;
 
         let Some(conn_id) = connection_id else {
+            tx.commit().await?;
             return Ok(0);
         };
 
@@ -908,28 +1084,37 @@ impl DatabaseRepository for PostgresRepository {
             "#,
         )
         .bind(conn_id)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
 
+        tx.commit().await?;
         Ok(result.rows_affected() as i32)
     }
 
-    async fn delete_provider_accounts(&self, item_id: &str) -> Result<i32> {
+    async fn delete_provider_accounts(&self, user_id: &Uuid, item_id: &str) -> Result<i32> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("SELECT set_config('app.current_user_id', $1, true)")
+            .bind(user_id.to_string())
+            .execute(&mut *tx)
+            .await?;
+
         let connection_id: Option<Uuid> =
             sqlx::query_scalar("SELECT id FROM provider_connections WHERE item_id = $1")
                 .bind(item_id)
-                .fetch_optional(&self.pool)
+                .fetch_optional(&mut *tx)
                 .await?;
 
         let Some(conn_id) = connection_id else {
+            tx.commit().await?;
             return Ok(0);
         };
 
         let result = sqlx::query("DELETE FROM accounts WHERE provider_connection_id = $1")
             .bind(conn_id)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await?;
 
+        tx.commit().await?;
         Ok(result.rows_affected() as i32)
     }
 
@@ -950,12 +1135,19 @@ impl DatabaseRepository for PostgresRepository {
         Ok(())
     }
 
-    async fn delete_provider_credentials(&self, item_id: &str) -> Result<()> {
-        sqlx::query("DELETE FROM plaid_credentials WHERE item_id = $1")
-            .bind(item_id)
-            .execute(&self.pool)
+    async fn delete_provider_credentials(&self, user_id: &Uuid, item_id: &str) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("SELECT set_config('app.current_user_id', $1, true)")
+            .bind(user_id.to_string())
+            .execute(&mut *tx)
             .await?;
 
+        sqlx::query("DELETE FROM plaid_credentials WHERE item_id = $1")
+            .bind(item_id)
+            .execute(&mut *tx)
+            .await?;
+
+        tx.commit().await?;
         Ok(())
     }
 
@@ -1564,13 +1756,12 @@ impl DatabaseRepository for PostgresRepository {
             .await?;
 
         // Fetch the category name so we can clear any overrides that reference it.
-        let name: Option<String> = sqlx::query_scalar(
-            "SELECT name FROM user_categories WHERE id = $1 AND user_id = $2",
-        )
-        .bind(category_id)
-        .bind(user_id)
-        .fetch_optional(&mut *tx)
-        .await?;
+        let name: Option<String> =
+            sqlx::query_scalar("SELECT name FROM user_categories WHERE id = $1 AND user_id = $2")
+                .bind(category_id)
+                .bind(user_id)
+                .fetch_optional(&mut *tx)
+                .await?;
 
         sqlx::query("DELETE FROM user_categories WHERE id = $1 AND user_id = $2")
             .bind(category_id)

@@ -144,11 +144,11 @@ const TransactionsPage: React.FC<TransactionsPageProps> = ({
           <div className={cn('grid', 'gap-3', 'sm:grid-cols-2', 'lg:grid-cols-5')}>
             <HeroStatCard
               index={1}
-              title="Total shown"
+              title="Transactions"
               icon={<ReceiptText className={cn('h-4', 'w-4')} />}
               value={stats.totalCount}
               suffix={stats.totalCount === 1 ? 'item' : 'items'}
-              subtext={format(stats.totalShown)}
+              subtext={`Net flow ${format(stats.totalShown)}`}
             />
 
             <HeroStatCard

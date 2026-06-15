@@ -1,4 +1,4 @@
-import type { ProviderStatusResponse } from '../types/api';
+import type { PlaidDisconnectResponse, ProviderStatusResponse } from '../types/api';
 import { ApiClient } from './ApiClient';
 
 export interface TellerConnectionStatus {
@@ -38,6 +38,11 @@ export class TellerService {
   }
 
   static async disconnect(connectionId: string): Promise<void> {
-    await ApiClient.post('/providers/disconnect', { connection_id: connectionId });
+    const result = await ApiClient.post<PlaidDisconnectResponse>('/providers/disconnect', {
+      connection_id: connectionId,
+    });
+    if (!result.success) {
+      throw new Error(result.message || 'Connection was not disconnected');
+    }
   }
 }

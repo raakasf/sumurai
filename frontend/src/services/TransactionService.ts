@@ -20,8 +20,8 @@ export class TransactionService {
     if (filters) {
       const params = new URLSearchParams();
 
-      if (filters.startDate) params.append('startDate', filters.startDate);
-      if (filters.endDate) params.append('endDate', filters.endDate);
+      if (filters.startDate) params.append('start_date', filters.startDate);
+      if (filters.endDate) params.append('end_date', filters.endDate);
       if (filters.categoryId) params.append('categoryId', filters.categoryId);
       if (filters.searchTerm) params.append('searchTerm', filters.searchTerm);
       if (filters.search) params.append('search', filters.search);

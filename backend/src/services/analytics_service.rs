@@ -10,6 +10,8 @@ pub struct AnalyticsService;
 
 #[allow(dead_code)]
 impl AnalyticsService {
+    const SPENDING_EXCLUDED_MERCHANT_PREFIXES: [&'static str; 1] = ["md dir ach contrib"];
+
     pub fn map_account_to_balance_category(
         account_type: &str,
         account_subtype: Option<&str>,
@@ -43,7 +45,8 @@ impl AnalyticsService {
                     if st.contains("checking") || st.contains("savings") {
                         return BalanceCategory::Cash;
                     }
-                    if st.contains("property") || st.contains("real estate") || st.contains("home") {
+                    if st.contains("property") || st.contains("real estate") || st.contains("home")
+                    {
                         return BalanceCategory::Property;
                     }
                 }
@@ -193,14 +196,24 @@ impl AnalyticsService {
                 | "creditcardbills"
                 | "creditcardpayment"
                 | "creditcardpayments"
+                | "investment"
+                | "investments"
                 | "transferin"
                 | "transferout"
         )
     }
 
+    fn is_spending_excluded_merchant(merchant_name: Option<&str>) -> bool {
+        let merchant = merchant_name.unwrap_or("").trim().to_lowercase();
+        Self::SPENDING_EXCLUDED_MERCHANT_PREFIXES
+            .iter()
+            .any(|prefix| merchant.starts_with(prefix))
+    }
+
     fn is_spending_transaction(transaction: &Transaction) -> bool {
         transaction.amount > Decimal::ZERO
             && !Self::is_spending_excluded_category(&Self::get_category_name(transaction))
+            && !Self::is_spending_excluded_merchant(transaction.merchant_name.as_deref())
     }
 
     fn get_effective_category_name(transaction: &TransactionWithAccount) -> String {
@@ -220,16 +233,31 @@ impl AnalyticsService {
     }
 
     fn is_spending_transaction_with_account(transaction: &TransactionWithAccount) -> bool {
-        transaction.amount != Decimal::ZERO
-            && !Self::is_spending_excluded_category(&Self::get_effective_category_name(transaction))
+        Self::get_spending_amount_with_account(transaction) > Decimal::ZERO
     }
 
     fn get_spending_amount_with_account(transaction: &TransactionWithAccount) -> Decimal {
-        if transaction.amount < Decimal::ZERO {
-            -transaction.amount
-        } else {
-            transaction.amount
+        if Self::is_spending_excluded_category(&Self::get_effective_category_name(transaction)) {
+            return Decimal::ZERO;
         }
+        if Self::is_spending_excluded_merchant(transaction.merchant_name.as_deref()) {
+            return Decimal::ZERO;
+        }
+
+        let provider = transaction.provider.as_deref().unwrap_or("plaid");
+        let account_type = transaction.account_type.to_lowercase();
+
+        if provider == "teller" {
+            if account_type == "credit" {
+                return (-transaction.amount).max(Decimal::ZERO);
+            }
+
+            if matches!(account_type.as_str(), "depository" | "checking" | "savings") {
+                return transaction.amount.max(Decimal::ZERO);
+            }
+        }
+
+        transaction.amount.max(Decimal::ZERO)
     }
 
     pub fn sum_spending_transactions_with_account(

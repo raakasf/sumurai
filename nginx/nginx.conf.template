@@ -91,8 +91,16 @@ http {
             proxy_pass http://backend_upstream;
         }
 
+        location /_next/static/ {
+            add_header Cache-Control "public, max-age=31536000, immutable" always;
+            proxy_pass http://frontend_upstream;
+        }
+
         # Default: frontend SPA
         location / {
+            add_header Cache-Control "no-store, no-cache, must-revalidate, proxy-revalidate" always;
+            add_header Pragma "no-cache" always;
+            add_header Expires "0" always;
             proxy_pass http://frontend_upstream;
         }
     }
