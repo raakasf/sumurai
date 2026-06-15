@@ -236,10 +236,7 @@ pub fn create_app(state: AppState) -> Router {
             "/api/providers/accounts",
             get(get_authenticated_plaid_accounts),
         )
-        .route(
-            "/api/currency/rate",
-            get(get_authenticated_currency_rate),
-        )
+        .route("/api/currency/rate", get(get_authenticated_currency_rate))
         .route(
             "/api/plaid/link-token",
             post(create_authenticated_link_token),
@@ -340,7 +337,10 @@ pub fn create_app(state: AppState) -> Router {
             delete(remove_authenticated_transaction_category),
         )
         .route("/api/category-rules", get(get_authenticated_category_rules))
-        .route("/api/category-rules", post(create_authenticated_category_rule))
+        .route(
+            "/api/category-rules",
+            post(create_authenticated_category_rule),
+        )
         .route(
             "/api/category-rules/{id}",
             put(update_authenticated_category_rule),
@@ -933,12 +933,22 @@ async fn get_authenticated_transactions(
     let TransactionsQuery {
         search,
         account_ids,
+        start_date,
+        end_date,
     } = query;
     let account_ids_params = account_ids;
+    let start_date = start_date
+        .as_deref()
+        .and_then(|s| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok());
+    let end_date = end_date
+        .as_deref()
+        .and_then(|s| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok());
 
     tracing::info!(
         account_ids = ?account_ids_params,
         search = ?search,
+        start_date = ?start_date,
+        end_date = ?end_date,
         "Transactions query params"
     );
 
@@ -972,6 +982,12 @@ async fn get_authenticated_transactions(
                 let account_id_set: std::collections::HashSet<Uuid> =
                     account_ids.into_iter().collect();
                 transactions.retain(|t| account_id_set.contains(&t.account_id));
+            }
+            if let Some(start) = start_date {
+                transactions.retain(|t| t.date >= start);
+            }
+            if let Some(end) = end_date {
+                transactions.retain(|t| t.date <= end);
             }
 
             // Apply glob rules to transactions that have no explicit override.
@@ -1264,7 +1280,11 @@ async fn get_authenticated_currency_rate(
         .json::<FrankfurterLatestResponse>()
         .await
         .map_err(|e| {
-            tracing::error!("Failed to parse currency rate response for {}: {}", currency, e);
+            tracing::error!(
+                "Failed to parse currency rate response for {}: {}",
+                currency,
+                e
+            );
             StatusCode::BAD_GATEWAY
         })?;
 
@@ -1661,11 +1681,13 @@ async fn delete_authenticated_manual_investment_account(
     request_body = SyncTransactionsRequest,
     responses(
         (status = 200, description = "Transactions synced successfully", body = SyncTransactionsResponse),
-        (status = 400, description = "Missing connection_id"),
+        (status = 400, description = "Missing connection_id", body = ApiErrorResponse),
         (status = 401, description = "Unauthorized"),
-        (status = 404, description = "Connection not found or credentials missing"),
-        (status = 502, description = "Provider request failed"),
-        (status = 500, description = "Internal server error"),
+        (status = 404, description = "Connection not found or credentials missing", body = ApiErrorResponse),
+        (status = 409, description = "Provider connection requires user action", body = ApiErrorResponse),
+        (status = 429, description = "Provider rate limit exceeded", body = ApiErrorResponse),
+        (status = 502, description = "Provider request failed", body = ApiErrorResponse),
+        (status = 500, description = "Internal server error", body = ApiErrorResponse),
     ),
     security(("bearer_auth" = [])),
     tag = "Financial Providers"
@@ -1674,20 +1696,34 @@ async fn sync_authenticated_provider_transactions(
     State(state): State<AppState>,
     auth_context: AuthContext,
     Json(req): Json<Option<SyncTransactionsRequest>>,
-) -> Result<Json<SyncTransactionsResponse>, StatusCode> {
+) -> Result<Json<SyncTransactionsResponse>, (StatusCode, Json<ApiErrorResponse>)> {
     let user_id = auth_context.user_id;
 
     tracing::info!("Sync transactions requested for user {}", user_id);
+
+    let error_response = |status: StatusCode, error: &str, message: &str| {
+        ApiErrorResponse::new(error, message).into_response(status)
+    };
 
     let connection_id_str = req
         .as_ref()
         .and_then(|r| r.connection_id.as_ref())
         .ok_or_else(|| {
             tracing::error!("connection_id is required for sync");
-            StatusCode::BAD_REQUEST
+            error_response(
+                StatusCode::BAD_REQUEST,
+                "BAD_REQUEST",
+                "connection_id is required for sync",
+            )
         })?;
 
-    let connection_id = Uuid::parse_str(connection_id_str).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let connection_id = Uuid::parse_str(connection_id_str).map_err(|_| {
+        error_response(
+            StatusCode::BAD_REQUEST,
+            "BAD_REQUEST",
+            "Invalid connection_id",
+        )
+    })?;
 
     let mut connection = match state
         .db_repository
@@ -1701,15 +1737,27 @@ async fn sync_authenticated_provider_transactions(
                 connection_id,
                 user_id
             );
-            return Err(StatusCode::NOT_FOUND);
+            return Err(error_response(
+                StatusCode::NOT_FOUND,
+                "NOT_FOUND",
+                "Connection not found",
+            ));
         }
         Err(e) => {
             tracing::error!("Failed to get connection {}: {}", connection_id, e);
-            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+            return Err(ApiErrorResponse::internal_server_error(
+                "Failed to load connection",
+            ));
         }
     };
 
     let connection_provider = provider_for_connection(&connection.item_id);
+    let connection_label = connection
+        .institution_name
+        .as_deref()
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or("this Teller connection")
+        .to_string();
 
     if connection_provider == "teller" {
         match state
@@ -1724,7 +1772,11 @@ async fn sync_authenticated_provider_transactions(
                     user_id,
                     connection.item_id
                 );
-                return Err(StatusCode::NOT_FOUND);
+                return Err(error_response(
+                    StatusCode::NOT_FOUND,
+                    "NOT_FOUND",
+                    "No Teller credentials found for this connection",
+                ));
             }
             Err(TellerSyncError::CredentialAccess(e)) => {
                 tracing::error!(
@@ -1733,15 +1785,49 @@ async fn sync_authenticated_provider_transactions(
                     connection.item_id,
                     e
                 );
-                return Err(StatusCode::INTERNAL_SERVER_ERROR);
+                return Err(ApiErrorResponse::internal_server_error(
+                    "Failed to load Teller credentials",
+                ));
             }
             Err(TellerSyncError::ProviderInitialization(e)) => {
                 tracing::error!("Failed to initialize Teller provider: {}", e);
-                return Err(StatusCode::INTERNAL_SERVER_ERROR);
+                return Err(ApiErrorResponse::internal_server_error(
+                    "Failed to initialize Teller provider",
+                ));
             }
             Err(TellerSyncError::ProviderRequest(e)) => {
-                tracing::error!("Teller provider request failed for user {}: {}", user_id, e);
-                return Err(StatusCode::INTERNAL_SERVER_ERROR);
+                tracing::error!(
+                    "Teller provider request failed for user {} connection {} ({}): {}",
+                    user_id,
+                    connection_id,
+                    connection_label,
+                    e
+                );
+                let error_message = e.to_string();
+                if error_message.contains("mfa_required")
+                    || error_message.contains("Enrollment is not healthy")
+                {
+                    return Err(error_response(
+                        StatusCode::CONFLICT,
+                        "TELLER_REAUTH_REQUIRED",
+                        &format!(
+                            "Teller says {} requires MFA re-authentication. Reconnect it with Teller Connect, then sync again.",
+                            connection_label
+                        ),
+                    ));
+                }
+                if error_message.contains("too_many_requests") {
+                    return Err(error_response(
+                        StatusCode::TOO_MANY_REQUESTS,
+                        "TELLER_RATE_LIMITED",
+                        "Teller rate limited this sync. Wait a bit, then try again.",
+                    ));
+                }
+                return Err(error_response(
+                    StatusCode::BAD_GATEWAY,
+                    "PROVIDER_REQUEST_FAILED",
+                    "Teller failed to sync this connection",
+                ));
             }
             Err(TellerSyncError::AccountLookup(e)) => {
                 tracing::error!(
@@ -1749,7 +1835,9 @@ async fn sync_authenticated_provider_transactions(
                     user_id,
                     e
                 );
-                return Err(StatusCode::INTERNAL_SERVER_ERROR);
+                return Err(ApiErrorResponse::internal_server_error(
+                    "Failed to load Teller accounts",
+                ));
             }
             Err(TellerSyncError::TransactionLookup(e)) => {
                 tracing::error!(
@@ -1757,7 +1845,9 @@ async fn sync_authenticated_provider_transactions(
                     user_id,
                     e
                 );
-                return Err(StatusCode::INTERNAL_SERVER_ERROR);
+                return Err(ApiErrorResponse::internal_server_error(
+                    "Failed to load Teller transactions",
+                ));
             }
             Err(TellerSyncError::ConnectionPersistence(e)) => {
                 tracing::error!(
@@ -1766,7 +1856,9 @@ async fn sync_authenticated_provider_transactions(
                     user_id,
                     e
                 );
-                return Err(StatusCode::INTERNAL_SERVER_ERROR);
+                return Err(ApiErrorResponse::internal_server_error(
+                    "Failed to update Teller connection",
+                ));
             }
         }
     }
@@ -1789,7 +1881,11 @@ async fn sync_authenticated_provider_transactions(
                 user_id,
                 connection.item_id
             );
-            Err(StatusCode::NOT_FOUND)
+            Err(error_response(
+                StatusCode::NOT_FOUND,
+                "NOT_FOUND",
+                "No provider credentials found for this connection",
+            ))
         }
         Err(ProviderSyncError::CredentialAccess(e)) => {
             tracing::error!(
@@ -1798,7 +1894,9 @@ async fn sync_authenticated_provider_transactions(
                 connection.item_id,
                 e
             );
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
+            Err(ApiErrorResponse::internal_server_error(
+                "Failed to access provider credentials",
+            ))
         }
         Err(ProviderSyncError::ProviderUnavailable(p)) => {
             tracing::error!(
@@ -1806,7 +1904,11 @@ async fn sync_authenticated_provider_transactions(
                 p,
                 user_id
             );
-            Err(StatusCode::BAD_REQUEST)
+            Err(error_response(
+                StatusCode::BAD_REQUEST,
+                "BAD_REQUEST",
+                "Provider is unavailable for this connection",
+            ))
         }
         Err(ProviderSyncError::ProviderRequest(e)) => {
             tracing::error!(
@@ -1815,7 +1917,11 @@ async fn sync_authenticated_provider_transactions(
                 connection.item_id,
                 e
             );
-            Err(StatusCode::BAD_GATEWAY)
+            Err(error_response(
+                StatusCode::BAD_GATEWAY,
+                "PROVIDER_REQUEST_FAILED",
+                "Provider failed to sync this connection",
+            ))
         }
         Err(ProviderSyncError::AccountLookup(e)) => {
             tracing::error!(
@@ -1824,7 +1930,9 @@ async fn sync_authenticated_provider_transactions(
                 connection.item_id,
                 e
             );
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
+            Err(ApiErrorResponse::internal_server_error(
+                "Failed to load accounts during sync",
+            ))
         }
         Err(ProviderSyncError::TransactionLookup(e)) => {
             tracing::error!(
@@ -1833,7 +1941,9 @@ async fn sync_authenticated_provider_transactions(
                 connection.item_id,
                 e
             );
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
+            Err(ApiErrorResponse::internal_server_error(
+                "Failed to load transactions during sync",
+            ))
         }
         Err(ProviderSyncError::SyncFailure(e)) => {
             tracing::error!(
@@ -1842,7 +1952,9 @@ async fn sync_authenticated_provider_transactions(
                 connection.item_id,
                 e
             );
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
+            Err(ApiErrorResponse::internal_server_error(
+                "Sync service failed",
+            ))
         }
     }
 }
@@ -1946,10 +2058,9 @@ async fn get_authenticated_daily_spending(
         Ok(mut transactions) => {
             apply_category_rules(&mut transactions, &rules);
 
-            let daily_spending =
-                state
-                    .analytics_service
-                    .calculate_daily_spending_with_account(&transactions, year, month);
+            let daily_spending = state
+                .analytics_service
+                .calculate_daily_spending_with_account(&transactions, year, month);
             Ok(Json(daily_spending))
         }
         Err(e) => {
@@ -2225,8 +2336,7 @@ async fn get_authenticated_monthly_totals(
     {
         Ok(mut transactions) => {
             if let Some(ref allowed_ids) = filtered_account_ids {
-                transactions
-                    .retain(|t| allowed_ids.contains(&t.account_id));
+                transactions.retain(|t| allowed_ids.contains(&t.account_id));
             }
             let rules = state
                 .db_repository
@@ -2504,6 +2614,11 @@ async fn connect_authenticated_provider(
                 "provider.connect",
             );
             Err(ApiErrorResponse::new("BAD_REQUEST", "Unsupported provider")
+                .into_response(StatusCode::BAD_REQUEST))
+        }
+        Err(TellerConnectError::InvalidConnection) => {
+            log_provider_credential_outcome("teller", StatusCode::BAD_REQUEST, "provider.connect");
+            Err(ApiErrorResponse::new("BAD_REQUEST", "Connection not found")
                 .into_response(StatusCode::BAD_REQUEST))
         }
         Err(TellerConnectError::CredentialStorage(e)) => {
@@ -3418,7 +3533,8 @@ async fn get_authenticated_net_worth_over_time(
         let mut total = Decimal::ZERO;
         for (account_id, current_signed_balance) in static_current_by_id.iter() {
             if let Some(history) = static_history_by_account.get(account_id) {
-                if let Some((_snapshot_date, snapshot_balance)) = history.range(..=day).next_back() {
+                if let Some((_snapshot_date, snapshot_balance)) = history.range(..=day).next_back()
+                {
                     total += *snapshot_balance;
                 }
             } else {
@@ -3686,7 +3802,9 @@ async fn get_authenticated_user_categories(
         Ok(categories) => Ok(Json(categories)),
         Err(e) => {
             tracing::error!("Failed to get categories for user {}: {}", user_id, e);
-            Err(ApiErrorResponse::internal_server_error("Failed to fetch categories"))
+            Err(ApiErrorResponse::internal_server_error(
+                "Failed to fetch categories",
+            ))
         }
     }
 }
@@ -3733,7 +3851,9 @@ async fn create_authenticated_user_category(
                         .into_response(StatusCode::CONFLICT),
                 )
             } else {
-                Err(ApiErrorResponse::internal_server_error("Failed to create category"))
+                Err(ApiErrorResponse::internal_server_error(
+                    "Failed to create category",
+                ))
             }
         }
     }
@@ -3779,7 +3899,9 @@ async fn delete_authenticated_user_category(
                 user_id,
                 e
             );
-            Err(ApiErrorResponse::internal_server_error("Failed to delete category"))
+            Err(ApiErrorResponse::internal_server_error(
+                "Failed to delete category",
+            ))
         }
     }
 }
@@ -3885,11 +4007,17 @@ async fn get_authenticated_category_rules(
     State(state): State<AppState>,
     auth_context: AuthContext,
 ) -> Result<Json<Vec<CategoryRule>>, (StatusCode, Json<ApiErrorResponse>)> {
-    match state.db_repository.get_category_rules(auth_context.user_id).await {
+    match state
+        .db_repository
+        .get_category_rules(auth_context.user_id)
+        .await
+    {
         Ok(rules) => Ok(Json(rules)),
         Err(e) => {
             tracing::error!("Failed to get category rules: {}", e);
-            Err(ApiErrorResponse::internal_server_error("Failed to fetch category rules"))
+            Err(ApiErrorResponse::internal_server_error(
+                "Failed to fetch category rules",
+            ))
         }
     }
 }
@@ -3904,10 +4032,11 @@ async fn create_authenticated_category_rule(
     let category_name = req.category_name.trim().to_string();
     tracing::info!(user_id = %user_id, pattern = %pattern, category_name = %category_name, "create_category_rule called");
     if pattern.is_empty() || category_name.is_empty() {
-        return Err(
-            ApiErrorResponse::new("BAD_REQUEST", "Pattern and category name must not be empty")
-                .into_response(StatusCode::BAD_REQUEST),
-        );
+        return Err(ApiErrorResponse::new(
+            "BAD_REQUEST",
+            "Pattern and category name must not be empty",
+        )
+        .into_response(StatusCode::BAD_REQUEST));
     }
     match state
         .db_repository
@@ -3923,7 +4052,9 @@ async fn create_authenticated_category_rule(
                         .into_response(StatusCode::CONFLICT),
                 )
             } else {
-                Err(ApiErrorResponse::internal_server_error("Failed to create category rule"))
+                Err(ApiErrorResponse::internal_server_error(
+                    "Failed to create category rule",
+                ))
             }
         }
     }
@@ -3945,19 +4076,30 @@ async fn update_authenticated_category_rule(
         .update_category_rule(
             rule_uuid,
             user_id,
-            req.pattern.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
-            req.category_name.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
+            req.pattern
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
+            req.category_name
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
         )
         .await
     {
         Ok(rule) => Ok(Json(rule)),
         Err(e) => {
-            tracing::error!("Failed to update rule {} for user {}: {}", rule_id, user_id, e);
+            tracing::error!(
+                "Failed to update rule {} for user {}: {}",
+                rule_id,
+                user_id,
+                e
+            );
             if e.to_string().contains("not found") {
                 Err(ApiErrorResponse::new("NOT_FOUND", "Rule not found")
                     .into_response(StatusCode::NOT_FOUND))
             } else {
-                Err(ApiErrorResponse::internal_server_error("Failed to update category rule"))
+                Err(ApiErrorResponse::internal_server_error(
+                    "Failed to update category rule",
+                ))
             }
         }
     }
@@ -3983,8 +4125,15 @@ async fn delete_authenticated_category_rule(
             id: rule_id,
         })),
         Err(e) => {
-            tracing::error!("Failed to delete rule {} for user {}: {}", rule_id, user_id, e);
-            Err(ApiErrorResponse::internal_server_error("Failed to delete category rule"))
+            tracing::error!(
+                "Failed to delete rule {} for user {}: {}",
+                rule_id,
+                user_id,
+                e
+            );
+            Err(ApiErrorResponse::internal_server_error(
+                "Failed to delete category rule",
+            ))
         }
     }
 }

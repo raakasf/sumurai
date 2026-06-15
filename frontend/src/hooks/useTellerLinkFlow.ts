@@ -19,7 +19,7 @@ export interface UseTellerLinkFlowResult {
   error: string | null;
   toast: string | null;
   setToast: (value: string | null) => void;
-  connect: () => Promise<void>;
+  connect: (connectionId?: string) => Promise<void>;
   syncOne: (connectionId: string) => Promise<void>;
   syncAll: () => Promise<void>;
   disconnect: (connectionId: string) => Promise<void>;
@@ -43,7 +43,28 @@ function isRecentlySynced(lastSyncAt: string | null | undefined): boolean {
   return !Number.isNaN(lastSyncTime) && Date.now() - lastSyncTime < tellerSyncCooldownMs;
 }
 
-async function syncTellerConnectionsSequentially(connectionIds: string[]): Promise<number> {
+const getErrorMessage = (error: unknown, fallback: string): string =>
+  error instanceof Error ? error.message : fallback;
+
+const isTellerReauthRequired = (error: unknown): boolean => {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  return (
+    error.message.includes('requires MFA re-authentication') ||
+    error.message.includes('TELLER_REAUTH_REQUIRED')
+  );
+};
+
+interface TellerSyncBatchResult {
+  syncedCount: number;
+  errorMessage: string | null;
+}
+
+async function syncTellerConnectionsSequentially(
+  connectionIds: string[]
+): Promise<TellerSyncBatchResult> {
   let syncedCount = 0;
 
   for (const [index, connectionId] of connectionIds.entries()) {
@@ -56,11 +77,14 @@ async function syncTellerConnectionsSequentially(connectionIds: string[]): Promi
       syncedCount += 1;
     } catch (error) {
       console.warn('Failed to sync Teller connection', connectionId, error);
-      break;
+      return {
+        syncedCount,
+        errorMessage: getErrorMessage(error, 'Failed to sync Teller connections'),
+      };
     }
   }
 
-  return syncedCount;
+  return { syncedCount, errorMessage: null };
 }
 
 export function useTellerLinkFlow(options: UseTellerLinkFlowOptions): UseTellerLinkFlowResult {
@@ -73,6 +97,7 @@ export function useTellerLinkFlow(options: UseTellerLinkFlowOptions): UseTellerL
   const [syncingAll, setSyncingAll] = useState(false);
   const retryTimeoutRef = useRef<number | null>(null);
   const retryAttemptsRef = useRef(0);
+  const pendingReauthConnectionIdRef = useRef<string | null>(null);
 
   const handleError = useCallback(
     (message: string) => {
@@ -263,10 +288,31 @@ export function useTellerLinkFlow(options: UseTellerLinkFlowOptions): UseTellerL
     };
   }, []);
 
+  const handleConnected = useCallback(async () => {
+    const pendingReauthConnectionId = pendingReauthConnectionIdRef.current;
+    pendingReauthConnectionIdRef.current = null;
+
+    if (!pendingReauthConnectionId) {
+      await loadConnectionsWithRetry();
+      return;
+    }
+
+    try {
+      setToast('Teller reconnected. Syncing updated connection...');
+      await TellerService.syncTransactions(pendingReauthConnectionId);
+      await loadConnections();
+      setToast('Teller connection reauthenticated and synced');
+    } catch (error) {
+      console.warn('Failed to sync Teller connection after reauth', pendingReauthConnectionId, error);
+      handleError(getErrorMessage(error, 'Teller reconnected, but sync still failed'));
+      await loadConnectionsWithRetry();
+    }
+  }, [handleError, loadConnections, loadConnectionsWithRetry]);
+
   const { ready, open } = useTellerConnect({
     applicationId: enabled ? (applicationId ?? '') : '',
     environment,
-    onConnected: enabled ? loadConnectionsWithRetry : undefined,
+    onConnected: enabled ? handleConnected : undefined,
   });
 
   useEffect(() => {
@@ -282,7 +328,7 @@ export function useTellerLinkFlow(options: UseTellerLinkFlowOptions): UseTellerL
     void loadConnections();
   }, [applicationId, enabled, loadConnections, handleError, clearError]);
 
-  const connect = useCallback(async () => {
+  const connect = useCallback(async (connectionId?: string) => {
     clearError();
     if (!enabled) {
       return;
@@ -295,7 +341,7 @@ export function useTellerLinkFlow(options: UseTellerLinkFlowOptions): UseTellerL
     if (!ready) {
       setToast('Preparing Teller Connect...');
     }
-    open();
+    open(connectionId);
   }, [applicationId, clearError, handleError, open, ready, enabled]);
 
   const syncOne = useCallback(
@@ -311,10 +357,16 @@ export function useTellerLinkFlow(options: UseTellerLinkFlowOptions): UseTellerL
         setToast('Sync started for Teller connection');
       } catch (err) {
         console.warn('Failed to sync Teller connection', err);
-        handleError('Failed to sync Teller connection');
+        if (isTellerReauthRequired(err)) {
+          pendingReauthConnectionIdRef.current = connectionId;
+          setToast('Teller needs MFA. Opening Teller Connect...');
+          open(connectionId);
+          return;
+        }
+        handleError(getErrorMessage(err, 'Failed to sync Teller connection'));
       }
     },
-    [clearError, loadConnections, handleError, enabled]
+    [clearError, loadConnections, handleError, open, enabled]
   );
 
   const syncAll = useCallback(async () => {
@@ -339,14 +391,14 @@ export function useTellerLinkFlow(options: UseTellerLinkFlowOptions): UseTellerL
         return;
       }
 
-      const syncedCount = await syncTellerConnectionsSequentially(ids);
+      const { syncedCount, errorMessage } = await syncTellerConnectionsSequentially(ids);
       await loadConnections();
       if (syncedCount === ids.length) {
         setToast('Sync started for all Teller connections');
       } else if (syncedCount > 0) {
-        setToast('Some Teller connections synced; retry later for the rest');
+        setToast(errorMessage ?? 'Some Teller connections synced; retry later for the rest');
       } else {
-        handleError('Failed to sync Teller connections');
+        handleError(errorMessage ?? 'Failed to sync Teller connections');
       }
     } catch (err) {
       console.warn('Failed to sync Teller connections', err);
@@ -369,7 +421,9 @@ export function useTellerLinkFlow(options: UseTellerLinkFlowOptions): UseTellerL
         setToast('Disconnected Teller connection');
       } catch (err) {
         console.warn('Failed to disconnect Teller connection', err);
-        handleError('Failed to disconnect Teller connection');
+        const message = getErrorMessage(err, 'Failed to disconnect Teller connection');
+        handleError(message);
+        throw err;
       }
     },
     [clearError, loadConnections, handleError, enabled]

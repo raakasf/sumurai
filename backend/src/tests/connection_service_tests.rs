@@ -31,15 +31,27 @@ async fn given_connection_id_when_disconnect_then_disconnects_specific_connectio
 
     mock_db
         .expect_delete_provider_transactions()
-        .returning(|_| Box::pin(async { Ok(10) }));
+        .with(
+            mockall::predicate::eq(user_id),
+            mockall::predicate::eq("item_123".to_string()),
+        )
+        .returning(|_, _| Box::pin(async { Ok(10) }));
 
     mock_db
         .expect_delete_provider_accounts()
-        .returning(|_| Box::pin(async { Ok(2) }));
+        .with(
+            mockall::predicate::eq(user_id),
+            mockall::predicate::eq("item_123".to_string()),
+        )
+        .returning(|_, _| Box::pin(async { Ok(2) }));
 
     mock_db
         .expect_delete_provider_credentials()
-        .returning(|_| Box::pin(async { Ok(()) }));
+        .with(
+            mockall::predicate::eq(user_id),
+            mockall::predicate::eq("item_123".to_string()),
+        )
+        .returning(|_, _| Box::pin(async { Ok(()) }));
 
     mock_db
         .expect_delete_provider_connection()

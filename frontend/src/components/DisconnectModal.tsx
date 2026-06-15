@@ -27,6 +27,7 @@ interface DisconnectModalProps {
   onConfirm: () => void;
   onCancel: () => void;
   loading?: boolean;
+  error?: string | null;
 }
 
 export const DisconnectModal: React.FC<DisconnectModalProps> = ({
@@ -35,12 +36,19 @@ export const DisconnectModal: React.FC<DisconnectModalProps> = ({
   onConfirm,
   onCancel,
   loading = false,
+  error,
 }) => {
   const accountCount = bank.accounts.length;
   const accountText = accountCount === 1 ? '1 account' : `${accountCount} accounts`;
 
   return (
-    <Modal isOpen={isOpen} onClose={onCancel} labelledBy="disconnect-modal-title" size="md">
+    <Modal
+      isOpen={isOpen}
+      onClose={onCancel}
+      labelledBy="disconnect-modal-title"
+      size="md"
+      preventCloseOnBackdrop
+    >
       <GlassCard
         variant="accent"
         rounded="xl"
@@ -60,6 +68,12 @@ export const DisconnectModal: React.FC<DisconnectModalProps> = ({
             cannot be undone.
           </p>
         </Alert>
+
+        {error && (
+          <Alert variant="error" title="Disconnect failed" className="text-left">
+            <p className={cn('text-sm', 'text-slate-600', 'dark:text-slate-300')}>{error}</p>
+          </Alert>
+        )}
 
         <div className={cn('flex', 'justify-end', 'gap-3')}>
           <Button type="button" variant="secondary" onClick={onCancel} disabled={loading}>

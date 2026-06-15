@@ -1,10 +1,9 @@
 import { AnimatePresence, motion } from 'framer-motion';
-import { ChevronDown, MoreVertical, RefreshCw, Unlink } from 'lucide-react';
+import { ChevronDown, KeyRound, RefreshCw, Unlink } from 'lucide-react';
 import type React from 'react';
 import { useMemo, useState } from 'react';
-import { Button, cn, GlassCard, MenuDropdown, MenuItem } from '../ui/primitives';
+import { Button, cn, GlassCard } from '../ui/primitives';
 import { AccountRow } from './AccountRow';
-import { DisconnectModal } from './DisconnectModal';
 import { StatusPill } from './StatusPill';
 
 interface Account {
@@ -28,7 +27,8 @@ interface BankConnection {
 interface BankCardProps {
   bank: BankConnection;
   onSync: (id: string) => Promise<void>;
-  onDisconnect: (id: string) => Promise<void>;
+  onDisconnectClick: (bank: BankConnection) => void;
+  onReconnect?: (id: string) => Promise<void>;
   onAccountSelect?: (accountId: string) => void;
 }
 
@@ -45,31 +45,17 @@ const relativeTime = (iso?: string) => {
   return `${days}d ago`;
 };
 
-const CardMenu: React.FC<{
-  onDisconnect: () => void;
-}> = ({ onDisconnect }) => {
-  return (
-    <MenuDropdown
-      trigger={
-        <Button variant="icon" size="icon" aria-label="more">
-          <MoreVertical className={cn('h-5', 'w-5')} />
-        </Button>
-      }
-    >
-      <MenuItem icon={<Unlink className={cn('h-4', 'w-4')} />} onClick={onDisconnect}>
-        Disconnect
-      </MenuItem>
-    </MenuDropdown>
-  );
-};
-
-export const BankCard: React.FC<BankCardProps> = ({ bank, onSync, onDisconnect, onAccountSelect }) => {
+export const BankCard: React.FC<BankCardProps> = ({
+  bank,
+  onSync,
+  onDisconnectClick,
+  onReconnect,
+  onAccountSelect,
+}) => {
   const sectionBadgeClass = 'text-xs font-semibold text-slate-600 dark:text-slate-200';
 
   const [expanded, setExpanded] = useState(true);
   const [loading, setLoading] = useState(false);
-  const [showDisconnectModal, setShowDisconnectModal] = useState(false);
-  const [disconnectLoading, setDisconnectLoading] = useState(false);
 
   const Avatar = useMemo(
     () => (
@@ -95,23 +81,21 @@ export const BankCard: React.FC<BankCardProps> = ({ bank, onSync, onDisconnect, 
 
   const handleSync = async () => {
     setLoading(true);
-    await onSync(bank.id);
-    setLoading(false);
+    try {
+      await onSync(bank.id);
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const handleDisconnectClick = () => {
-    setShowDisconnectModal(true);
-  };
-
-  const handleDisconnectCancel = () => {
-    setShowDisconnectModal(false);
-  };
-
-  const handleDisconnectConfirm = async () => {
-    setDisconnectLoading(true);
-    await onDisconnect(bank.id);
-    setDisconnectLoading(false);
-    setShowDisconnectModal(false);
+  const handleReconnect = async () => {
+    if (!onReconnect) return;
+    setLoading(true);
+    try {
+      await onReconnect(bank.id);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const renderGroup = (title: string, accounts: Account[]) => (
@@ -161,7 +145,13 @@ export const BankCard: React.FC<BankCardProps> = ({ bank, onSync, onDisconnect, 
             </div>
           </div>
         </div>
-        <div className={cn('flex', 'items-center', 'gap-2')}>
+        <div className={cn('flex', 'flex-wrap', 'items-center', 'gap-2', 'md:justify-end')}>
+          {onReconnect && (
+            <Button onClick={handleReconnect} disabled={loading} variant="secondary">
+              <KeyRound className={cn('h-4 w-4')} />
+              Reconnect
+            </Button>
+          )}
           <Button onClick={handleSync} disabled={loading} variant="secondary">
             <RefreshCw className={cn('h-4 w-4', loading && 'animate-spin')} />
             Sync now
@@ -170,7 +160,10 @@ export const BankCard: React.FC<BankCardProps> = ({ bank, onSync, onDisconnect, 
             <ChevronDown className={cn('h-4 w-4', expanded && 'rotate-180')} />
             {expanded ? 'Hide' : 'Show'}
           </Button>
-          <CardMenu onDisconnect={handleDisconnectClick} />
+          <Button onClick={() => onDisconnectClick(bank)} variant="danger">
+            <Unlink className={cn('h-4 w-4')} />
+            Disconnect
+          </Button>
         </div>
       </div>
 
@@ -225,13 +218,6 @@ export const BankCard: React.FC<BankCardProps> = ({ bank, onSync, onDisconnect, 
         )}
       </AnimatePresence>
 
-      <DisconnectModal
-        isOpen={showDisconnectModal}
-        bank={bank}
-        onConfirm={handleDisconnectConfirm}
-        onCancel={handleDisconnectCancel}
-        loading={disconnectLoading}
-      />
     </GlassCard>
   );
 };

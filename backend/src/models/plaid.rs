@@ -66,6 +66,7 @@ pub struct ProviderConnectRequest {
     pub access_token: String,
     pub enrollment_id: String,
     pub institution_name: Option<String>,
+    pub connection_id: Option<String>,
 }
 
 #[derive(Deserialize, Serialize, ToSchema)]

@@ -38,6 +38,24 @@ fn create_test_transaction_with_account(
     category_primary: &str,
     custom_category: Option<&str>,
 ) -> TransactionWithAccount {
+    create_test_transaction_with_account_details(
+        amount,
+        date,
+        category_primary,
+        custom_category,
+        "plaid",
+        "depository",
+    )
+}
+
+fn create_test_transaction_with_account_details(
+    amount: Decimal,
+    date: NaiveDate,
+    category_primary: &str,
+    custom_category: Option<&str>,
+    provider: &str,
+    account_type: &str,
+) -> TransactionWithAccount {
     use chrono::Utc;
     use uuid::Uuid;
 
@@ -57,9 +75,9 @@ fn create_test_transaction_with_account(
         pending: false,
         created_at: Some(Utc::now()),
         account_name: "Test Account".to_string(),
-        account_type: "depository".to_string(),
+        account_type: account_type.to_string(),
         account_mask: Some("1234".to_string()),
-        provider: Some("plaid".to_string()),
+        provider: Some(provider.to_string()),
         custom_category: custom_category.map(str::to_string),
         rule_category: None,
     }
@@ -424,7 +442,11 @@ fn given_transactions_when_calculating_category_trends_then_groups_effective_cat
             "Shops",
             Some("Home Improvement"),
         ),
-        rule_category,
+        TransactionWithAccount {
+            provider: Some("teller".to_string()),
+            account_type: "credit".to_string(),
+            ..rule_category
+        },
         create_test_transaction_with_account(
             dec!(300.00),
             NaiveDate::from_ymd_opt(2024, 2, 21).unwrap(),
@@ -640,11 +662,13 @@ fn given_effective_credit_card_bill_category_when_grouping_then_excludes_from_ca
 #[test]
 fn given_negative_spending_transactions_when_grouping_then_uses_absolute_amounts() {
     let txns = vec![
-        create_test_transaction_with_account(
+        create_test_transaction_with_account_details(
             dec!(-25.00),
             NaiveDate::from_ymd_opt(2024, 3, 5).unwrap(),
             "GENERAL_MERCHANDISE",
             Some("Medical"),
+            "teller",
+            "credit",
         ),
         create_test_transaction_with_account(
             dec!(500.00),
@@ -689,19 +713,81 @@ fn given_effective_credit_card_bill_category_when_summing_spending_then_excludes
 }
 
 #[test]
-fn given_negative_spending_transactions_when_summing_then_uses_absolute_amounts() {
+fn given_investment_category_when_summing_spending_then_excludes_from_total() {
     let txns = vec![
         create_test_transaction_with_account(
+            dec!(60.00),
+            NaiveDate::from_ymd_opt(2024, 3, 5).unwrap(),
+            "Food",
+            None,
+        ),
+        create_test_transaction_with_account(
+            dec!(100.00),
+            NaiveDate::from_ymd_opt(2024, 3, 6).unwrap(),
+            "Investment",
+            None,
+        ),
+    ];
+
+    let total = AnalyticsService::sum_spending_transactions_with_account(
+        &txns,
+        Some(NaiveDate::from_ymd_opt(2024, 3, 1).unwrap()),
+        Some(NaiveDate::from_ymd_opt(2024, 3, 31).unwrap()),
+    );
+
+    assert_eq!(total, dec!(60.00));
+}
+
+#[test]
+fn given_excluded_merchant_prefix_when_summing_spending_then_excludes_from_total() {
+    let mut contribution = create_test_transaction_with_account_details(
+        dec!(100.00),
+        NaiveDate::from_ymd_opt(2024, 3, 6).unwrap(),
+        "Education",
+        None,
+        "teller",
+        "depository",
+    );
+    contribution.merchant_name =
+        Some("MD DIR ACH CONTRIB 030624 000030132816008".to_string());
+
+    let txns = vec![
+        create_test_transaction_with_account(
+            dec!(60.00),
+            NaiveDate::from_ymd_opt(2024, 3, 5).unwrap(),
+            "Food",
+            None,
+        ),
+        contribution,
+    ];
+
+    let total = AnalyticsService::sum_spending_transactions_with_account(
+        &txns,
+        Some(NaiveDate::from_ymd_opt(2024, 3, 1).unwrap()),
+        Some(NaiveDate::from_ymd_opt(2024, 3, 31).unwrap()),
+    );
+
+    assert_eq!(total, dec!(60.00));
+}
+
+#[test]
+fn given_teller_credit_spending_transactions_when_summing_then_uses_absolute_amounts() {
+    let txns = vec![
+        create_test_transaction_with_account_details(
             dec!(-100.00),
             NaiveDate::from_ymd_opt(2024, 3, 5).unwrap(),
             "Home",
             None,
+            "teller",
+            "credit",
         ),
-        create_test_transaction_with_account(
+        create_test_transaction_with_account_details(
             dec!(-30.00),
             NaiveDate::from_ymd_opt(2024, 3, 6).unwrap(),
             "Food",
             None,
+            "teller",
+            "credit",
         ),
         create_test_transaction_with_account(
             dec!(500.00),
@@ -718,6 +804,36 @@ fn given_negative_spending_transactions_when_summing_then_uses_absolute_amounts(
     );
 
     assert_eq!(total, dec!(130.00));
+}
+
+#[test]
+fn given_teller_depository_inflow_when_summing_then_excludes_from_spending() {
+    let txns = vec![
+        create_test_transaction_with_account_details(
+            dec!(100.00),
+            NaiveDate::from_ymd_opt(2024, 3, 5).unwrap(),
+            "Education",
+            None,
+            "teller",
+            "depository",
+        ),
+        create_test_transaction_with_account_details(
+            dec!(-250.00),
+            NaiveDate::from_ymd_opt(2024, 3, 6).unwrap(),
+            "Payroll",
+            None,
+            "teller",
+            "depository",
+        ),
+    ];
+
+    let total = AnalyticsService::sum_spending_transactions_with_account(
+        &txns,
+        Some(NaiveDate::from_ymd_opt(2024, 3, 1).unwrap()),
+        Some(NaiveDate::from_ymd_opt(2024, 3, 31).unwrap()),
+    );
+
+    assert_eq!(total, dec!(100.00));
 }
 
 #[test]
@@ -745,13 +861,16 @@ fn given_effective_credit_card_bill_category_when_calculating_daily_spending_the
 }
 
 #[test]
-fn given_negative_spending_transactions_when_calculating_daily_spending_then_uses_absolute_amounts() {
+fn given_negative_spending_transactions_when_calculating_daily_spending_then_uses_absolute_amounts()
+{
     let analytics = AnalyticsService::new();
-    let txns = vec![create_test_transaction_with_account(
+    let txns = vec![create_test_transaction_with_account_details(
         dec!(-40.00),
         NaiveDate::from_ymd_opt(2024, 3, 5).unwrap(),
         "Food",
         None,
+        "teller",
+        "credit",
     )];
 
     let daily = analytics.calculate_daily_spending_with_account(&txns, 2024, 3);
@@ -809,17 +928,21 @@ fn given_transactions_when_getting_top_merchants_with_date_range_then_filters_an
 fn given_negative_spending_transactions_when_getting_top_merchants_then_uses_absolute_amounts() {
     let analytics = AnalyticsService::new();
     let txns = vec![
-        create_test_transaction_with_account(
+        create_test_transaction_with_account_details(
             dec!(-100.00),
             NaiveDate::from_ymd_opt(2024, 3, 5).unwrap(),
             "Home",
             None,
+            "teller",
+            "credit",
         ),
-        create_test_transaction_with_account(
+        create_test_transaction_with_account_details(
             dec!(-25.00),
             NaiveDate::from_ymd_opt(2024, 3, 6).unwrap(),
             "Home",
             None,
+            "teller",
+            "credit",
         ),
         create_test_transaction_with_account(
             dec!(500.00),

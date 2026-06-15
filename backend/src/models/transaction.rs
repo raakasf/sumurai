@@ -92,6 +92,8 @@ pub struct TransactionWithAccount {
 pub struct TransactionsQuery {
     pub search: Option<String>,
     pub account_ids: Vec<String>,
+    pub start_date: Option<String>,
+    pub end_date: Option<String>,
 }
 
 impl<'de> Deserialize<'de> for TransactionsQuery {
@@ -114,6 +116,8 @@ impl<'de> Deserialize<'de> for TransactionsQuery {
             {
                 let mut search: Option<Option<String>> = None;
                 let mut account_ids: Vec<String> = Vec::new();
+                let mut start_date: Option<Option<String>> = None;
+                let mut end_date: Option<Option<String>> = None;
 
                 while let Some(key) = map.next_key::<String>()? {
                     match key.as_str() {
@@ -127,6 +131,18 @@ impl<'de> Deserialize<'de> for TransactionsQuery {
                             let values: VecOrOne<String> = map.next_value()?;
                             account_ids.extend(values.into_vec());
                         }
+                        "start_date" | "startDate" => {
+                            if start_date.is_some() {
+                                return Err(serde::de::Error::duplicate_field("start_date"));
+                            }
+                            start_date = Some(map.next_value()?);
+                        }
+                        "end_date" | "endDate" => {
+                            if end_date.is_some() {
+                                return Err(serde::de::Error::duplicate_field("end_date"));
+                            }
+                            end_date = Some(map.next_value()?);
+                        }
                         _ => {
                             map.next_value::<IgnoredAny>()?;
                         }
@@ -136,6 +152,8 @@ impl<'de> Deserialize<'de> for TransactionsQuery {
                 Ok(TransactionsQuery {
                     search: search.unwrap_or(None),
                     account_ids,
+                    start_date: start_date.unwrap_or(None),
+                    end_date: end_date.unwrap_or(None),
                 })
             }
         }

@@ -1375,6 +1375,7 @@ const AccountsPage = ({ onError, onAccountSelect }: AccountsPageProps) => {
           onConnect={() => (selectedProvider ? handleConnectProvider(selectedProvider) : connect())}
           onSync={syncOne}
           onDisconnect={disconnect}
+          onReconnect={selectedProvider === 'teller' ? tellerConnect : undefined}
           onAccountSelect={onAccountSelect}
         />
 
