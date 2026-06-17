@@ -1,6 +1,7 @@
-import { ChevronLeftIcon, ChevronRightIcon } from '@heroicons/react/24/outline';
+import { CheckCircleIcon, ChevronLeftIcon, ChevronRightIcon } from '@heroicons/react/24/outline';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Receipt } from 'lucide-react';
+import { useState } from 'react';
 import type React from 'react';
 import { useCurrency } from '@/hooks/useCurrency';
 import { cn, EmptyState } from '@/ui/primitives';
@@ -16,6 +17,8 @@ interface Props {
   totalPages: number;
   onPrev: () => void;
   onNext: () => void;
+  duplicateCandidateIds: string[];
+  onMarkDuplicate: (transactionId: string) => Promise<void>;
   userCategories: UserCategory[];
   onCategorySelect: (transactionId: string, categoryName: string) => Promise<void>;
   onCategoryReset: (transactionId: string) => Promise<void>;
@@ -31,6 +34,8 @@ export const TransactionsTable: React.FC<Props> = ({
   totalPages,
   onPrev,
   onNext,
+  duplicateCandidateIds,
+  onMarkDuplicate,
   userCategories,
   onCategorySelect,
   onCategoryReset,
@@ -39,6 +44,8 @@ export const TransactionsTable: React.FC<Props> = ({
   onCategoryDelete,
 }) => {
   const { format } = useCurrency();
+  const [markingDuplicateId, setMarkingDuplicateId] = useState<string | null>(null);
+  const duplicateCandidates = new Set(duplicateCandidateIds);
 
   const pageSize = items.length > 0 ? Math.ceil(total / totalPages) : 8;
   const from = total === 0 ? 0 : (currentPage - 1) * pageSize + 1;
@@ -153,6 +160,16 @@ export const TransactionsTable: React.FC<Props> = ({
                   {items.map((r, i) => {
                     const overrideType = r.custom_category ? 'explicit' : r.rule_category ? 'rule' : 'none';
                     const displayAmount = getDisplayAmount(r);
+                    const isDuplicateCandidate = duplicateCandidates.has(r.id);
+                    const isMarkingDuplicate = markingDuplicateId === r.id;
+                    const markDuplicate = async () => {
+                      setMarkingDuplicateId(r.id);
+                      try {
+                        await onMarkDuplicate(r.id);
+                      } finally {
+                        setMarkingDuplicateId(null);
+                      }
+                    };
                     return (
                       <tr
                         key={r.id}
@@ -181,19 +198,42 @@ export const TransactionsTable: React.FC<Props> = ({
                           className={cn('truncate', 'px-4', 'py-3', 'align-middle')}
                           title={r.name || r.merchant || '-'}
                         >
-                          <span
-                            className={cn(
-                              'block',
-                              'truncate',
-                              'font-medium',
-                              'text-slate-900',
-                              'transition-colors',
-                              'duration-500',
-                              'dark:text-white'
+                          <div className={cn('flex', 'min-w-0', 'items-center', 'gap-2')}>
+                            <span
+                              className={cn(
+                                'block',
+                                'min-w-0',
+                                'truncate',
+                                'font-medium',
+                                'text-slate-900',
+                                'transition-colors',
+                                'duration-500',
+                                'dark:text-white'
+                              )}
+                            >
+                              {r.name || r.merchant || '-'}
+                            </span>
+                            {isDuplicateCandidate && (
+                              <span
+                                className={cn(
+                                  'flex-shrink-0',
+                                  'rounded-full',
+                                  'bg-amber-100',
+                                  'px-2',
+                                  'py-0.5',
+                                  'text-[0.65rem]',
+                                  'font-semibold',
+                                  'uppercase',
+                                  'tracking-[0.16em]',
+                                  'text-amber-700',
+                                  'dark:bg-amber-400/15',
+                                  'dark:text-amber-200'
+                                )}
+                              >
+                                Review
+                              </span>
                             )}
-                          >
-                            {r.name || r.merchant || '-'}
-                          </span>
+                          </div>
                         </td>
                         <td
                           className={`whitespace-nowrap px-4 py-3 text-right align-middle tabular-nums font-semibold transition-colors duration-500 ${
@@ -233,17 +273,56 @@ export const TransactionsTable: React.FC<Props> = ({
                           </span>
                         </td>
                         <td className={cn('whitespace-nowrap', 'px-4', 'py-3', 'align-middle')}>
-                          <CategoryDropdown
-                            currentCategory={r.category?.primary ?? 'OTHER'}
-                            overrideType={overrideType}
-                            merchantName={r.merchant || r.name}
-                            userCategories={userCategories}
-                            onSelect={(name) => onCategorySelect(r.id, name)}
-                            onReset={() => onCategoryReset(r.id)}
-                            onCreateAndSelect={(name) => onCategoryCreate(r.id, name)}
-                            onCreateRule={(pattern, categoryName) => onCategoryRule(r.id, pattern, categoryName)}
-                            onDeleteCategory={onCategoryDelete}
-                          />
+                          <div className={cn('flex', 'items-center', 'gap-2')}>
+                            <CategoryDropdown
+                              currentCategory={r.category?.primary ?? 'OTHER'}
+                              overrideType={overrideType}
+                              merchantName={r.merchant || r.name}
+                              userCategories={userCategories}
+                              onSelect={(name) => onCategorySelect(r.id, name)}
+                              onReset={() => onCategoryReset(r.id)}
+                              onCreateAndSelect={(name) => onCategoryCreate(r.id, name)}
+                              onCreateRule={(pattern, categoryName) => onCategoryRule(r.id, pattern, categoryName)}
+                              onDeleteCategory={onCategoryDelete}
+                            />
+                            {isDuplicateCandidate && (
+                              <button
+                                type="button"
+                                onClick={markDuplicate}
+                                disabled={isMarkingDuplicate}
+                                className={cn(
+                                  'inline-flex',
+                                  'h-8',
+                                  'w-8',
+                                  'flex-shrink-0',
+                                  'items-center',
+                                  'justify-center',
+                                  'rounded-full',
+                                  'border',
+                                  'border-amber-200',
+                                  'bg-amber-50',
+                                  'text-amber-700',
+                                  'transition-all',
+                                  'duration-150',
+                                  'hover:-translate-y-[1px]',
+                                  'hover:bg-amber-100',
+                                  'focus-visible:outline-none',
+                                  'focus-visible:ring-2',
+                                  'focus-visible:ring-amber-300',
+                                  'disabled:cursor-wait',
+                                  'disabled:opacity-60',
+                                  'dark:border-amber-300/20',
+                                  'dark:bg-amber-400/10',
+                                  'dark:text-amber-200',
+                                  'dark:hover:bg-amber-400/15'
+                                )}
+                                aria-label="Mark as duplicate"
+                                title="Mark as duplicate"
+                              >
+                                <CheckCircleIcon className={cn('h-4', 'w-4')} />
+                              </button>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     );

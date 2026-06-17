@@ -41,8 +41,10 @@ export interface UseTransactionsResult {
   pageItems: Transaction[];
   totalItems: number;
   totalPages: number;
+  duplicateCandidateIds: string[];
   // category management
   userCategories: UserCategory[];
+  markTransactionDuplicate: (transactionId: string) => Promise<void>;
   updateTransactionCategory: (transactionId: string, categoryName: string) => Promise<void>;
   resetTransactionCategory: (transactionId: string) => Promise<void>;
   createCategoryAndAssign: (transactionId: string, name: string) => Promise<void>;
@@ -188,7 +190,7 @@ export function useTransactions(options: UseTransactionsOptions = {}): UseTransa
   );
 
   const createCategoryRule = useCallback(
-    async (transactionId: string, pattern: string, categoryName: string) => {
+    async (_transactionId: string, pattern: string, categoryName: string) => {
       await CategoryService.createRule(pattern, categoryName);
       // Reload so glob matching is re-applied server-side for all transactions
       await load();
@@ -205,6 +207,11 @@ export function useTransactions(options: UseTransactionsOptions = {}): UseTransa
     },
     [load]
   );
+
+  const markTransactionDuplicate = useCallback(async (transactionId: string) => {
+    await TransactionService.markDuplicate(transactionId);
+    setAll((prev) => prev.filter((t) => t.id !== transactionId));
+  }, []);
 
   const debouncedSearch = useDebounce(search, 300);
 
@@ -266,6 +273,29 @@ export function useTransactions(options: UseTransactionsOptions = {}): UseTransa
 
   const totalItems = filtered.length;
   const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
+  const duplicateCandidateIds = useMemo(() => {
+    const candidateIds = new Set<string>();
+
+    for (const transaction of filtered) {
+      const amount = Number(transaction.amount);
+      if (!transaction.account_id || amount === 0) {
+        continue;
+      }
+
+      const hasPostedMatch = filtered.some((candidate) => {
+        if (candidate.id === transaction.id || candidate.pending) {
+          return false;
+        }
+        return areDuplicateCandidates(transaction, candidate);
+      });
+
+      if (transaction.pending && hasPostedMatch) {
+        candidateIds.add(transaction.id);
+      }
+    }
+
+    return Array.from(candidateIds);
+  }, [filtered]);
   const start = (currentPage - 1) * pageSize;
   const pageItems = useMemo(() => {
     return filtered.slice(start, start + pageSize);
@@ -299,13 +329,49 @@ export function useTransactions(options: UseTransactionsOptions = {}): UseTransa
     pageItems,
     totalItems,
     totalPages,
+    duplicateCandidateIds,
     userCategories,
+    markTransactionDuplicate,
     updateTransactionCategory,
     resetTransactionCategory,
     createCategoryAndAssign,
     createCategoryRule,
     deleteUserCategory,
   };
+}
+
+function areDuplicateCandidates(a: Transaction, b: Transaction): boolean {
+  const amountA = Number(a.amount);
+  const amountB = Number(b.amount);
+
+  return (
+    Boolean(a.account_id) &&
+    a.account_id === b.account_id &&
+    amountA !== 0 &&
+    amountA.toFixed(2) === amountB.toFixed(2) &&
+    daysBetween(a.date, b.date) <= 1 &&
+    merchantsLookRelated(a.merchant || a.name, b.merchant || b.name)
+  );
+}
+
+function daysBetween(a: string, b: string): number {
+  const dateA = Date.parse(`${a}T00:00:00Z`);
+  const dateB = Date.parse(`${b}T00:00:00Z`);
+  return Math.abs(dateA - dateB) / 86_400_000;
+}
+
+function merchantsLookRelated(a: string | undefined, b: string | undefined): boolean {
+  const merchantA = normalizeMerchant(a);
+  const merchantB = normalizeMerchant(b);
+  return (
+    merchantA.length > 0 &&
+    merchantB.length > 0 &&
+    (merchantA === merchantB || merchantA.includes(merchantB) || merchantB.includes(merchantA))
+  );
+}
+
+function normalizeMerchant(value: string | undefined): string {
+  return (value ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '');
 }
 
 function useDebounce<T>(value: T, delay = 300): T {

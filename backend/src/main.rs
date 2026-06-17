@@ -19,6 +19,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tower::ServiceBuilder;
 use tower_http::cors::CorsLayer;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 #[allow(unused_imports)]
@@ -335,6 +336,10 @@ pub fn create_app(state: AppState) -> Router {
         .route(
             "/api/transactions/{id}/category",
             delete(remove_authenticated_transaction_category),
+        )
+        .route(
+            "/api/transactions/{id}/duplicate",
+            put(mark_authenticated_transaction_duplicate),
         )
         .route("/api/category-rules", get(get_authenticated_category_rules))
         .route(
@@ -1040,6 +1045,52 @@ async fn get_authenticated_transactions(
         Err(_) => {
             tracing::info!(record_count = 0, "Data access: transactions");
             Ok(Json(vec![]))
+        }
+    }
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+struct MarkTransactionDuplicateResponse {
+    transaction_id: Uuid,
+    duplicate_of_transaction_id: Uuid,
+}
+
+#[utoipa::path(
+    put,
+    path = "/api/transactions/{id}/duplicate",
+    description = "Marks a likely duplicate transaction as reviewed and excludes it from normal transaction views.",
+    params(("id" = Uuid, Path, description = "Transaction ID to mark as a duplicate")),
+    responses(
+        (status = 200, description = "Transaction marked as duplicate", body = MarkTransactionDuplicateResponse),
+        (status = 400, description = "No matching duplicate candidate"),
+        (status = 401, description = "Unauthorized"),
+        (status = 500, description = "Internal server error"),
+    ),
+    security(("bearer_auth" = [])),
+    tag = "Transactions"
+)]
+async fn mark_authenticated_transaction_duplicate(
+    State(state): State<AppState>,
+    auth_context: AuthContext,
+    Path(transaction_id): Path<Uuid>,
+) -> Result<Json<MarkTransactionDuplicateResponse>, StatusCode> {
+    match state
+        .db_repository
+        .mark_transaction_duplicate(transaction_id, auth_context.user_id)
+        .await
+    {
+        Ok(duplicate_of_transaction_id) => Ok(Json(MarkTransactionDuplicateResponse {
+            transaction_id,
+            duplicate_of_transaction_id,
+        })),
+        Err(e) => {
+            tracing::warn!(
+                transaction_id = %transaction_id,
+                user_id = %auth_context.user_id,
+                error = %e,
+                "Failed to mark transaction as duplicate"
+            );
+            Err(StatusCode::BAD_REQUEST)
         }
     }
 }

@@ -54,7 +54,9 @@ const TransactionsPage: React.FC<TransactionsPageProps> = ({
     pageItems,
     totalItems,
     totalPages,
+    duplicateCandidateIds,
     userCategories,
+    markTransactionDuplicate,
     updateTransactionCategory,
     resetTransactionCategory,
     createCategoryAndAssign,
@@ -422,6 +424,8 @@ const TransactionsPage: React.FC<TransactionsPageProps> = ({
                 totalPages={totalPages}
                 onPrev={() => setCurrentPage(Math.max(1, currentPage - 1))}
                 onNext={() => setCurrentPage(Math.min(totalPages, currentPage + 1))}
+                duplicateCandidateIds={duplicateCandidateIds}
+                onMarkDuplicate={markTransactionDuplicate}
                 userCategories={userCategories}
                 onCategorySelect={updateTransactionCategory}
                 onCategoryReset={resetTransactionCategory}

@@ -21,6 +21,8 @@ const renderTable = (items: Transaction[]) =>
       totalPages={1}
       onPrev={jest.fn()}
       onNext={jest.fn()}
+      duplicateCandidateIds={[]}
+      onMarkDuplicate={jest.fn()}
       userCategories={[]}
       onCategorySelect={jest.fn()}
       onCategoryReset={jest.fn()}

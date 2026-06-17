@@ -42,4 +42,8 @@ export class TransactionService {
 
     return backendTransactions.map((bt) => TransactionTransformer.backendToFrontend(bt));
   }
+
+  static async markDuplicate(transactionId: string): Promise<void> {
+    await ApiClient.put(`/transactions/${transactionId}/duplicate`);
+  }
 }
