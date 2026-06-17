@@ -7,6 +7,7 @@ export interface BackendTransaction {
   date: string;
   merchant_name?: string;
   amount: number;
+  pending?: boolean;
   category_primary?: string;
   category_detailed?: string;
   category_confidence?: string;
@@ -41,6 +42,7 @@ export class TransactionTransformer {
       name: bt.merchant_name || 'Unknown',
       merchant: bt.merchant_name,
       amount: bt.amount,
+      pending: bt.pending,
       category,
       account_name: bt.account_name,
       account_type: bt.account_type,

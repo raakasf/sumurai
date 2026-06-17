@@ -75,6 +75,11 @@ pub trait DatabaseRepository: Send + Sync {
         user_id: &Uuid,
         connection_id: &Uuid,
     ) -> Result<i64>;
+    async fn mark_transaction_duplicate(
+        &self,
+        transaction_id: Uuid,
+        user_id: Uuid,
+    ) -> Result<Uuid>;
     async fn upsert_transaction(&self, transaction: &Transaction) -> Result<()>;
 
     async fn store_provider_credentials_for_user(
@@ -536,6 +541,89 @@ impl DatabaseRepository for PostgresRepository {
 
         tx.commit().await?;
         Ok(merged_count)
+    }
+
+    async fn mark_transaction_duplicate(
+        &self,
+        transaction_id: Uuid,
+        user_id: Uuid,
+    ) -> Result<Uuid> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("SELECT set_config('app.current_user_id', $1, true)")
+            .bind(user_id.to_string())
+            .execute(&mut *tx)
+            .await?;
+
+        let canonical_id = sqlx::query_scalar::<_, Uuid>(
+            r#"
+            WITH selected AS (
+                SELECT
+                    id,
+                    account_id,
+                    amount,
+                    date,
+                    pending,
+                    LOWER(REGEXP_REPLACE(COALESCE(merchant_name, ''), '[^[:alnum:]]+', '', 'g')) AS merchant_key
+                FROM transactions
+                WHERE id = $1
+                  AND user_id = $2
+                  AND duplicate_of_transaction_id IS NULL
+            ),
+            candidate AS (
+                SELECT t.id
+                FROM transactions t
+                INNER JOIN selected s
+                    ON t.account_id = s.account_id
+                    AND t.amount = s.amount
+                    AND ABS(t.date - s.date) <= 1
+                    AND t.id <> s.id
+                    AND t.user_id = $2
+                    AND t.duplicate_of_transaction_id IS NULL
+                    AND s.amount <> 0
+                    AND (s.pending = TRUE OR t.pending = FALSE)
+                ORDER BY
+                    CASE
+                        WHEN s.merchant_key <> ''
+                            AND LOWER(REGEXP_REPLACE(COALESCE(t.merchant_name, ''), '[^[:alnum:]]+', '', 'g')) <> ''
+                            AND (
+                                LOWER(REGEXP_REPLACE(COALESCE(t.merchant_name, ''), '[^[:alnum:]]+', '', 'g')) = s.merchant_key
+                                OR POSITION(s.merchant_key IN LOWER(REGEXP_REPLACE(COALESCE(t.merchant_name, ''), '[^[:alnum:]]+', '', 'g'))) > 0
+                                OR POSITION(LOWER(REGEXP_REPLACE(COALESCE(t.merchant_name, ''), '[^[:alnum:]]+', '', 'g')) IN s.merchant_key) > 0
+                            )
+                        THEN 0
+                        ELSE 1
+                    END,
+                    t.pending ASC,
+                    t.created_at ASC NULLS LAST,
+                    t.id ASC
+                LIMIT 1
+            ),
+            updated AS (
+                UPDATE transactions t
+                SET duplicate_of_transaction_id = candidate.id,
+                    duplicate_reviewed_at = NOW(),
+                    duplicate_reviewed_by = $2
+                FROM candidate
+                WHERE t.id = $1
+                  AND t.user_id = $2
+                RETURNING t.duplicate_of_transaction_id
+            )
+            SELECT duplicate_of_transaction_id FROM updated
+            "#,
+        )
+        .bind(transaction_id)
+        .bind(user_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+
+        canonical_id.ok_or_else(|| {
+            anyhow::anyhow!(
+                "No matching duplicate candidate found for transaction {}",
+                transaction_id
+            )
+        })
     }
 
     async fn create_manual_account(&self, account: &Account) -> Result<Account> {
@@ -1183,6 +1271,7 @@ impl DatabaseRepository for PostgresRepository {
                    category_confidence, payment_channel, pending, created_at
             FROM transactions 
             WHERE user_id = $1
+              AND duplicate_of_transaction_id IS NULL
             ORDER BY date DESC, created_at DESC
             LIMIT 1000
             "#,
@@ -1282,6 +1371,7 @@ impl DatabaseRepository for PostgresRepository {
             LEFT JOIN transaction_category_overrides tco
                 ON t.id = tco.transaction_id AND tco.user_id = $1
             WHERE t.user_id = $1
+              AND t.duplicate_of_transaction_id IS NULL
             ORDER BY t.date DESC, t.created_at DESC
             LIMIT 1000
             "#,
@@ -1354,7 +1444,10 @@ impl DatabaseRepository for PostgresRepository {
                    merchant_name, category_primary, category_detailed,
                    category_confidence, payment_channel, pending, created_at
             FROM transactions 
-            WHERE user_id = $1 AND date >= $2 AND date <= $3
+            WHERE user_id = $1
+              AND date >= $2
+              AND date <= $3
+              AND duplicate_of_transaction_id IS NULL
             ORDER BY date DESC, created_at DESC
             LIMIT 1000
             "#,

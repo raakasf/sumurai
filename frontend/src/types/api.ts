@@ -20,6 +20,7 @@ export interface Transaction {
   name: string;
   merchant?: string;
   amount: number;
+  pending?: boolean;
   category: TransactionCategory;
   account_name: string;
   account_type: string;
