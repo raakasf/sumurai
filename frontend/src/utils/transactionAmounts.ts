@@ -16,13 +16,16 @@ export const getDisplayAmount = (transaction: Transaction): number => {
   return -amount;
 };
 
-const SPENDING_EXCLUDED_MERCHANT_PREFIXES = ['md dir ach contrib'];
+export const getNetSpendingAmount = (transaction: Transaction): number => {
+  if (isSpendingExcludedCategory(transaction.category?.primary)) return 0;
+
+  return -getDisplayAmount(transaction);
+};
 
 export const isSpendingTransaction = (transaction: Transaction): boolean => {
   const displayAmount = getDisplayAmount(transaction);
   if (displayAmount >= 0) return false;
   if (isSpendingExcludedCategory(transaction.category?.primary)) return false;
 
-  const merchant = (transaction.merchant || transaction.name || '').trim().toLowerCase();
-  return !SPENDING_EXCLUDED_MERCHANT_PREFIXES.some((prefix) => merchant.startsWith(prefix));
+  return true;
 };

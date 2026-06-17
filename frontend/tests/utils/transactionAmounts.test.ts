@@ -1,6 +1,10 @@
 import { describe, expect, it } from '@jest/globals';
 import type { Transaction } from '@/types/api';
-import { getDisplayAmount, isSpendingTransaction } from '@/utils/transactionAmounts';
+import {
+  getDisplayAmount,
+  getNetSpendingAmount,
+  isSpendingTransaction,
+} from '@/utils/transactionAmounts';
 
 const transaction = (overrides: Partial<Transaction>): Transaction => ({
   id: 'txn_1',
@@ -41,5 +45,13 @@ describe('transactionAmounts', () => {
 
     expect(getDisplayAmount(payment)).toBe(25);
     expect(isSpendingTransaction(payment)).toBe(false);
+  });
+
+  it('subtracts credit-card refunds from net spending', () => {
+    const tellerRefund = transaction({ amount: 25, account_type: 'credit', provider: 'teller' });
+    const plaidRefund = transaction({ amount: -15, account_type: 'credit', provider: 'plaid' });
+
+    expect(getNetSpendingAmount(tellerRefund)).toBe(-25);
+    expect(getNetSpendingAmount(plaidRefund)).toBe(-15);
   });
 });

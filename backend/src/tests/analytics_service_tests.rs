@@ -670,6 +670,14 @@ fn given_negative_spending_transactions_when_grouping_then_uses_absolute_amounts
             "teller",
             "credit",
         ),
+        create_test_transaction_with_account_details(
+            dec!(5.00),
+            NaiveDate::from_ymd_opt(2024, 3, 6).unwrap(),
+            "GENERAL_MERCHANDISE",
+            Some("Medical"),
+            "teller",
+            "credit",
+        ),
         create_test_transaction_with_account(
             dec!(500.00),
             NaiveDate::from_ymd_opt(2024, 3, 6).unwrap(),
@@ -683,7 +691,7 @@ fn given_negative_spending_transactions_when_grouping_then_uses_absolute_amounts
 
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].name, "Medical");
-    assert_eq!(result[0].value, dec!(25.00));
+    assert_eq!(result[0].value, dec!(20.00));
 }
 
 #[test]
@@ -739,7 +747,7 @@ fn given_investment_category_when_summing_spending_then_excludes_from_total() {
 }
 
 #[test]
-fn given_excluded_merchant_prefix_when_summing_spending_then_excludes_from_total() {
+fn given_education_rule_merchant_when_summing_spending_then_includes_in_total() {
     let mut contribution = create_test_transaction_with_account_details(
         dec!(100.00),
         NaiveDate::from_ymd_opt(2024, 3, 6).unwrap(),
@@ -748,8 +756,7 @@ fn given_excluded_merchant_prefix_when_summing_spending_then_excludes_from_total
         "teller",
         "depository",
     );
-    contribution.merchant_name =
-        Some("MD DIR ACH CONTRIB 030624 000030132816008".to_string());
+    contribution.merchant_name = Some("MD DIR ACH CONTRIB 030624 000030132816008".to_string());
 
     let txns = vec![
         create_test_transaction_with_account(
@@ -767,15 +774,23 @@ fn given_excluded_merchant_prefix_when_summing_spending_then_excludes_from_total
         Some(NaiveDate::from_ymd_opt(2024, 3, 31).unwrap()),
     );
 
-    assert_eq!(total, dec!(60.00));
+    assert_eq!(total, dec!(160.00));
 }
 
 #[test]
-fn given_teller_credit_spending_transactions_when_summing_then_uses_absolute_amounts() {
+fn given_teller_credit_spending_transactions_when_summing_then_nets_refunds() {
     let txns = vec![
         create_test_transaction_with_account_details(
             dec!(-100.00),
             NaiveDate::from_ymd_opt(2024, 3, 5).unwrap(),
+            "Home",
+            None,
+            "teller",
+            "credit",
+        ),
+        create_test_transaction_with_account_details(
+            dec!(20.00),
+            NaiveDate::from_ymd_opt(2024, 3, 6).unwrap(),
             "Home",
             None,
             "teller",
@@ -803,7 +818,37 @@ fn given_teller_credit_spending_transactions_when_summing_then_uses_absolute_amo
         Some(NaiveDate::from_ymd_opt(2024, 3, 31).unwrap()),
     );
 
-    assert_eq!(total, dec!(130.00));
+    assert_eq!(total, dec!(110.00));
+}
+
+#[test]
+fn given_plaid_credit_refund_when_summing_then_subtracts_from_spending() {
+    let txns = vec![
+        create_test_transaction_with_account_details(
+            dec!(100.00),
+            NaiveDate::from_ymd_opt(2024, 3, 5).unwrap(),
+            "Home",
+            None,
+            "plaid",
+            "credit",
+        ),
+        create_test_transaction_with_account_details(
+            dec!(-20.00),
+            NaiveDate::from_ymd_opt(2024, 3, 6).unwrap(),
+            "Home",
+            None,
+            "plaid",
+            "credit",
+        ),
+    ];
+
+    let total = AnalyticsService::sum_spending_transactions_with_account(
+        &txns,
+        Some(NaiveDate::from_ymd_opt(2024, 3, 1).unwrap()),
+        Some(NaiveDate::from_ymd_opt(2024, 3, 31).unwrap()),
+    );
+
+    assert_eq!(total, dec!(80.00));
 }
 
 #[test]

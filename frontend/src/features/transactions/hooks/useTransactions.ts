@@ -10,6 +10,7 @@ import {
   getCurrentMonthSelection,
   type MonthYearSelection,
 } from '../../../utils/dateRanges';
+import { getNetSpendingAmount } from '../../../utils/transactionAmounts';
 import type { ProviderAccount } from '../../../context/AccountFilterContext';
 
 export interface UseTransactionsOptions {
@@ -153,6 +154,14 @@ export function useTransactions(options: UseTransactionsOptions = {}): UseTransa
     setCurrentPage(1);
   }, []);
 
+  useEffect(() => {
+    setSelectedCategory(initialCategory);
+  }, [initialCategory]);
+
+  useEffect(() => {
+    setSelectedAccountId(initialAccountId);
+  }, [initialAccountId]);
+
   const updateTransactionCategory = useCallback(
     async (transactionId: string, categoryName: string) => {
       await CategoryService.setTransactionCategory(transactionId, categoryName);
@@ -227,7 +236,9 @@ export function useTransactions(options: UseTransactionsOptions = {}): UseTransa
       search: debouncedSearch.trim(),
       dateRange: { start: monthRange.start, end: monthRange.end },
     };
-    return TransactionFilter.filter(all, criteria);
+    return TransactionFilter.filter(all, criteria).filter((transaction) => {
+      return getNetSpendingAmount(transaction) !== 0;
+    });
   }, [all, debouncedSearch, monthRange.start, monthRange.end]);
 
   const filtered = useMemo(() => {
@@ -236,7 +247,11 @@ export function useTransactions(options: UseTransactionsOptions = {}): UseTransa
       category: selectedCategory || undefined,
       dateRange: { start: monthRange.start, end: monthRange.end },
     };
-    return TransactionFilter.filter(all, criteria);
+    const result = TransactionFilter.filter(all, criteria);
+    if (!selectedCategory) {
+      return result;
+    }
+    return result.filter((transaction) => getNetSpendingAmount(transaction) !== 0);
   }, [all, debouncedSearch, selectedCategory, monthRange.start, monthRange.end]);
 
   const availableCategories = useMemo(() => {
@@ -256,10 +271,15 @@ export function useTransactions(options: UseTransactionsOptions = {}): UseTransa
   }, [availableCategories, selectedCategory]);
 
   useEffect(() => {
-    if (selectedCategory && !availableCategories.includes(selectedCategory)) {
+    if (
+      selectedCategory &&
+      !isLoading &&
+      availableCategories.length > 0 &&
+      !availableCategories.includes(selectedCategory)
+    ) {
       setSelectedCategory(null);
     }
-  }, [availableCategories, selectedCategory]);
+  }, [availableCategories, isLoading, selectedCategory]);
 
   useEffect(() => {
     if (

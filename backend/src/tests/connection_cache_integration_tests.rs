@@ -100,7 +100,7 @@ async fn given_bank_sync_operation_when_completing_then_updates_jwt_scoped_cache
 
     mock_cache
         .expect_invalidate_pattern()
-        .times(1)
+        .times(2)
         .returning(|_| Box::pin(async { Ok(()) }));
 
     let provider_registry = Arc::new(ProviderRegistry::new());
