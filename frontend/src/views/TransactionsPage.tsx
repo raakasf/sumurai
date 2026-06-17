@@ -12,10 +12,15 @@ import { useCurrency } from '../hooks/useCurrency';
 import { PageLayout } from '../layouts/PageLayout';
 import { formatCategoryName } from '../utils/categories';
 import type { MonthYearSelection } from '../utils/dateRanges';
-import { getDisplayAmount, isSpendingTransaction } from '../utils/transactionAmounts';
+import {
+  getDisplayAmount,
+  getNetSpendingAmount,
+  isSpendingTransaction,
+} from '../utils/transactionAmounts';
 
 interface TransactionsPageProps {
   initialAccountId?: string | null;
+  initialCategory?: string | null;
   period: MonthYearSelection;
   onPeriodChange: (period: MonthYearSelection) => void;
 }
@@ -31,6 +36,7 @@ const formatAccountOptionTitle = (account: ProviderAccount) => {
 
 const TransactionsPage: React.FC<TransactionsPageProps> = ({
   initialAccountId = null,
+  initialCategory = null,
   period,
   onPeriodChange,
 }) => {
@@ -62,7 +68,13 @@ const TransactionsPage: React.FC<TransactionsPageProps> = ({
     createCategoryAndAssign,
     createCategoryRule,
     deleteUserCategory,
-  } = useTransactions({ pageSize: 8, initialAccountId, period, setPeriod: onPeriodChange });
+  } = useTransactions({
+    pageSize: 8,
+    initialAccountId,
+    initialCategory,
+    period,
+    setPeriod: onPeriodChange,
+  });
 
   // Pills overflow handled within HeroStatCard
 
@@ -71,10 +83,7 @@ const TransactionsPage: React.FC<TransactionsPageProps> = ({
     const totalShown = transactions.reduce((sum, t) => sum + getDisplayAmount(t), 0);
     const totalVolume = transactions.reduce((sum, t) => sum + Math.abs(getDisplayAmount(t)), 0);
     const spendingTransactions = transactions.filter(isSpendingTransaction);
-    const totalSpent = spendingTransactions.reduce(
-      (sum, t) => sum + Math.abs(getDisplayAmount(t)),
-      0
-    );
+    const totalSpent = transactions.reduce((sum, t) => sum + getNetSpendingAmount(t), 0);
 
     const avgTransaction = totalCount > 0 ? totalVolume / totalCount : 0;
 

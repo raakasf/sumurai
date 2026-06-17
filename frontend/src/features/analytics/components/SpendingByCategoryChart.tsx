@@ -11,6 +11,7 @@ type Props = {
   total: number;
   hoveredCategory: string | null;
   setHoveredCategory: (name: string | null) => void;
+  onCategorySelect?: (category: string) => void;
 };
 
 export const SpendingByCategoryChart: React.FC<Props> = ({
@@ -18,6 +19,7 @@ export const SpendingByCategoryChart: React.FC<Props> = ({
   total,
   hoveredCategory,
   setHoveredCategory,
+  onCategorySelect,
 }) => {
   const { mode, colors } = useTheme();
   const { format } = useCurrency();
@@ -71,6 +73,7 @@ export const SpendingByCategoryChart: React.FC<Props> = ({
                       strokeWidth={isHovered ? 3 : 0}
                       onMouseEnter={() => setHoveredCategory(cat.name)}
                       onMouseLeave={() => setHoveredCategory(null)}
+                      onClick={() => onCategorySelect?.(cat.name)}
                       style={{
                         filter: isHovered ? 'brightness(1.15) saturate(1.1)' : 'none',
                         cursor: 'pointer',

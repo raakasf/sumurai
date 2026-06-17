@@ -365,9 +365,10 @@ impl DatabaseRepository for PostgresRepository {
                 provider_connection_id = EXCLUDED.provider_connection_id,
                 name = EXCLUDED.name,
                 account_type = EXCLUDED.account_type,
-                balance_current = EXCLUDED.balance_current,
+                balance_current = COALESCE(EXCLUDED.balance_current, accounts.balance_current),
                 mask = EXCLUDED.mask,
-                institution_name = EXCLUDED.institution_name
+                institution_name = EXCLUDED.institution_name,
+                updated_at = NOW()
             "#
         )
         .bind(account.id)
@@ -1521,7 +1522,28 @@ impl DatabaseRepository for PostgresRepository {
             ),
         >(
             r#"
-            SELECT a.id, a.user_id, a.provider_account_id, a.provider_connection_id, a.name, a.account_type, a.balance_current, a.mask, COALESCE(a.institution_name, pc.institution_name) AS institution_name, a.updated_at
+            SELECT
+                a.id,
+                a.user_id,
+                a.provider_account_id,
+                a.provider_connection_id,
+                a.name,
+                a.account_type,
+                COALESCE(
+                    a.balance_current,
+                    CASE
+                        WHEN LOWER(a.account_type) IN ('credit', 'credit card') THEN (
+                            SELECT NULLIF(COALESCE(SUM(-t.amount), 0), 0)
+                            FROM transactions t
+                            WHERE t.account_id = a.id
+                              AND t.user_id = a.user_id
+                              AND t.pending = false
+                        )
+                    END
+                ) AS balance_current,
+                a.mask,
+                COALESCE(a.institution_name, pc.institution_name) AS institution_name,
+                a.updated_at
             FROM accounts a
             LEFT JOIN provider_connections pc ON pc.id = a.provider_connection_id
             WHERE a.user_id = $1
@@ -1725,7 +1747,19 @@ impl DatabaseRepository for PostgresRepository {
                 a.account_type,
                 NULL::text AS account_subtype,
                 'USD'::text AS currency,
-                COALESCE(a.balance_current, 0) AS current_balance,
+                COALESCE(
+                    a.balance_current,
+                    CASE
+                        WHEN LOWER(a.account_type) IN ('credit', 'credit card') THEN (
+                            SELECT NULLIF(COALESCE(SUM(-t.amount), 0), 0)
+                            FROM transactions t
+                            WHERE t.account_id = a.id
+                              AND t.user_id = a.user_id
+                              AND t.pending = false
+                        )
+                    END,
+                    0
+                ) AS current_balance,
                 a.provider_connection_id,
                 COALESCE(a.institution_name, pc.institution_name) AS institution_name
             FROM accounts a

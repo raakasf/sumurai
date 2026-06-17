@@ -50,9 +50,14 @@ const getSelectedMonthWindow = (period: MonthYearSelection) => {
 interface DashboardPageProps {
   period: MonthYearSelection;
   onPeriodChange: (period: MonthYearSelection) => void;
+  onCategorySelect?: (category: string) => void;
 }
 
-const DashboardPage: React.FC<DashboardPageProps> = ({ period, onPeriodChange }) => {
+const DashboardPage: React.FC<DashboardPageProps> = ({
+  period,
+  onPeriodChange,
+  onCategorySelect,
+}) => {
   const { colors } = useTheme();
   const { convert, format, formatConverted } = useCurrency();
   const [hoveredCategory, setHoveredCategory] = useState<string | null>(null);
@@ -228,6 +233,7 @@ const DashboardPage: React.FC<DashboardPageProps> = ({ period, onPeriodChange })
                 total={monthSpend}
                 hoveredCategory={hoveredCategory}
                 setHoveredCategory={setHoveredCategory}
+                onCategorySelect={onCategorySelect}
               />
               <div className="mt-4">
                 {(() => {
@@ -237,7 +243,7 @@ const DashboardPage: React.FC<DashboardPageProps> = ({ period, onPeriodChange })
                     (sum, c) => sum + (Number.isFinite(c.value) ? c.value : 0),
                     0
                   );
-                  const top = categories.slice(0, 4);
+                  const top = categories.slice(0, 6);
                   return (
                     <div>
                       <div
@@ -258,16 +264,21 @@ const DashboardPage: React.FC<DashboardPageProps> = ({ period, onPeriodChange })
                           const color = colors.chart.primary[idx % colors.chart.primary.length];
                           const isHovered = hoveredCategory === cat.name;
                           return (
-                            // biome-ignore lint/a11y/noStaticElementInteractions: visual hover only
-                            <div
+                            <button
+                              type="button"
                               key={`topcard-${cat.name}`}
-                              className={`p-2 rounded-lg border transition-all duration-300 ${
+                              className={`p-2 rounded-lg border text-left transition-all duration-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-300 dark:focus-visible:ring-sky-400 ${
                                 isHovered
                                   ? 'bg-slate-50 dark:bg-slate-700/40 border-[#93c5fd] dark:border-[#38bdf8] -translate-y-[2px]'
                                   : 'border-slate-200 dark:border-slate-700'
                               }`}
+                              aria-label={`Show ${cat.name} transactions`}
+                              title={`Show ${cat.name} transactions`}
                               onMouseEnter={() => setHoveredCategory(cat.name)}
                               onMouseLeave={() => setHoveredCategory(null)}
+                              onFocus={() => setHoveredCategory(cat.name)}
+                              onBlur={() => setHoveredCategory(null)}
+                              onClick={() => onCategorySelect?.(cat.name)}
                             >
                               <div
                                 className={cn('flex', 'items-center', 'gap-2', 'min-w-0', 'mb-1')}
@@ -309,7 +320,7 @@ const DashboardPage: React.FC<DashboardPageProps> = ({ period, onPeriodChange })
                                   {percentage}%
                                 </div>
                               </div>
-                            </div>
+                            </button>
                           );
                         })}
                       </div>

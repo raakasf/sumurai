@@ -200,4 +200,50 @@ describe('BudgetCalculator.calculateSpent', () => {
       BudgetCalculator.calculateSpent(transactions, 'Credit Card Bills', '2025-10-01', '2025-10-31')
     ).toBe(0);
   });
+
+  it('nets credit-card returns against purchases for budget spending', () => {
+    const transactions: Transaction[] = [
+      {
+        ...baseTransaction,
+        id: 'teller-purchase',
+        amount: -100,
+        category: { primary: 'Home Improvement' },
+        account_type: 'credit',
+        provider: 'teller',
+      },
+      {
+        ...baseTransaction,
+        id: 'teller-return',
+        amount: 20,
+        category: { primary: 'Home Improvement' },
+        account_type: 'credit',
+        provider: 'teller',
+      },
+      {
+        ...baseTransaction,
+        id: 'plaid-purchase',
+        amount: 50,
+        category: { primary: 'Home Improvement' },
+        account_type: 'credit',
+        provider: 'plaid',
+      },
+      {
+        ...baseTransaction,
+        id: 'plaid-return',
+        amount: -10,
+        category: { primary: 'Home Improvement' },
+        account_type: 'credit',
+        provider: 'plaid',
+      },
+    ];
+
+    expect(
+      BudgetCalculator.calculateSpent(
+        transactions,
+        'Home Improvement',
+        '2025-10-01',
+        '2025-10-31'
+      )
+    ).toBe(120);
+  });
 });

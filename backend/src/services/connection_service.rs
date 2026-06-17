@@ -891,7 +891,12 @@ impl ConnectionService {
     ) -> Result<()> {
         let _ = self
             .cache_service
-            .invalidate_pattern(&format!("{}_balances_overview", jwt_id))
+            .invalidate_pattern(&format!("{}*_balances_overview*", jwt_id))
+            .await;
+
+        let _ = self
+            .cache_service
+            .invalidate_pattern(&format!("{}_bank_accounts_*", jwt_id))
             .await;
 
         let cached_connection = CachedBankConnection {

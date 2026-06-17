@@ -258,6 +258,49 @@ describe('useTransactions', () => {
     });
   });
 
+  it('should include MD DIR ACH education rule matches in selected category results', async () => {
+    jest.mocked(TransactionService.getTransactions).mockResolvedValue([
+      {
+        ...asTransaction('education-spend', '2024-02-10'),
+        merchant: 'GERMANTOWN FACTS',
+        amount: 1177.5,
+        category: { primary: 'EDUCATION', detailed: 'EDUCATION' },
+      },
+      {
+        ...asTransaction('education-transfer', '2024-02-11'),
+        name: 'MD DIR ACH CONTRIB 060926',
+        merchant: 'MD DIR ACH CONTRIB 060926',
+        amount: 100,
+        category: { primary: 'EDUCATION', detailed: 'EDUCATION' },
+      },
+    ] as any);
+
+    const { result } = renderHook(
+      () =>
+        useTransactions({
+          period: { year: 2024, month: 1 },
+        }),
+      { wrapper: TestWrapper }
+    );
+
+    await waitFor(() => {
+      expect(result.current.categories).toEqual(['Education']);
+    });
+
+    await act(async () => {
+      result.current.setSelectedCategory('Education');
+    });
+
+    await waitFor(() => {
+      expect(result.current.transactions.map((transaction) => transaction.id)).toEqual([
+        'education-transfer',
+        'education-spend',
+      ]);
+    });
+
+    expect(result.current.categories).toEqual(['Education']);
+  });
+
   it('should not pass account filter when all accounts selected', async () => {
     let accountFilterHook: ReturnType<typeof useAccountFilter>;
 

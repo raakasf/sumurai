@@ -24,11 +24,27 @@ export function AuthenticatedApp({ onLogout, initialTab }: AuthenticatedAppProps
   const [tab, setTab] = useState<TabKey>(initialTab ?? 'dashboard');
   const [error, setError] = useState<string | null>(null);
   const [transactionAccountId, setTransactionAccountId] = useState<string | null>(null);
+  const [transactionCategory, setTransactionCategory] = useState<string | null>(null);
   const [period, setPeriod] = useState<MonthYearSelection>(() => getCurrentMonthSelection());
 
   const openTransactionsForAccount = (accountId: string) => {
     setTransactionAccountId(accountId);
+    setTransactionCategory(null);
     setTab('transactions');
+  };
+
+  const openTransactionsForCategory = (category: string) => {
+    setTransactionAccountId(null);
+    setTransactionCategory(category);
+    setTab('transactions');
+  };
+
+  const handleTabChange = (nextTab: TabKey) => {
+    if (nextTab === 'transactions') {
+      setTransactionAccountId(null);
+      setTransactionCategory(null);
+    }
+    setTab(nextTab);
   };
 
   return (
@@ -36,7 +52,7 @@ export function AuthenticatedApp({ onLogout, initialTab }: AuthenticatedAppProps
       <GradientShell
         className={cn('text-slate-900', 'dark:text-slate-100', 'transition-colors', 'duration-300')}
       >
-        <AppLayout currentTab={tab} onTabChange={setTab} onLogout={onLogout}>
+        <AppLayout currentTab={tab} onTabChange={handleTabChange} onLogout={onLogout}>
           {error && (
             <Card
               className={cn(
@@ -64,11 +80,18 @@ export function AuthenticatedApp({ onLogout, initialTab }: AuthenticatedAppProps
               exit={{ opacity: 0, y: -16 }}
               transition={{ duration: 0.28, ease: [0.25, 0.1, 0.25, 1] }}
             >
-              {tab === 'dashboard' && <DashboardPage period={period} onPeriodChange={setPeriod} />}
+              {tab === 'dashboard' && (
+                <DashboardPage
+                  period={period}
+                  onPeriodChange={setPeriod}
+                  onCategorySelect={openTransactionsForCategory}
+                />
+              )}
               {tab === 'trends' && <TrendsPage />}
               {tab === 'transactions' && (
                 <TransactionsPage
                   initialAccountId={transactionAccountId}
+                  initialCategory={transactionCategory}
                   period={period}
                   onPeriodChange={setPeriod}
                 />

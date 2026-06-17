@@ -1,5 +1,6 @@
 import type { Transaction } from '../types/api';
 import { formatCategoryName, isSpendingExcludedCategory } from '../utils/categories';
+import { getNetSpendingAmount } from '../utils/transactionAmounts';
 
 interface ComputedBudget {
   id: string;
@@ -42,7 +43,7 @@ export class BudgetCalculator {
         const dateString = new Date(t.date).toISOString().slice(0, 10);
         return dateString >= start && dateString <= end;
       })
-      .reduce((sum, t) => sum + Number(t.amount || 0), 0);
+      .reduce((sum, t) => sum + getNetSpendingAmount(t), 0);
   }
 
   static calculateRemaining(budget: number, spent: number): number {
