@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1.4
 # Multi-stage build — Rust compiles natively inside Docker.
 # Replaces the cross-compilation workflow that SIGBUSes on Apple Silicon
 # because cross mounts macOS APFS (16 KB pages) and the Linux linker mmap-s

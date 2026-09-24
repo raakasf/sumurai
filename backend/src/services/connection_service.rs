@@ -542,6 +542,29 @@ impl ConnectionService {
 
         let transactions = persisted_transactions;
 
+        match self
+            .db_repository
+            .auto_resolve_pending_duplicates(params.user_id, Some(&connection.id))
+            .await
+        {
+            Ok(resolved_count) if resolved_count > 0 => {
+                tracing::info!(
+                    connection_id = %connection.id,
+                    resolved_count,
+                    "Auto-resolved duplicate pending Plaid transactions after sync"
+                );
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to auto-resolve pending duplicates for Plaid connection {} and user {}: {}",
+                    connection.id,
+                    params.user_id,
+                    e
+                );
+            }
+        }
+
         let total_transactions = self
             .db_repository
             .get_transactions_for_user(params.user_id)
@@ -773,6 +796,29 @@ impl ConnectionService {
                     "Failed to merge duplicate Teller transactions for user {} connection {}: {}",
                     user_id,
                     connection.id,
+                    e
+                );
+            }
+        }
+
+        match self
+            .db_repository
+            .auto_resolve_pending_duplicates(user_id, Some(&connection.id))
+            .await
+        {
+            Ok(resolved_count) if resolved_count > 0 => {
+                tracing::info!(
+                    connection_id = %connection.id,
+                    resolved_count,
+                    "Auto-resolved duplicate pending Teller transactions after sync"
+                );
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to auto-resolve pending duplicates for Teller connection {} and user {}: {}",
+                    connection.id,
+                    user_id,
                     e
                 );
             }

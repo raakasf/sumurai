@@ -198,12 +198,16 @@ impl AnalyticsService {
                 | "investments"
                 | "transferin"
                 | "transferout"
+                | "loanpaymentscreditcardpayment"
+                | "income"
         )
     }
 
     fn is_spending_transaction(transaction: &Transaction) -> bool {
-        transaction.amount > Decimal::ZERO
+        !transaction.pending
+            && transaction.amount > Decimal::ZERO
             && !Self::is_spending_excluded_category(&Self::get_category_name(transaction))
+            && !Self::is_spending_excluded_category(&transaction.category_detailed)
     }
 
     fn get_effective_category_name(transaction: &TransactionWithAccount) -> String {
@@ -227,12 +231,23 @@ impl AnalyticsService {
     }
 
     fn get_spending_amount_with_account(transaction: &TransactionWithAccount) -> Decimal {
-        if Self::is_spending_excluded_category(&Self::get_effective_category_name(transaction)) {
+        if transaction.pending {
+            return Decimal::ZERO;
+        }
+
+        if Self::is_spending_excluded_category(&Self::get_effective_category_name(transaction))
+            || Self::is_spending_excluded_category(&transaction.category_detailed)
+        {
             return Decimal::ZERO;
         }
 
         let provider = transaction.provider.as_deref().unwrap_or("plaid");
         let account_type = transaction.account_type.to_lowercase();
+        let is_credit = matches!(account_type.as_str(), "credit" | "credit card");
+
+        if is_credit && Self::normalize_category_key(&transaction.category_primary) == "loanpayments" {
+            return Decimal::ZERO;
+        }
 
         if provider == "teller" {
             if account_type == "credit" {
@@ -244,7 +259,7 @@ impl AnalyticsService {
             }
         }
 
-        if matches!(account_type.as_str(), "credit" | "credit card") {
+        if is_credit {
             return transaction.amount;
         }
 

@@ -54,4 +54,76 @@ describe('transactionAmounts', () => {
     expect(getNetSpendingAmount(tellerRefund)).toBe(-25);
     expect(getNetSpendingAmount(plaidRefund)).toBe(-15);
   });
+
+  it('excludes paychecks and income from spending', () => {
+    const paycheck = transaction({
+      amount: -2500,
+      account_name: 'Checking',
+      account_type: 'depository',
+      category: { primary: 'INCOME', detailed: 'INCOME_SALARY' },
+    });
+
+    expect(getDisplayAmount(paycheck)).toBe(2500);
+    expect(getNetSpendingAmount(paycheck)).toBe(0);
+    expect(isSpendingTransaction(paycheck)).toBe(false);
+  });
+
+  it('excludes credit card payments on credit card accounts from spending', () => {
+    const cardPayment = transaction({
+      amount: -500,
+      account_name: 'Best Buy Credit Card',
+      account_type: 'credit',
+      category: {
+        primary: 'LOAN_PAYMENTS',
+        detailed: 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT',
+      },
+    });
+
+    expect(getDisplayAmount(cardPayment)).toBe(500);
+    expect(getNetSpendingAmount(cardPayment)).toBe(0);
+    expect(isSpendingTransaction(cardPayment)).toBe(false);
+  });
+
+  it('excludes credit card payments from checking accounts from spending', () => {
+    const billPayment = transaction({
+      amount: 500,
+      account_name: 'Checking',
+      account_type: 'depository',
+      category: {
+        primary: 'LOAN_PAYMENTS',
+        detailed: 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT',
+      },
+    });
+
+    expect(getDisplayAmount(billPayment)).toBe(-500);
+    expect(getNetSpendingAmount(billPayment)).toBe(0);
+    expect(isSpendingTransaction(billPayment)).toBe(false);
+  });
+
+  it('does not treat deposits into checking accounts as negative spending', () => {
+    const deposit = transaction({
+      amount: -1000,
+      account_name: 'Checking',
+      account_type: 'depository',
+      category: { primary: 'GENERAL_SERVICES' },
+    });
+
+    expect(getDisplayAmount(deposit)).toBe(1000);
+    expect(getNetSpendingAmount(deposit)).toBe(0);
+    expect(isSpendingTransaction(deposit)).toBe(false);
+  });
+
+  it('counts checking account expenses as positive spending', () => {
+    const rent = transaction({
+      amount: 1500,
+      account_name: 'Checking',
+      account_type: 'depository',
+      category: { primary: 'RENT_AND_UTILITIES' },
+    });
+
+    expect(getDisplayAmount(rent)).toBe(-1500);
+    expect(getNetSpendingAmount(rent)).toBe(1500);
+    expect(isSpendingTransaction(rent)).toBe(true);
+  });
 });
+

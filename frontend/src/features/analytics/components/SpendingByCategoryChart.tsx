@@ -121,7 +121,7 @@ export const SpendingByCategoryChart: React.FC<Props> = ({
                 'tracking-tight'
               )}
             >
-              {format(total)}
+              {Math.abs(total) > 0 ? format(-Math.abs(total)) : format(0)}
             </div>
           </div>
         </div>

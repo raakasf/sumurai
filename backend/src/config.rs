@@ -29,7 +29,7 @@ impl Config {
     pub fn from_env_provider(env: &dyn EnvironmentProvider) -> Result<Self> {
         let default_provider = env
             .get_var("DEFAULT_PROVIDER")
-            .unwrap_or_else(|| "teller".to_string());
+            .unwrap_or_else(|| "plaid".to_string());
         let teller_application_id = env.get_var("TELLER_APPLICATION_ID");
         let teller_environment = env
             .get_var("TELLER_ENV")

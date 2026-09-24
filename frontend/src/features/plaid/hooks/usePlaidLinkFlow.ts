@@ -1,10 +1,44 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { usePlaidLink } from 'react-plaid-link';
+import { type PlaidLinkOnExitMetadata, usePlaidLink } from 'react-plaid-link';
 import { type PlaidConnection, usePlaidConnections } from '../../../hooks/usePlaidConnections';
 import { useInstrumentedCallback } from '../../../observability';
 import { ApiClient } from '../../../services/ApiClient';
 import { PlaidService } from '../../../services/PlaidService';
 import { dispatchAccountsChanged } from '../../../utils/events';
+
+const OAUTH_LINK_TOKEN_KEY = 'sumurai.plaid.oauth_link_token';
+
+function getOAuthRedirectUri(): string | undefined {
+  if (typeof window === 'undefined') return undefined;
+  return new URLSearchParams(window.location.search).has('oauth_state_id')
+    ? window.location.href
+    : undefined;
+}
+
+function getStoredOAuthLinkToken(oauthRedirectUri: string | undefined): string | null {
+  if (!oauthRedirectUri || typeof window === 'undefined') return null;
+  try {
+    return window.sessionStorage.getItem(OAUTH_LINK_TOKEN_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function storeOAuthLinkToken(linkToken: string): void {
+  try {
+    window.sessionStorage.setItem(OAUTH_LINK_TOKEN_KEY, linkToken);
+  } catch {
+    // Plaid can still complete without OAuth token persistence for non-OAuth institutions.
+  }
+}
+
+function clearStoredOAuthLinkToken(): void {
+  try {
+    window.sessionStorage.removeItem(OAUTH_LINK_TOKEN_KEY);
+  } catch {
+    // Ignore storage restrictions after Plaid Link has completed or exited.
+  }
+}
 
 interface UsePlaidLinkFlowOptions {
   onError?: (message: string | null) => void;
@@ -27,7 +61,10 @@ export interface UsePlaidLinkFlowResult {
 export function usePlaidLinkFlow(options: UsePlaidLinkFlowOptions = {}): UsePlaidLinkFlowResult {
   const { onError, enabled = true } = options;
   const plaidConnections = usePlaidConnections({ enabled });
-  const [linkToken, setLinkToken] = useState<string | null>(null);
+  const [oauthRedirectUri] = useState(getOAuthRedirectUri);
+  const [linkToken, setLinkToken] = useState<string | null>(() =>
+    getStoredOAuthLinkToken(oauthRedirectUri)
+  );
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [syncingAll, setSyncingAll] = useState(false);
@@ -55,6 +92,7 @@ export function usePlaidLinkFlow(options: UsePlaidLinkFlowOptions = {}): UsePlai
       if (!enabled) return;
 
       try {
+        clearStoredOAuthLinkToken();
         clearError();
         await PlaidService.exchangeToken(publicToken);
 
@@ -67,11 +105,13 @@ export function usePlaidLinkFlow(options: UsePlaidLinkFlowOptions = {}): UsePlai
             const { transactions = [] } = result || {};
             const count = Array.isArray(transactions) ? transactions.length : 0;
             setToast(`Bank connected! Synced ${count} transactions`);
-            await plaidConnections.refresh();
-            dispatchAccountsChanged();
           } catch (syncError: unknown) {
             console.warn('Failed to sync transactions after connection', syncError);
             setToast(`Bank connected to ${latestConnection.institutionName}`);
+          } finally {
+            // Accounts are persisted before transaction syncing. Refresh even when
+            // transaction syncing fails so the newly linked accounts are visible.
+            await plaidConnections.refresh();
             dispatchAccountsChanged();
           }
         } else {
@@ -87,13 +127,20 @@ export function usePlaidLinkFlow(options: UsePlaidLinkFlowOptions = {}): UsePlai
   );
 
   const handleExit = useCallback(
-    (err: unknown) => {
+    (err: unknown, metadata: PlaidLinkOnExitMetadata) => {
       if (!enabled) return;
+      clearStoredOAuthLinkToken();
+      setLinkToken(null);
       if (err && typeof err === 'object' && 'error_message' in err) {
         const message = (err as { error_message?: string }).error_message || 'Unknown error';
         handleError(`Plaid Link exited with error: ${message}`);
       } else if (err) {
         handleError('Plaid Link exited with an unknown error');
+      } else if (metadata.status) {
+        const institution = metadata.institution?.name ?? 'the institution';
+        handleError(
+          `${institution} was not connected because Plaid Link closed before setup finished. Reopen Plaid Link and continue through the final confirmation (${metadata.status}).`
+        );
       }
     },
     [enabled, handleError]
@@ -101,6 +148,7 @@ export function usePlaidLinkFlow(options: UsePlaidLinkFlowOptions = {}): UsePlai
 
   const { open, ready } = usePlaidLink({
     token: enabled && linkToken ? linkToken : undefined,
+    receivedRedirectUri: oauthRedirectUri,
     onSuccess: handleSuccess,
     onExit: handleExit,
   });
@@ -122,6 +170,7 @@ export function usePlaidLinkFlow(options: UsePlaidLinkFlowOptions = {}): UsePlai
       const data = await ApiClient.post<{ link_token: string }>('/plaid/link-token', {
         user_id: userId,
       });
+      storeOAuthLinkToken(data.link_token);
       setLinkToken(data.link_token);
       if (ready) {
         open();

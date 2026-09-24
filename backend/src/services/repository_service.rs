@@ -80,6 +80,11 @@ pub trait DatabaseRepository: Send + Sync {
         transaction_id: Uuid,
         user_id: Uuid,
     ) -> Result<Uuid>;
+    async fn auto_resolve_pending_duplicates(
+        &self,
+        user_id: &Uuid,
+        connection_id: Option<&Uuid>,
+    ) -> Result<i64>;
     async fn upsert_transaction(&self, transaction: &Transaction) -> Result<()>;
 
     async fn store_provider_credentials_for_user(
@@ -576,7 +581,7 @@ impl DatabaseRepository for PostgresRepository {
                 INNER JOIN selected s
                     ON t.account_id = s.account_id
                     AND t.amount = s.amount
-                    AND ABS(t.date - s.date) <= 1
+                    AND ABS(t.date - s.date) <= 7
                     AND t.id <> s.id
                     AND t.user_id = $2
                     AND t.duplicate_of_transaction_id IS NULL
@@ -625,6 +630,89 @@ impl DatabaseRepository for PostgresRepository {
                 transaction_id
             )
         })
+    }
+
+    async fn auto_resolve_pending_duplicates(
+        &self,
+        user_id: &Uuid,
+        connection_id: Option<&Uuid>,
+    ) -> Result<i64> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("SELECT set_config('app.current_user_id', $1, true)")
+            .bind(user_id.to_string())
+            .execute(&mut *tx)
+            .await?;
+
+        let resolved_count = sqlx::query_scalar::<_, i64>(
+            r#"
+            WITH pending_tx AS (
+                SELECT 
+                    t.id, t.account_id, t.amount, t.date,
+                    LOWER(REGEXP_REPLACE(COALESCE(t.merchant_name, ''), '[^[:alnum:]]+', '', 'g')) AS merchant_key
+                FROM transactions t
+                INNER JOIN accounts a ON a.id = t.account_id
+                WHERE t.user_id = $1
+                  AND t.pending = TRUE
+                  AND t.duplicate_of_transaction_id IS NULL
+                  AND t.amount <> 0
+                  AND ($2::uuid IS NULL OR a.provider_connection_id = $2)
+            ),
+            posted_tx AS (
+                SELECT 
+                    t.id, t.account_id, t.amount, t.date,
+                    LOWER(REGEXP_REPLACE(COALESCE(t.merchant_name, ''), '[^[:alnum:]]+', '', 'g')) AS merchant_key
+                FROM transactions t
+                INNER JOIN accounts a ON a.id = t.account_id
+                WHERE t.user_id = $1
+                  AND t.pending = FALSE
+                  AND t.duplicate_of_transaction_id IS NULL
+                  AND t.amount <> 0
+                  AND ($2::uuid IS NULL OR a.provider_connection_id = $2)
+            ),
+            matched_pairs AS (
+                SELECT DISTINCT ON (p.id)
+                    p.id AS pending_id,
+                    post.id AS posted_id
+                FROM pending_tx p
+                INNER JOIN posted_tx post
+                    ON post.account_id = p.account_id
+                    AND post.amount = p.amount
+                    AND ABS(post.date - p.date) <= 7
+                    AND (
+                        p.merchant_key = post.merchant_key
+                        OR POSITION(p.merchant_key IN post.merchant_key) > 0
+                        OR POSITION(post.merchant_key IN p.merchant_key) > 0
+                        OR (LENGTH(p.merchant_key) >= 6 AND LENGTH(post.merchant_key) >= 6 AND (
+                            POSITION(SUBSTRING(p.merchant_key FROM 1 FOR 6) IN post.merchant_key) > 0
+                            OR POSITION(SUBSTRING(post.merchant_key FROM 1 FOR 6) IN p.merchant_key) > 0
+                        ))
+                        OR (
+                            (p.merchant_key LIKE '%verizon%' AND post.merchant_key LIKE '%verizon%')
+                            OR (p.merchant_key LIKE '%amazon%' AND post.merchant_key LIKE '%amazon%')
+                        )
+                    )
+                ORDER BY p.id, ABS(post.date - p.date) ASC, post.date ASC
+            ),
+            updated AS (
+                UPDATE transactions t
+                SET duplicate_of_transaction_id = m.posted_id,
+                    duplicate_reviewed_at = NOW(),
+                    duplicate_reviewed_by = $1
+                FROM matched_pairs m
+                WHERE t.id = m.pending_id
+                  AND t.user_id = $1
+                RETURNING t.id
+            )
+            SELECT COUNT(*)::BIGINT FROM updated
+            "#,
+        )
+        .bind(user_id)
+        .bind(connection_id)
+        .fetch_one(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+        Ok(resolved_count)
     }
 
     async fn create_manual_account(&self, account: &Account) -> Result<Account> {

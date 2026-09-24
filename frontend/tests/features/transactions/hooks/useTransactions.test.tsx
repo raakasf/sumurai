@@ -18,7 +18,7 @@ jest.mock('@/services/PlaidService', () => ({
   },
 }));
 
-const asTransaction = (id: string, date = '2024-02-10') => ({
+const asTransaction = (id: string, date = '2026-09-10') => ({
   id,
   date,
   name: 'Transaction',
@@ -95,7 +95,9 @@ describe('useTransactions', () => {
     });
 
     // Verify initial call was made without account filter (all accounts)
-    expect(TransactionService.getTransactions).toHaveBeenLastCalledWith({});
+    expect(TransactionService.getTransactions).toHaveBeenLastCalledWith(
+      expect.objectContaining({})
+    );
 
     // Clear the mock to track new calls
     jest.mocked(TransactionService.getTransactions).mockClear();
@@ -111,9 +113,11 @@ describe('useTransactions', () => {
 
     // Should refetch with account filter
     await waitFor(() => {
-      expect(TransactionService.getTransactions).toHaveBeenCalledWith({
-        accountIds: ['account1'],
-      });
+      expect(TransactionService.getTransactions).toHaveBeenCalledWith(
+        expect.objectContaining({
+          accountIds: ['account1'],
+        })
+      );
     });
   });
 
@@ -188,9 +192,11 @@ describe('useTransactions', () => {
     });
 
     await waitFor(() => {
-      expect(TransactionService.getTransactions).toHaveBeenCalledWith({
-        accountIds: ['account1'],
-      });
+      expect(TransactionService.getTransactions).toHaveBeenCalledWith(
+        expect.objectContaining({
+          accountIds: ['account1'],
+        })
+      );
     });
   });
 
@@ -203,9 +209,11 @@ describe('useTransactions', () => {
     );
 
     await waitFor(() => {
-      expect(TransactionService.getTransactions).toHaveBeenCalledWith({
-        accountIds: ['account2'],
-      });
+      expect(TransactionService.getTransactions).toHaveBeenCalledWith(
+        expect.objectContaining({
+          accountIds: ['account2'],
+        })
+      );
     });
 
     jest.mocked(TransactionService.getTransactions).mockClear();
@@ -215,9 +223,11 @@ describe('useTransactions', () => {
     });
 
     await waitFor(() => {
-      expect(TransactionService.getTransactions).toHaveBeenCalledWith({
-        accountIds: ['account1'],
-      });
+      expect(TransactionService.getTransactions).toHaveBeenCalledWith(
+        expect.objectContaining({
+          accountIds: ['account1'],
+        })
+      );
     });
   });
 
@@ -330,9 +340,11 @@ describe('useTransactions', () => {
     });
 
     await waitFor(() => {
-      expect(TransactionService.getTransactions).toHaveBeenCalledWith({
-        accountIds: ['account1'],
-      });
+      expect(TransactionService.getTransactions).toHaveBeenCalledWith(
+        expect.objectContaining({
+          accountIds: ['account1'],
+        })
+      );
     });
 
     jest.mocked(TransactionService.getTransactions).mockClear();
@@ -342,7 +354,52 @@ describe('useTransactions', () => {
     });
 
     await waitFor(() => {
-      expect(TransactionService.getTransactions).toHaveBeenCalledWith({});
+      expect(TransactionService.getTransactions).toHaveBeenCalledWith(
+        expect.objectContaining({})
+      );
+    });
+  });
+
+  it('should auto-filter duplicate candidate pending transactions when posted match exists', async () => {
+    jest.mocked(TransactionService.getTransactions).mockResolvedValue([
+      {
+        ...asTransaction('posted-1', '2026-09-17'),
+        account_id: 'acc_1',
+        amount: 12.71,
+        name: 'AMAZON MKTPL*5R7VQ2VS1',
+        merchant: 'AMAZON MKTPL*5R7VQ2VS1',
+        pending: false,
+      },
+      {
+        ...asTransaction('pending-1', '2026-09-16'),
+        account_id: 'acc_1',
+        amount: 12.71,
+        name: 'AMAZON MKTPLACE PMTS',
+        merchant: 'AMAZON MKTPLACE PMTS',
+        pending: true,
+      },
+      {
+        ...asTransaction('pending-alone', '2026-09-18'),
+        account_id: 'acc_1',
+        amount: 18.69,
+        name: 'ExxonMobil',
+        merchant: 'ExxonMobil',
+        pending: true,
+      },
+    ] as any);
+
+    const { result } = renderHook(
+      () =>
+        useTransactions({
+          period: { year: 2026, month: 8 },
+        }),
+      { wrapper: TestWrapper }
+    );
+
+    await waitFor(() => {
+      expect(result.current.transactions.map((t) => t.id)).toEqual(['pending-alone', 'posted-1']);
+      expect(result.current.duplicateCandidateIds).toEqual(['pending-1']);
     });
   });
 });
+

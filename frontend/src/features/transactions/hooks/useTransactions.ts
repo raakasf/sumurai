@@ -147,7 +147,7 @@ export function useTransactions(options: UseTransactionsOptions = {}): UseTransa
   useEffect(() => {
     CategoryService.getCategories()
       .then(setUserCategories)
-      .catch(() => {});
+      .catch(() => { });
   }, []);
 
   useEffect(() => {
@@ -291,8 +291,6 @@ export function useTransactions(options: UseTransactionsOptions = {}): UseTransa
     }
   }, [accountOptions, selectedAccountId]);
 
-  const totalItems = filtered.length;
-  const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
   const duplicateCandidateIds = useMemo(() => {
     const candidateIds = new Set<string>();
 
@@ -316,10 +314,18 @@ export function useTransactions(options: UseTransactionsOptions = {}): UseTransa
 
     return Array.from(candidateIds);
   }, [filtered]);
+
+  const activeTransactions = useMemo(() => {
+    const duplicateSet = new Set(duplicateCandidateIds);
+    return filtered.filter((t) => !duplicateSet.has(t.id));
+  }, [filtered, duplicateCandidateIds]);
+
+  const totalItems = activeTransactions.length;
+  const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
   const start = (currentPage - 1) * pageSize;
   const pageItems = useMemo(() => {
-    return filtered.slice(start, start + pageSize);
-  }, [filtered, start, pageSize]);
+    return activeTransactions.slice(start, start + pageSize);
+  }, [activeTransactions, start, pageSize]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: specific filters should reset pagination
   useEffect(() => {
@@ -333,7 +339,7 @@ export function useTransactions(options: UseTransactionsOptions = {}): UseTransa
   return {
     isLoading,
     error,
-    transactions: filtered,
+    transactions: activeTransactions,
     categories,
     search,
     setSearch,
@@ -369,7 +375,7 @@ function areDuplicateCandidates(a: Transaction, b: Transaction): boolean {
     a.account_id === b.account_id &&
     amountA !== 0 &&
     amountA.toFixed(2) === amountB.toFixed(2) &&
-    daysBetween(a.date, b.date) <= 1 &&
+    daysBetween(a.date, b.date) <= 7 &&
     merchantsLookRelated(a.merchant || a.name, b.merchant || b.name)
   );
 }
@@ -383,11 +389,46 @@ function daysBetween(a: string, b: string): number {
 function merchantsLookRelated(a: string | undefined, b: string | undefined): boolean {
   const merchantA = normalizeMerchant(a);
   const merchantB = normalizeMerchant(b);
-  return (
-    merchantA.length > 0 &&
-    merchantB.length > 0 &&
-    (merchantA === merchantB || merchantA.includes(merchantB) || merchantB.includes(merchantA))
-  );
+  if (!merchantA || !merchantB) return false;
+  if (merchantA === merchantB || merchantA.includes(merchantB) || merchantB.includes(merchantA)) {
+    return true;
+  }
+  if (merchantA.length >= 6 && merchantB.includes(merchantA.slice(0, 6))) return true;
+  if (merchantB.length >= 6 && merchantA.includes(merchantB.slice(0, 6))) return true;
+
+  const tokensA = tokenizeMerchant(a);
+  const tokensB = tokenizeMerchant(b);
+  for (const token of tokensA) {
+    if (tokensB.has(token)) return true;
+  }
+  return false;
+}
+
+function tokenizeMerchant(value: string | undefined): Set<string> {
+  const stopWords = new Set([
+    'purchase',
+    'payment',
+    'payments',
+    'authorized',
+    'recurring',
+    'card',
+    'draft',
+    'entry',
+    'descr',
+    'pmts',
+    'mktplace',
+    'mktpl',
+  ]);
+  const tokens = new Set<string>();
+  const matches = (value || '').toLowerCase().match(/[a-z0-9]{3,}/g);
+  if (matches) {
+    for (const m of matches) {
+      if (!stopWords.has(m)) {
+        tokens.add(m);
+      }
+    }
+  }
+  return tokens;
 }
 
 function normalizeMerchant(value: string | undefined): string {

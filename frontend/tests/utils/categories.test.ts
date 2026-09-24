@@ -32,6 +32,8 @@ describe('categories utils', () => {
     expect(isSpendingExcludedCategory('CREDIT_CARD_PAYMENT')).toBe(true);
     expect(isSpendingExcludedCategory('Credit Card Payments')).toBe(true);
     expect(isSpendingExcludedCategory('TRANSFER_OUT')).toBe(true);
+    expect(isSpendingExcludedCategory('INCOME')).toBe(true);
+    expect(isSpendingExcludedCategory('LOAN_PAYMENTS_CREDIT_CARD_PAYMENT')).toBe(true);
     expect(isSpendingExcludedCategory('Groceries')).toBe(false);
   });
 });

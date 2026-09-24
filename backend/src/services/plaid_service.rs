@@ -13,6 +13,7 @@ pub struct RealPlaidClient {
     client_id: String,
     secret: String,
     base_url: String,
+    redirect_uri: Option<String>,
     http_client: reqwest::Client,
 }
 
@@ -27,8 +28,14 @@ impl RealPlaidClient {
             client_id,
             secret,
             base_url: base_url.to_string(),
+            redirect_uri: None,
             http_client: reqwest::Client::new(),
         }
+    }
+
+    pub fn with_redirect_uri(mut self, redirect_uri: Option<String>) -> Self {
+        self.redirect_uri = redirect_uri.filter(|uri| !uri.trim().is_empty());
+        self
     }
 
     async fn get_institution_name(&self, institution_id: &str) -> Result<String> {
@@ -65,7 +72,7 @@ impl RealPlaidClient {
 
 impl RealPlaidClient {
     pub async fn create_link_token(&self, user_id: &str) -> Result<String> {
-        let request_body = json!({
+        let mut request_body = json!({
             "client_id": self.client_id,
             "secret": self.secret,
             "client_name": "Sumurai",
@@ -76,6 +83,10 @@ impl RealPlaidClient {
             },
             "products": ["transactions"]
         });
+
+        if let Some(redirect_uri) = &self.redirect_uri {
+            request_body["redirect_uri"] = json!(redirect_uri);
+        }
 
         let response = self
             .http_client

@@ -133,8 +133,6 @@ Thumbs.db
 # ================================
 # Docker & Container Data
 # ================================
-.dockerignore
-
 # Docker volumes and data
 docker-data/
 postgres-data/
