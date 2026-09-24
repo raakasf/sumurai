@@ -852,6 +852,73 @@ fn given_plaid_credit_refund_when_summing_then_subtracts_from_spending() {
 }
 
 #[test]
+fn given_plaid_credit_autopay_when_summing_then_excludes_from_spending() {
+    let mut autopay = create_test_transaction_with_account_details(
+        dec!(-1225.54),
+        NaiveDate::from_ymd_opt(2024, 3, 6).unwrap(),
+        "LOAN_PAYMENTS",
+        None,
+        "plaid",
+        "credit",
+    );
+    autopay.category_detailed = "LOAN_PAYMENTS_CREDIT_CARD_PAYMENT".to_string();
+
+    let txns = vec![
+        create_test_transaction_with_account_details(
+            dec!(100.00),
+            NaiveDate::from_ymd_opt(2024, 3, 5).unwrap(),
+            "Food",
+            None,
+            "plaid",
+            "credit",
+        ),
+        autopay,
+    ];
+
+    let total = AnalyticsService::sum_spending_transactions_with_account(
+        &txns,
+        Some(NaiveDate::from_ymd_opt(2024, 3, 1).unwrap()),
+        Some(NaiveDate::from_ymd_opt(2024, 3, 31).unwrap()),
+    );
+
+    // The $1225.54 autopay should be excluded and NOT subtract from $100 spending
+    assert_eq!(total, dec!(100.00));
+}
+
+#[test]
+fn given_pending_transaction_when_summing_then_excludes_from_spending() {
+    let mut pending_txn = create_test_transaction_with_account_details(
+        dec!(78.60),
+        NaiveDate::from_ymd_opt(2024, 3, 5).unwrap(),
+        "Mortgage",
+        None,
+        "plaid",
+        "depository",
+    );
+    pending_txn.pending = true;
+
+    let posted_txn = create_test_transaction_with_account_details(
+        dec!(78.60),
+        NaiveDate::from_ymd_opt(2024, 3, 5).unwrap(),
+        "Mortgage",
+        None,
+        "plaid",
+        "depository",
+    );
+
+    let txns = vec![pending_txn, posted_txn];
+
+    let total = AnalyticsService::sum_spending_transactions_with_account(
+        &txns,
+        Some(NaiveDate::from_ymd_opt(2024, 3, 1).unwrap()),
+        Some(NaiveDate::from_ymd_opt(2024, 3, 31).unwrap()),
+    );
+
+    // Only the posted transaction should be counted, not the pending duplicate
+    assert_eq!(total, dec!(78.60));
+}
+
+#[test]
 fn given_teller_depository_inflow_when_summing_then_excludes_from_spending() {
     let txns = vec![
         create_test_transaction_with_account_details(

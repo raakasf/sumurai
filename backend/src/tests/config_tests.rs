@@ -43,14 +43,14 @@ fn given_custom_database_url_when_from_env_provider_then_uses_custom_url() {
 }
 
 #[test]
-fn given_no_provider_specified_when_from_env_provider_then_defaults_to_teller() {
+fn given_no_provider_specified_when_from_env_provider_then_defaults_to_plaid() {
     let mut env = MockEnvironment::new();
     env.set("TELLER_ENV", "development");
     env.set("DATABASE_URL", "postgresql://localhost:5432/test");
 
     let config = Config::from_env_provider(&env).unwrap();
 
-    assert_eq!(config.get_default_provider(), "teller");
+    assert_eq!(config.get_default_provider(), "plaid");
 }
 
 #[test]

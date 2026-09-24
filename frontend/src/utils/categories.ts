@@ -23,6 +23,8 @@ export function isSpendingExcludedCategory(category: string | undefined | null):
     'investments',
     'transferin',
     'transferout',
+    'loanpaymentscreditcardpayment',
+    'income',
   ].includes(key);
 }
 

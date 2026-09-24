@@ -267,11 +267,10 @@ const DashboardPage: React.FC<DashboardPageProps> = ({
                             <button
                               type="button"
                               key={`topcard-${cat.name}`}
-                              className={`p-2 rounded-lg border text-left transition-all duration-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-300 dark:focus-visible:ring-sky-400 ${
-                                isHovered
+                              className={`p-2 rounded-lg border text-left transition-all duration-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-300 dark:focus-visible:ring-sky-400 ${isHovered
                                   ? 'bg-slate-50 dark:bg-slate-700/40 border-[#93c5fd] dark:border-[#38bdf8] -translate-y-[2px]'
                                   : 'border-slate-200 dark:border-slate-700'
-                              }`}
+                                }`}
                               aria-label={`Show ${cat.name} transactions`}
                               title={`Show ${cat.name} transactions`}
                               onMouseEnter={() => setHoveredCategory(cat.name)}
@@ -470,12 +469,12 @@ const DashboardPage: React.FC<DashboardPageProps> = ({
                             const spanDays =
                               first && last
                                 ? Math.max(
-                                    1,
-                                    Math.round(
-                                      (new Date(last).getTime() - new Date(first).getTime()) /
-                                        86400000
-                                    )
+                                  1,
+                                  Math.round(
+                                    (new Date(last).getTime() - new Date(first).getTime()) /
+                                    86400000
                                   )
+                                )
                                 : 0;
                             if (!Number.isFinite(d.getTime())) return value;
                             if (spanDays && spanDays <= 92) {
@@ -500,9 +499,13 @@ const DashboardPage: React.FC<DashboardPageProps> = ({
                         tickFormatter={(v) => {
                           const n = Math.abs(Number(v));
                           const sign = Number(v) < 0 ? '-' : '';
+                          const span = netYAxisDomain
+                            ? Math.abs(netYAxisDomain[1] - netYAxisDomain[0])
+                            : 0;
+                          const digits = span > 0 && span < 2_000_000 ? 2 : 1;
                           const compact = new Intl.NumberFormat('en-US', {
                             notation: 'compact',
-                            maximumFractionDigits: 0,
+                            maximumFractionDigits: digits,
                           }).format(n);
                           return `${sign}${compact}`;
                         }}

@@ -63,6 +63,8 @@ const apiClientMock = jest.requireMock('@/services/ApiClient').ApiClient as { po
 
 describe('usePlaidLinkFlow', () => {
   beforeEach(() => {
+    window.history.replaceState(null, '', '/');
+    window.sessionStorage.clear();
     plaidConnectionsMock.connections = [];
     plaidConnectionsMock.loading = false;
     plaidConnectionsMock.error = null;
@@ -111,6 +113,35 @@ describe('usePlaidLinkFlow', () => {
     expect(onError.mock.calls.every((call) => call[0] === null)).toBe(true);
   });
 
+  it('refreshes linked accounts when the initial transaction sync fails', async () => {
+    const connection = {
+      connectionId: 'conn-1',
+      id: 'conn-1',
+      institutionName: 'Test Bank',
+      lastSyncAt: null,
+      transactionCount: 0,
+      accountCount: 0,
+      syncInProgress: false,
+      isConnected: true,
+      accounts: [],
+    };
+    plaidConnectionsMock.refresh
+      .mockResolvedValueOnce([connection])
+      .mockResolvedValueOnce([connection]);
+    plaidServiceMock.exchangeToken.mockResolvedValueOnce({ access_token: 'access' } as any);
+    plaidServiceMock.syncTransactions.mockRejectedValueOnce(new Error('sync unavailable'));
+
+    renderHook(() => usePlaidLinkFlow());
+
+    const config = plaidLinkMock.getConfig();
+    await act(async () => {
+      await config.onSuccess('public-token');
+    });
+
+    expect(plaidServiceMock.syncTransactions).toHaveBeenCalledWith('conn-1');
+    expect(plaidConnectionsMock.refresh).toHaveBeenCalledTimes(2);
+  });
+
   it('provides syncOne, syncAll, and disconnect helpers', async () => {
     const onError = jest.fn();
     plaidConnectionsMock.connections = [
@@ -135,7 +166,7 @@ describe('usePlaidLinkFlow', () => {
         sync_timestamp: '2024-01-01T00:00:00Z',
       },
     } as any);
-    plaidServiceMock.disconnect.mockResolvedValue({} as any);
+    plaidServiceMock.disconnect.mockResolvedValue({ success: true } as any);
 
     const { result } = renderHook(() => usePlaidLinkFlow({ onError }));
 
@@ -177,6 +208,36 @@ describe('usePlaidLinkFlow', () => {
 
     expect(onError).toHaveBeenCalledWith('Failed to start bank connection: bad request');
     expect(result.current.error).toBe('Failed to start bank connection: bad request');
+  });
+
+  it('reports an incomplete institution connection when Plaid Link exits cleanly', async () => {
+    const onError = jest.fn();
+
+    renderHook(() => usePlaidLinkFlow({ onError }));
+
+    const config = plaidLinkMock.getConfig();
+    act(() => {
+      config.onExit(null, {
+        institution: { name: 'Wells Fargo', institution_id: 'ins_4' },
+        status: 'requires_oauth',
+        link_session_id: 'session-1',
+        request_id: 'request-1',
+      });
+    });
+
+    expect(onError).toHaveBeenCalledWith(expect.stringContaining('Wells Fargo was not connected'));
+  });
+
+  it('resumes Plaid Link after an OAuth redirect with the original link token', () => {
+    (window.sessionStorage.getItem as jest.Mock).mockReturnValueOnce('oauth-link-token');
+    window.history.replaceState(null, '', '/?oauth_state_id=oauth-state');
+
+    renderHook(() => usePlaidLinkFlow());
+
+    const config = plaidLinkMock.getConfig();
+    expect(config.token).toBe('oauth-link-token');
+    expect(config.receivedRedirectUri).toBe(window.location.href);
+    expect(plaidLinkMock.open).toHaveBeenCalled();
   });
 });
 
@@ -309,7 +370,7 @@ describe('usePlaidLinkFlow with OpenTelemetry Instrumentation', () => {
       },
     ];
     plaidConnectionsMock.getConnection.mockReturnValue(plaidConnectionsMock.connections[0]);
-    plaidServiceMock.disconnect.mockResolvedValue({} as any);
+    plaidServiceMock.disconnect.mockResolvedValue({ success: true } as any);
     plaidConnectionsMock.refresh.mockResolvedValue([]);
 
     const { result } = renderHook(() => usePlaidLinkFlow({ onError }));

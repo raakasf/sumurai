@@ -1,0 +1,5 @@
+.git
+backend/target
+frontend/.next
+frontend/node_modules
+node_modules

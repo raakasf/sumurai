@@ -116,11 +116,14 @@ async fn main() -> anyhow::Result<()> {
 
     let config = Config::from_env()?;
 
-    let plaid_client = Arc::new(RealPlaidClient::new(
-        std::env::var("PLAID_CLIENT_ID").unwrap_or_else(|_| "test_client_id".to_string()),
-        std::env::var("PLAID_SECRET").unwrap_or_else(|_| "test_secret".to_string()),
-        std::env::var("PLAID_ENV").unwrap_or_else(|_| "sandbox".to_string()),
-    ));
+    let plaid_client = Arc::new(
+        RealPlaidClient::new(
+            std::env::var("PLAID_CLIENT_ID").unwrap_or_else(|_| "test_client_id".to_string()),
+            std::env::var("PLAID_SECRET").unwrap_or_else(|_| "test_secret".to_string()),
+            std::env::var("PLAID_ENV").unwrap_or_else(|_| "sandbox".to_string()),
+        )
+        .with_redirect_uri(std::env::var("PLAID_REDIRECT_URI").ok()),
+    );
     let plaid_service = Arc::new(PlaidService::new(plaid_client.clone()));
     let plaid_provider: Arc<dyn providers::FinancialDataProvider> =
         Arc::new(providers::PlaidProvider::new(plaid_client.clone()));
@@ -157,20 +160,6 @@ async fn main() -> anyhow::Result<()> {
         )
     })?;
     tracing::info!("Redis connection verified successfully");
-
-    // Clear all cached sessions on app startup for security
-    if let Err(e) = cache_service.invalidate_pattern("*_session_valid").await {
-        tracing::warn!("Failed to clear cached sessions on startup: {}", e);
-    } else {
-        tracing::info!("Cleared all cached sessions on app startup");
-    }
-
-    // Clear all JWT tokens on startup for security
-    if let Err(e) = cache_service.invalidate_pattern("*_session_token").await {
-        tracing::warn!("Failed to clear JWT tokens on startup: {}", e);
-    } else {
-        tracing::info!("Cleared all JWT tokens on app startup");
-    }
 
     let connection_service = Arc::new(ConnectionService::new(
         db_repository.clone(),
@@ -1115,13 +1104,25 @@ async fn create_authenticated_link_token(
     Json(_req): Json<LinkTokenRequest>,
 ) -> Result<Json<LinkTokenResponse>, (StatusCode, Json<ApiErrorResponse>)> {
     let provider = state.config.get_default_provider();
+    tracing::info!(
+        provider,
+        user_id = %auth_context.user_id,
+        "Creating provider link token"
+    );
 
     match state
         .connection_service
         .create_link_token(provider, &auth_context.user_id)
         .await
     {
-        Ok(link_token) => Ok(Json(LinkTokenResponse { link_token })),
+        Ok(link_token) => {
+            tracing::info!(
+                provider,
+                user_id = %auth_context.user_id,
+                "Provider link token created"
+            );
+            Ok(Json(LinkTokenResponse { link_token }))
+        }
         Err(LinkTokenError::ProviderUnavailable(p)) => {
             tracing::error!(
                 "Link token requested for unsupported provider '{}' by user {}",
