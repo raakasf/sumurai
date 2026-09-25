@@ -5,6 +5,7 @@ import { toDateOnlyKey } from '../utils/dateOnly';
 export interface FilterCriteria {
   search?: string;
   category?: string;
+  subcategory?: string;
   dateRange?: { start: string; end: string };
 }
 
@@ -30,6 +31,14 @@ export class TransactionFilter {
     });
   }
 
+  static filterBySubcategory(transactions: Transaction[], subcategory: string): Transaction[] {
+    const subLower = subcategory.toLowerCase();
+    return transactions.filter((t) => {
+      const detailed = t.category?.detailed || t.custom_subcategory || t.rule_subcategory || '';
+      return detailed.toLowerCase() === subLower;
+    });
+  }
+
   static filterByDateRange(transactions: Transaction[], start: string, end: string): Transaction[] {
     return transactions.filter((t) => {
       const dateString = toDateOnlyKey(t.date);
@@ -52,6 +61,10 @@ export class TransactionFilter {
 
     if (criteria.category) {
       result = TransactionFilter.filterByCategory(result, criteria.category);
+    }
+
+    if (criteria.subcategory) {
+      result = TransactionFilter.filterBySubcategory(result, criteria.subcategory);
     }
 
     if (criteria.dateRange) {

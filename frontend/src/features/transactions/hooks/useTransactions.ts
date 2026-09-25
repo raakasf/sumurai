@@ -4,7 +4,11 @@ import { useAccountFilter } from '../../../hooks/useAccountFilter';
 import { CategoryService } from '../../../services/CategoryService';
 import { type TransactionFilters, TransactionService } from '../../../services/TransactionService';
 import type { Transaction, UserCategory } from '../../../types/api';
-import { formatCategoryName } from '../../../utils/categories';
+import {
+  formatCategoryName,
+  getSubcategoriesForCategory,
+  resolveMajorCategory,
+} from '../../../utils/categories';
 import {
   computeMonthRange,
   getCurrentMonthSelection,
@@ -16,6 +20,7 @@ import type { ProviderAccount } from '../../../context/AccountFilterContext';
 export interface UseTransactionsOptions {
   initialSearch?: string;
   initialCategory?: string | null;
+  initialSubcategory?: string | null;
   period?: MonthYearSelection;
   setPeriod?: (period: MonthYearSelection) => void;
   initialAccountId?: string | null;
@@ -26,11 +31,16 @@ export interface UseTransactionsResult {
   isLoading: boolean;
   error: string | null;
   transactions: Transaction[];
+  allTransactions: Transaction[];
+  monthRange: { start: string; end: string };
   categories: string[];
+  subcategories: string[];
   search: string;
   setSearch: (s: string) => void;
   selectedCategory: string | null;
   setSelectedCategory: (c: string | null) => void;
+  selectedSubcategory: string | null;
+  setSelectedSubcategory: (s: string | null) => void;
   period: MonthYearSelection;
   setPeriod: (period: MonthYearSelection) => void;
   accountOptions: ProviderAccount[];
@@ -46,10 +56,10 @@ export interface UseTransactionsResult {
   // category management
   userCategories: UserCategory[];
   markTransactionDuplicate: (transactionId: string) => Promise<void>;
-  updateTransactionCategory: (transactionId: string, categoryName: string) => Promise<void>;
+  updateTransactionCategory: (transactionId: string, categoryName: string, subcategoryName?: string) => Promise<void>;
   resetTransactionCategory: (transactionId: string) => Promise<void>;
-  createCategoryAndAssign: (transactionId: string, name: string) => Promise<void>;
-  createCategoryRule: (transactionId: string, pattern: string, categoryName: string) => Promise<void>;
+  createCategoryAndAssign: (transactionId: string, name: string, parentCategory?: string) => Promise<void>;
+  createCategoryRule: (transactionId: string, pattern: string, categoryName: string, subcategoryName?: string) => Promise<void>;
   deleteUserCategory: (categoryId: string) => Promise<void>;
 }
 
@@ -57,6 +67,7 @@ export function useTransactions(options: UseTransactionsOptions = {}): UseTransa
   const {
     initialSearch = '',
     initialCategory = null,
+    initialSubcategory = null,
     period: controlledPeriod,
     setPeriod: controlledSetPeriod,
     initialAccountId = null,
@@ -67,7 +78,22 @@ export function useTransactions(options: UseTransactionsOptions = {}): UseTransa
   const [error, setError] = useState<string | null>(null);
   const [all, setAll] = useState<Transaction[]>([]);
   const [search, setSearch] = useState(initialSearch);
-  const [selectedCategory, setSelectedCategory] = useState<string | null>(initialCategory);
+  const [selectedCategory, setSelectedCategoryState] = useState<string | null>(initialCategory);
+  const [selectedSubcategory, setSelectedSubcategory] = useState<string | null>(initialSubcategory);
+
+  const setSelectedCategory = useCallback((category: string | null) => {
+    setSelectedCategoryState(category);
+    setSelectedSubcategory(null);
+  }, []);
+
+  const prevCategoryRef = useRef(selectedCategory);
+  useEffect(() => {
+    if (prevCategoryRef.current !== selectedCategory) {
+      prevCategoryRef.current = selectedCategory;
+      setSelectedSubcategory(null);
+    }
+  }, [selectedCategory]);
+
   const [uncontrolledPeriod, setUncontrolledPeriod] = useState<MonthYearSelection>(() =>
     getCurrentMonthSelection()
   );
@@ -156,19 +182,33 @@ export function useTransactions(options: UseTransactionsOptions = {}): UseTransa
 
   useEffect(() => {
     setSelectedCategory(initialCategory);
+    setSelectedSubcategory(null);
   }, [initialCategory]);
+
+  useEffect(() => {
+    setSelectedSubcategory(initialSubcategory);
+  }, [initialSubcategory]);
 
   useEffect(() => {
     setSelectedAccountId(initialAccountId);
   }, [initialAccountId]);
 
   const updateTransactionCategory = useCallback(
-    async (transactionId: string, categoryName: string) => {
-      await CategoryService.setTransactionCategory(transactionId, categoryName);
+    async (transactionId: string, categoryName: string, subcategoryName?: string) => {
+      await CategoryService.setTransactionCategory(transactionId, categoryName, subcategoryName);
       setAll((prev) =>
         prev.map((t) =>
           t.id === transactionId
-            ? { ...t, custom_category: categoryName, category: { ...t.category, primary: categoryName } }
+            ? {
+              ...t,
+              custom_category: categoryName,
+              custom_subcategory: subcategoryName,
+              category: {
+                ...t.category,
+                primary: categoryName,
+                ...(subcategoryName ? { detailed: subcategoryName } : {}),
+              },
+            }
             : t
         )
       );
@@ -183,14 +223,24 @@ export function useTransactions(options: UseTransactionsOptions = {}): UseTransa
   }, [load]);
 
   const createCategoryAndAssign = useCallback(
-    async (transactionId: string, name: string) => {
-      const created = await CategoryService.createCategory(name);
+    async (transactionId: string, name: string, parentCategory?: string) => {
+      const created = await CategoryService.createCategory(name, parentCategory);
       setUserCategories((prev) => [...prev, created].sort((a, b) => a.name.localeCompare(b.name)));
-      await CategoryService.setTransactionCategory(transactionId, name);
+      const majorCat = parentCategory || 'Other';
+      await CategoryService.setTransactionCategory(transactionId, majorCat, name);
       setAll((prev) =>
         prev.map((t) =>
           t.id === transactionId
-            ? { ...t, custom_category: name, category: { ...t.category, primary: name } }
+            ? {
+              ...t,
+              custom_category: majorCat,
+              custom_subcategory: name,
+              category: {
+                ...t.category,
+                primary: majorCat,
+                detailed: name,
+              },
+            }
             : t
         )
       );
@@ -199,8 +249,15 @@ export function useTransactions(options: UseTransactionsOptions = {}): UseTransa
   );
 
   const createCategoryRule = useCallback(
-    async (_transactionId: string, pattern: string, categoryName: string) => {
-      await CategoryService.createRule(pattern, categoryName);
+    async (transactionId: string, pattern: string, categoryName: string, subcategoryName?: string) => {
+      await CategoryService.createRule(pattern, categoryName, subcategoryName);
+      if (transactionId) {
+        try {
+          await CategoryService.removeTransactionCategory(transactionId);
+        } catch {
+          // Ignore if no override existed
+        }
+      }
       // Reload so glob matching is re-applied server-side for all transactions
       await load();
     },
@@ -225,10 +282,14 @@ export function useTransactions(options: UseTransactionsOptions = {}): UseTransa
   const debouncedSearch = useDebounce(search, 300);
 
   const resolveCategoryLabel = useCallback((t: Transaction) => {
-    if (!t.category) {
+    if (!t.category?.primary) {
       return 'Uncategorized';
     }
-    return formatCategoryName(t.category.primary);
+    return resolveMajorCategory(t.category.primary);
+  }, []);
+
+  const resolveSubcategoryLabel = useCallback((t: Transaction) => {
+    return t.category?.detailed || t.custom_subcategory || t.rule_subcategory || '';
   }, []);
 
   const categoryOptionItems = useMemo(() => {
@@ -245,14 +306,15 @@ export function useTransactions(options: UseTransactionsOptions = {}): UseTransa
     const criteria: FilterCriteria = {
       search: debouncedSearch.trim(),
       category: selectedCategory || undefined,
+      subcategory: selectedSubcategory || undefined,
       dateRange: { start: monthRange.start, end: monthRange.end },
     };
     const result = TransactionFilter.filter(all, criteria);
-    if (!selectedCategory) {
+    if (!selectedCategory && !selectedSubcategory) {
       return result;
     }
     return result.filter((transaction) => getNetSpendingAmount(transaction) !== 0);
-  }, [all, debouncedSearch, selectedCategory, monthRange.start, monthRange.end]);
+  }, [all, debouncedSearch, selectedCategory, selectedSubcategory, monthRange.start, monthRange.end]);
 
   const availableCategories = useMemo(() => {
     const names = new Set<string>();
@@ -264,20 +326,70 @@ export function useTransactions(options: UseTransactionsOptions = {}): UseTransa
   }, [categoryOptionItems, resolveCategoryLabel]);
 
   const categories = useMemo(() => {
-    if (!selectedCategory) {
-      return availableCategories;
+    return availableCategories;
+  }, [availableCategories]);
+
+  const subcategories = useMemo(() => {
+    if (selectedCategory) {
+      const allSubs = getSubcategoriesForCategory(selectedCategory, userCategories);
+      const validSubMap = new Map<string, string>();
+      for (const s of allSubs) {
+        validSubMap.set(s.toLowerCase(), s);
+      }
+      const selectedCatLower = selectedCategory.trim().toLowerCase();
+
+      const txnSubs = new Set<string>();
+      for (const t of categoryOptionItems) {
+        const cat = resolveCategoryLabel(t);
+        if (cat.toLowerCase() === selectedCatLower) {
+          const sub = resolveSubcategoryLabel(t);
+          if (sub) {
+            const canonical = validSubMap.get(sub.toLowerCase());
+            if (canonical) {
+              txnSubs.add(canonical);
+            }
+          }
+        }
+      }
+      const result: string[] = [];
+      for (const sub of txnSubs) {
+        result.push(sub);
+      }
+      for (const sub of allSubs) {
+        if (!result.includes(sub)) {
+          result.push(sub);
+        }
+      }
+      return result;
     }
-    return availableCategories.includes(selectedCategory) ? [selectedCategory] : [];
-  }, [availableCategories, selectedCategory]);
+
+    const names = new Set<string>();
+    for (const t of categoryOptionItems) {
+      const cat = resolveCategoryLabel(t);
+      const sub = resolveSubcategoryLabel(t);
+      if (
+        sub &&
+        sub.toLowerCase() !== 'other' &&
+        !sub.toLowerCase().startsWith('other ') &&
+        (cat
+          ? cat.toLowerCase() === 'groceries' || sub.toLowerCase() !== cat.toLowerCase()
+          : true)
+      ) {
+        names.add(sub);
+      }
+    }
+    return Array.from(names).sort((a, b) => a.localeCompare(b));
+  }, [selectedCategory, userCategories, categoryOptionItems, resolveCategoryLabel, resolveSubcategoryLabel]);
 
   useEffect(() => {
     if (
       selectedCategory &&
       !isLoading &&
       availableCategories.length > 0 &&
-      !availableCategories.includes(selectedCategory)
+      !availableCategories.some((c) => c.toLowerCase() === selectedCategory.toLowerCase())
     ) {
       setSelectedCategory(null);
+      setSelectedSubcategory(null);
     }
   }, [availableCategories, isLoading, selectedCategory]);
 
@@ -330,7 +442,7 @@ export function useTransactions(options: UseTransactionsOptions = {}): UseTransa
   // biome-ignore lint/correctness/useExhaustiveDependencies: specific filters should reset pagination
   useEffect(() => {
     setCurrentPage(1);
-  }, [selectedCategory, debouncedSearch, period, selectedAccountIds, selectedAccountId]);
+  }, [selectedCategory, selectedSubcategory, debouncedSearch, period, selectedAccountIds, selectedAccountId]);
 
   useEffect(() => {
     if (currentPage > totalPages) setCurrentPage(totalPages);
@@ -340,11 +452,16 @@ export function useTransactions(options: UseTransactionsOptions = {}): UseTransa
     isLoading,
     error,
     transactions: activeTransactions,
+    allTransactions: all,
+    monthRange,
     categories,
+    subcategories,
     search,
     setSearch,
     selectedCategory,
     setSelectedCategory,
+    selectedSubcategory,
+    setSelectedSubcategory,
     period,
     setPeriod,
     accountOptions,

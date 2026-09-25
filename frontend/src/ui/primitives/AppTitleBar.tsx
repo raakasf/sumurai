@@ -26,13 +26,12 @@ const titleBarVariants = cva(
   }
 );
 
-type TabKey = 'dashboard' | 'trends' | 'transactions' | 'budgets' | 'accounts' | 'settings';
+type TabKey = 'dashboard' | 'trends' | 'transactions' | 'accounts' | 'settings';
 
 const TABS: Array<{ key: TabKey; label: string }> = [
   { key: 'dashboard', label: 'Dashboard' },
   { key: 'trends', label: 'Trends' },
   { key: 'transactions', label: 'Transactions' },
-  { key: 'budgets', label: 'Budgets' },
   { key: 'accounts', label: 'Accounts' },
 ];
 
@@ -126,11 +125,10 @@ export const AppTitleBar = React.forwardRef<HTMLElement, AppTitleBarProps>(
                       type="button"
                       onClick={() => onTabChange?.(key)}
                       variant={currentTab === key ? 'tabActive' : 'tab'}
-                      className={`${scrolled ? 'px-3 py-1 text-xs' : 'px-4 py-1.5 text-sm'} after:absolute after:inset-[-28%] after:rounded-[999px] after:bg-[radial-gradient(circle_at_35%_30%,rgba(14,165,233,0.16),transparent_62%)] after:opacity-0 after:transition-opacity after:duration-300 hover:after:opacity-90 dark:after:bg-[radial-gradient(circle_at_35%_30%,rgba(56,189,248,0.22),transparent_62%)] ${
-                        currentTab !== key
+                      className={`${scrolled ? 'px-3 py-1 text-xs' : 'px-4 py-1.5 text-sm'} after:absolute after:inset-[-28%] after:rounded-[999px] after:bg-[radial-gradient(circle_at_35%_30%,rgba(14,165,233,0.16),transparent_62%)] after:opacity-0 after:transition-opacity after:duration-300 hover:after:opacity-90 dark:after:bg-[radial-gradient(circle_at_35%_30%,rgba(56,189,248,0.22),transparent_62%)] ${currentTab !== key
                           ? 'border border-slate-200/70 dark:border-white/10 bg-white/70 dark:bg-white/5 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:border-sky-300/50 dark:hover:border-sky-500/60 hover:shadow-[0_14px_32px_-18px_rgba(56,189,248,0.35)]'
                           : ''
-                      }`}
+                        }`}
                     >
                       {label}
                     </Button>

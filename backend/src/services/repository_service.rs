@@ -121,7 +121,10 @@ pub trait DatabaseRepository: Send + Sync {
         &self,
         budget_id: Uuid,
         user_id: Uuid,
-        amount: rust_decimal::Decimal,
+        amount: Option<rust_decimal::Decimal>,
+        frequency: Option<String>,
+        rollover: Option<bool>,
+        rollover_start_month: Option<String>,
     ) -> Result<Budget>;
 
     async fn delete_budget_for_user(&self, budget_id: Uuid, user_id: Uuid) -> Result<()>;
@@ -136,13 +139,19 @@ pub trait DatabaseRepository: Send + Sync {
     async fn delete_user(&self, user_id: &Uuid) -> Result<()>;
 
     async fn get_user_categories(&self, user_id: Uuid) -> Result<Vec<UserCategory>>;
-    async fn create_user_category(&self, user_id: Uuid, name: String) -> Result<UserCategory>;
+    async fn create_user_category(
+        &self,
+        user_id: Uuid,
+        name: String,
+        parent_category: Option<String>,
+    ) -> Result<UserCategory>;
     async fn delete_user_category(&self, category_id: Uuid, user_id: Uuid) -> Result<()>;
     async fn set_transaction_category_override(
         &self,
         transaction_id: Uuid,
         user_id: Uuid,
         category_name: String,
+        subcategory_name: Option<String>,
     ) -> Result<()>;
     async fn remove_transaction_category_override(
         &self,
@@ -156,6 +165,7 @@ pub trait DatabaseRepository: Send + Sync {
         user_id: Uuid,
         pattern: String,
         category_name: String,
+        subcategory_name: Option<String>,
     ) -> Result<CategoryRule>;
     async fn update_category_rule(
         &self,
@@ -163,6 +173,7 @@ pub trait DatabaseRepository: Send + Sync {
         user_id: Uuid,
         pattern: Option<String>,
         category_name: Option<String>,
+        subcategory_name: Option<String>,
     ) -> Result<CategoryRule>;
     async fn delete_category_rule(&self, rule_id: Uuid, user_id: Uuid) -> Result<()>;
 }
@@ -1434,6 +1445,7 @@ impl DatabaseRepository for PostgresRepository {
             account_mask: Option<String>,
             provider: Option<String>,
             custom_category: Option<String>,
+            custom_subcategory: Option<String>,
         }
 
         let mut tx = self.pool.begin().await?;
@@ -1453,7 +1465,8 @@ impl DatabaseRepository for PostgresRepository {
                      WHEN pc.item_id IS NOT NULL THEN 'plaid'
                      ELSE NULL
                    END as provider,
-                   tco.category_name as custom_category
+                   tco.category_name as custom_category,
+                   tco.subcategory_name as custom_subcategory
             FROM transactions t
             INNER JOIN accounts a ON t.account_id = a.id
             LEFT JOIN provider_connections pc ON a.provider_connection_id = pc.id
@@ -1492,7 +1505,9 @@ impl DatabaseRepository for PostgresRepository {
                 account_mask: r.account_mask,
                 provider: r.provider,
                 custom_category: r.custom_category,
+                custom_subcategory: r.custom_subcategory,
                 rule_category: None, // populated by the handler after applying category rules
+                rule_subcategory: None,
             })
             .collect())
     }
@@ -1711,7 +1726,7 @@ impl DatabaseRepository for PostgresRepository {
             .await?;
 
         let budgets = sqlx::query_as::<_, Budget>(
-            "SELECT id, user_id, category, amount, created_at, updated_at 
+            "SELECT id, user_id, category, amount, frequency, rollover, rollover_start_month, created_at, updated_at 
              FROM budgets 
              WHERE user_id = $1 
              ORDER BY category ASC",
@@ -1733,13 +1748,16 @@ impl DatabaseRepository for PostgresRepository {
             .await?;
 
         let res = sqlx::query(
-            "INSERT INTO budgets (id, user_id, category, amount, created_at, updated_at) 
-             VALUES ($1, $2, $3, $4, $5, $6)",
+            "INSERT INTO budgets (id, user_id, category, amount, frequency, rollover, rollover_start_month, created_at, updated_at) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
         )
         .bind(budget.id)
         .bind(budget.user_id)
         .bind(&budget.category)
         .bind(budget.amount)
+        .bind(&budget.frequency)
+        .bind(budget.rollover)
+        .bind(&budget.rollover_start_month)
         .bind(budget.created_at)
         .bind(budget.updated_at)
         .execute(&mut *tx)
@@ -1764,7 +1782,10 @@ impl DatabaseRepository for PostgresRepository {
         &self,
         budget_id: Uuid,
         user_id: Uuid,
-        amount: rust_decimal::Decimal,
+        amount: Option<rust_decimal::Decimal>,
+        frequency: Option<String>,
+        rollover: Option<bool>,
+        rollover_start_month: Option<String>,
     ) -> Result<Budget> {
         let mut tx = self.pool.begin().await?;
 
@@ -1776,10 +1797,18 @@ impl DatabaseRepository for PostgresRepository {
         let updated_at = chrono::Utc::now();
 
         sqlx::query(
-            "UPDATE budgets SET amount = $1, updated_at = $2 
-             WHERE id = $3 AND user_id = $4",
+            "UPDATE budgets 
+             SET amount = COALESCE($1, amount),
+                 frequency = COALESCE($2, frequency),
+                 rollover = COALESCE($3, rollover),
+                 rollover_start_month = CASE WHEN $4::text IS NOT NULL THEN $4 ELSE rollover_start_month END,
+                 updated_at = $5 
+             WHERE id = $6 AND user_id = $7",
         )
         .bind(amount)
+        .bind(frequency)
+        .bind(rollover)
+        .bind(rollover_start_month)
         .bind(updated_at)
         .bind(budget_id)
         .bind(user_id)
@@ -1787,7 +1816,7 @@ impl DatabaseRepository for PostgresRepository {
         .await?;
 
         let updated_budget = sqlx::query_as::<_, Budget>(
-            "SELECT id, user_id, category, amount, created_at, updated_at 
+            "SELECT id, user_id, category, amount, frequency, rollover, rollover_start_month, created_at, updated_at 
              FROM budgets 
              WHERE id = $1 AND user_id = $2",
         )
@@ -1907,7 +1936,7 @@ impl DatabaseRepository for PostgresRepository {
             .await?;
 
         let categories = sqlx::query_as::<_, UserCategory>(
-            "SELECT id, user_id, name, created_at
+            "SELECT id, user_id, name, parent_category, created_at
              FROM user_categories
              WHERE user_id = $1
              ORDER BY name ASC",
@@ -1920,7 +1949,12 @@ impl DatabaseRepository for PostgresRepository {
         Ok(categories)
     }
 
-    async fn create_user_category(&self, user_id: Uuid, name: String) -> Result<UserCategory> {
+    async fn create_user_category(
+        &self,
+        user_id: Uuid,
+        name: String,
+        parent_category: Option<String>,
+    ) -> Result<UserCategory> {
         let mut tx = self.pool.begin().await?;
 
         sqlx::query("SELECT set_config('app.current_user_id', $1, true)")
@@ -1932,12 +1966,13 @@ impl DatabaseRepository for PostgresRepository {
         let created_at = chrono::Utc::now();
 
         let res = sqlx::query(
-            "INSERT INTO user_categories (id, user_id, name, created_at)
-             VALUES ($1, $2, $3, $4)",
+            "INSERT INTO user_categories (id, user_id, name, parent_category, created_at)
+             VALUES ($1, $2, $3, $4, $5)",
         )
         .bind(id)
         .bind(user_id)
         .bind(&name)
+        .bind(&parent_category)
         .bind(created_at)
         .execute(&mut *tx)
         .await;
@@ -1958,6 +1993,7 @@ impl DatabaseRepository for PostgresRepository {
             id,
             user_id,
             name,
+            parent_category,
             created_at,
         })
     }
@@ -2005,6 +2041,7 @@ impl DatabaseRepository for PostgresRepository {
         transaction_id: Uuid,
         user_id: Uuid,
         category_name: String,
+        subcategory_name: Option<String>,
     ) -> Result<()> {
         let mut tx = self.pool.begin().await?;
 
@@ -2014,13 +2051,14 @@ impl DatabaseRepository for PostgresRepository {
             .await?;
 
         sqlx::query(
-            "INSERT INTO transaction_category_overrides (transaction_id, user_id, category_name, created_at)
-             VALUES ($1, $2, $3, NOW())
-             ON CONFLICT (transaction_id, user_id) DO UPDATE SET category_name = EXCLUDED.category_name",
+            "INSERT INTO transaction_category_overrides (transaction_id, user_id, category_name, subcategory_name, created_at)
+             VALUES ($1, $2, $3, $4, NOW())
+             ON CONFLICT (transaction_id, user_id) DO UPDATE SET category_name = EXCLUDED.category_name, subcategory_name = EXCLUDED.subcategory_name",
         )
         .bind(transaction_id)
         .bind(user_id)
         .bind(&category_name)
+        .bind(&subcategory_name)
         .execute(&mut *tx)
         .await?;
 
@@ -2061,10 +2099,10 @@ impl DatabaseRepository for PostgresRepository {
             .await?;
 
         let rules = sqlx::query_as::<_, CategoryRule>(
-            "SELECT id, user_id, pattern, category_name, created_at, updated_at
+            "SELECT id, user_id, pattern, category_name, subcategory_name, created_at, updated_at
              FROM category_rules
              WHERE user_id = $1
-             ORDER BY created_at ASC",
+             ORDER BY length(pattern) DESC, updated_at DESC, created_at DESC",
         )
         .bind(user_id)
         .fetch_all(&mut *tx)
@@ -2080,6 +2118,7 @@ impl DatabaseRepository for PostgresRepository {
         user_id: Uuid,
         pattern: String,
         category_name: String,
+        subcategory_name: Option<String>,
     ) -> Result<CategoryRule> {
         let mut tx = self.pool.begin().await?;
 
@@ -2091,38 +2130,33 @@ impl DatabaseRepository for PostgresRepository {
         let id = Uuid::new_v4();
         let now = chrono::Utc::now();
 
-        let res = sqlx::query(
-            "INSERT INTO category_rules (id, user_id, pattern, category_name, created_at, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $5)",
+        let rule = sqlx::query_as::<_, CategoryRule>(
+            "INSERT INTO category_rules (id, user_id, pattern, category_name, subcategory_name, created_at, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $6)
+             ON CONFLICT (user_id, pattern)
+             DO UPDATE SET
+                 category_name = EXCLUDED.category_name,
+                 subcategory_name = EXCLUDED.subcategory_name,
+                 updated_at = EXCLUDED.updated_at
+             RETURNING id, user_id, pattern, category_name, subcategory_name, created_at, updated_at",
         )
         .bind(id)
         .bind(user_id)
         .bind(&pattern)
         .bind(&category_name)
+        .bind(&subcategory_name)
         .bind(now)
-        .execute(&mut *tx)
+        .fetch_one(&mut *tx)
         .await;
 
-        if let Err(e) = res {
-            if let sqlx::Error::Database(db_err) = &e {
-                if db_err.is_unique_violation() {
-                    let _ = tx.rollback().await;
-                    return Err(anyhow::anyhow!("Rule pattern already exists"));
-                }
-            }
+        if let Err(e) = rule {
             let _ = tx.rollback().await;
             return Err(anyhow::anyhow!(e));
         }
 
+        let rule = rule.unwrap();
         tx.commit().await?;
-        Ok(CategoryRule {
-            id,
-            user_id,
-            pattern,
-            category_name,
-            created_at: now,
-            updated_at: now,
-        })
+        Ok(rule)
     }
 
     async fn update_category_rule(
@@ -2131,6 +2165,7 @@ impl DatabaseRepository for PostgresRepository {
         user_id: Uuid,
         pattern: Option<String>,
         category_name: Option<String>,
+        subcategory_name: Option<String>,
     ) -> Result<CategoryRule> {
         let mut tx = self.pool.begin().await?;
 
@@ -2145,11 +2180,13 @@ impl DatabaseRepository for PostgresRepository {
             "UPDATE category_rules
              SET pattern = COALESCE($1, pattern),
                  category_name = COALESCE($2, category_name),
-                 updated_at = $3
-             WHERE id = $4 AND user_id = $5",
+                 subcategory_name = COALESCE($3, subcategory_name),
+                 updated_at = $4
+             WHERE id = $5 AND user_id = $6",
         )
         .bind(pattern)
         .bind(category_name)
+        .bind(subcategory_name)
         .bind(now)
         .bind(rule_id)
         .bind(user_id)
@@ -2157,7 +2194,7 @@ impl DatabaseRepository for PostgresRepository {
         .await?;
 
         let updated = sqlx::query_as::<_, CategoryRule>(
-            "SELECT id, user_id, pattern, category_name, created_at, updated_at
+            "SELECT id, user_id, pattern, category_name, subcategory_name, created_at, updated_at
              FROM category_rules
              WHERE id = $1 AND user_id = $2",
         )

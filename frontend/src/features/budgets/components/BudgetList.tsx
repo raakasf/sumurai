@@ -17,6 +17,7 @@ export function BudgetList({
   onCancelEdit,
   onSaveEdit,
   onDelete,
+  onCategorySelect,
 }: {
   items: BudgetWithProgress[];
   editingId: string | null;
@@ -24,6 +25,7 @@ export function BudgetList({
   onCancelEdit: () => void;
   onSaveEdit: (id: string, amount: number) => void;
   onDelete: (id: string) => void;
+  onCategorySelect?: (category: string) => void;
 }) {
   const { format } = useCurrency();
   const [amountDrafts, setAmountDrafts] = React.useState<Record<string, string>>({});
@@ -62,7 +64,17 @@ export function BudgetList({
         return (
           <li
             key={b.id}
-            className={`group relative overflow-hidden rounded-[1.75rem] border border-slate-200/70 bg-white/90 p-6 shadow-[0_32px_80px_-58px_rgba(15,23,42,0.58)] transition-all duration-300 hover:-translate-y-1 hover:shadow-[0_38px_110px_-62px_rgba(14,165,233,0.35)] dark:border-white/10 dark:bg-[#111a2f]/90 dark:shadow-[0_32px_90px_-60px_rgba(2,6,23,0.76)] ${tagTheme.ring} ring-1 ring-offset-1 ring-offset-white dark:ring-offset-[#0f172a]`}
+            onClick={() => {
+              if (!isEditing && onCategorySelect) {
+                onCategorySelect(b.category);
+              }
+            }}
+            className={cn(
+              'group relative overflow-hidden rounded-[1.75rem] border border-slate-200/70 bg-white/90 p-6 shadow-[0_32px_80px_-58px_rgba(15,23,42,0.58)] transition-all duration-300 hover:-translate-y-1 hover:shadow-[0_38px_110px_-62px_rgba(14,165,233,0.35)] dark:border-white/10 dark:bg-[#111a2f]/90 dark:shadow-[0_32px_90px_-60px_rgba(2,6,23,0.76)] ring-1 ring-offset-1 ring-offset-white dark:ring-offset-[#0f172a]',
+              tagTheme.ring,
+              !isEditing && onCategorySelect && 'cursor-pointer hover:ring-2 hover:ring-sky-400/80 dark:hover:ring-sky-400/70'
+            )}
+            title={!isEditing && onCategorySelect ? `View ${displayName} transactions` : undefined}
           >
             <div
               className={cn(
@@ -90,8 +102,16 @@ export function BudgetList({
                   aria-hidden="true"
                 />
                 {displayName}
+                {!isEditing && onCategorySelect && (
+                  <span className="text-[0.6rem] font-bold opacity-0 transition-all duration-200 group-hover:opacity-100 group-hover:translate-x-0.5">
+                    →
+                  </span>
+                )}
               </div>
-              <div className={cn('flex', 'items-center', 'gap-2', 'text-xs')}>
+              <div
+                className={cn('flex', 'items-center', 'gap-2', 'text-xs')}
+                onClick={(e) => e.stopPropagation()}
+              >
                 {isEditing ? (
                   <>
                     <button
@@ -230,7 +250,10 @@ export function BudgetList({
                 )}
               </div>
             </div>
-            <div className={cn('mt-6', 'space-y-5')}>
+            <div
+              className={cn('mt-6', 'space-y-5')}
+              onClick={isEditing ? (e) => e.stopPropagation() : undefined}
+            >
               {isEditing ? (
                 <div
                   className={cn(

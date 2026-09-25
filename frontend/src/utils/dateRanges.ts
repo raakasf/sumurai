@@ -8,7 +8,7 @@ export type DateRangeKey =
 
 export type MonthYearSelection = {
   year: number;
-  month: number;
+  month: number | null;
 };
 
 const fmt = (d: Date) => {
@@ -33,6 +33,11 @@ export function getCurrentMonthSelection(today = new Date()): MonthYearSelection
 }
 
 export function computeMonthRange(selection: MonthYearSelection): { start: string; end: string } {
+  if (selection.month === null) {
+    const start = localDate(selection.year, 0, 1);
+    const end = localDate(selection.year, 12, 0);
+    return { start: fmt(start), end: fmt(end) };
+  }
   const start = localDate(selection.year, selection.month, 1);
   const end = localDate(selection.year, selection.month + 1, 0);
   return { start: fmt(start), end: fmt(end) };

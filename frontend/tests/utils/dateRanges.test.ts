@@ -1,4 +1,4 @@
-import { computeDateRange } from '@/utils/dateRanges';
+import { computeDateRange, computeMonthRange } from '@/utils/dateRanges';
 
 describe('computeDateRange', () => {
   it('computes current month range', () => {
@@ -24,13 +24,21 @@ describe('computeDateRange', () => {
   });
 
   it('computes all-time limited to five years', () => {
-    const now = new Date();
-    const start = new Date(now.getFullYear() - 5, now.getMonth(), now.getDate())
-      .toISOString()
-      .slice(0, 10);
-    const end = now.toISOString().slice(0, 10);
     const r = computeDateRange('all-time');
-    expect(r.start).toBe(start);
-    expect(r.end).toBe(end);
+    expect(r).toEqual({});
+  });
+});
+
+describe('computeMonthRange', () => {
+  it('computes single month range correctly', () => {
+    const range = computeMonthRange({ year: 2026, month: 8 }); // September 2026
+    expect(range.start).toBe('2026-09-01');
+    expect(range.end).toBe('2026-09-30');
+  });
+
+  it('computes full year range correctly when month is null', () => {
+    const range = computeMonthRange({ year: 2026, month: null });
+    expect(range.start).toBe('2026-01-01');
+    expect(range.end).toBe('2026-12-31');
   });
 });

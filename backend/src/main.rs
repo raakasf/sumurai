@@ -986,25 +986,7 @@ async fn get_authenticated_transactions(
 
             // Apply glob rules to transactions that have no explicit override.
             // Earlier rules take precedence (first match wins).
-            tracing::info!(rule_count = rules.len(), "applying category rules");
-            for txn in transactions.iter_mut() {
-                if txn.custom_category.is_none() {
-                    let merchant = txn.merchant_name.as_deref().unwrap_or("<null>");
-                    for rule in &rules {
-                        let matched = utils::glob::glob_match(&rule.pattern, merchant);
-                        tracing::info!(
-                            pattern = %rule.pattern,
-                            merchant = %merchant,
-                            matched = %matched,
-                            "category rule check"
-                        );
-                        if matched {
-                            txn.rule_category = Some(rule.category_name.clone());
-                            break;
-                        }
-                    }
-                }
-            }
+            apply_category_rules(&mut transactions, &rules);
 
             if let Some(search) = search.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty()) {
                 let needle = search.to_lowercase();
@@ -2581,6 +2563,7 @@ fn apply_category_rules(transactions: &mut [TransactionWithAccount], rules: &[Ca
             for rule in rules {
                 if utils::glob::glob_match(&rule.pattern, merchant) {
                     txn.rule_category = Some(rule.category_name.clone());
+                    txn.rule_subcategory = rule.subcategory_name.clone();
                     break;
                 }
             }
@@ -2814,7 +2797,15 @@ async fn create_authenticated_budget(
 
     match state
         .budget_service
-        .create_budget_for_user(&*state.db_repository, user_id, req.category, req.amount)
+        .create_budget_with_options_for_user(
+            &*state.db_repository,
+            user_id,
+            req.category,
+            req.amount,
+            req.frequency,
+            req.rollover,
+            req.rollover_start_month,
+        )
         .await
     {
         Ok(created_budget) => {
@@ -2875,7 +2866,15 @@ async fn update_authenticated_budget(
 
     match state
         .budget_service
-        .update_budget_for_user(&*state.db_repository, budget_uuid, user_id, req.amount)
+        .update_budget_with_options_for_user(
+            &*state.db_repository,
+            budget_uuid,
+            user_id,
+            req.amount,
+            req.frequency,
+            req.rollover,
+            req.rollover_start_month,
+        )
         .await
     {
         Ok(updated_budget) => {
@@ -3889,9 +3888,13 @@ async fn create_authenticated_user_category(
                 .into_response(StatusCode::BAD_REQUEST),
         );
     }
+    let parent_category = req
+        .parent_category
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
     match state
         .db_repository
-        .create_user_category(user_id, name)
+        .create_user_category(user_id, name, parent_category)
         .await
     {
         Ok(category) => Ok(Json(category)),
@@ -3991,9 +3994,13 @@ async fn set_authenticated_transaction_category(
                 .into_response(StatusCode::BAD_REQUEST),
         );
     }
+    let subcategory_name = req
+        .subcategory_name
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
     match state
         .db_repository
-        .set_transaction_category_override(txn_uuid, user_id, name)
+        .set_transaction_category_override(txn_uuid, user_id, name, subcategory_name)
         .await
     {
         Ok(_) => Ok(StatusCode::NO_CONTENT),
@@ -4082,7 +4089,11 @@ async fn create_authenticated_category_rule(
     let user_id = auth_context.user_id;
     let pattern = req.pattern.trim().to_string();
     let category_name = req.category_name.trim().to_string();
-    tracing::info!(user_id = %user_id, pattern = %pattern, category_name = %category_name, "create_category_rule called");
+    let subcategory_name = req
+        .subcategory_name
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    tracing::info!(user_id = %user_id, pattern = %pattern, category_name = %category_name, subcategory_name = ?subcategory_name, "create_category_rule called");
     if pattern.is_empty() || category_name.is_empty() {
         return Err(ApiErrorResponse::new(
             "BAD_REQUEST",
@@ -4092,7 +4103,7 @@ async fn create_authenticated_category_rule(
     }
     match state
         .db_repository
-        .create_category_rule(user_id, pattern, category_name)
+        .create_category_rule(user_id, pattern, category_name, subcategory_name)
         .await
     {
         Ok(rule) => Ok(Json(rule)),
@@ -4132,6 +4143,9 @@ async fn update_authenticated_category_rule(
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty()),
             req.category_name
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
+            req.subcategory_name
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty()),
         )

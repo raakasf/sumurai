@@ -26,6 +26,7 @@ export type HeroStatCardProps = {
   className?: string;
   /** Standardized min height for hero widgets */
   minHeightClassName?: string;
+  onClick?: () => void;
 };
 
 const classNames = (...classes: (string | false | null | undefined)[]) =>
@@ -184,6 +185,7 @@ export const HeroStatCard: React.FC<HeroStatCardProps> = ({
   accent: accentProp,
   className,
   minHeightClassName = 'min-h-[120px]',
+  onClick,
 }) => {
   const accent = accentProp ?? accentFromIndex(index);
   const styles = ACCENT_STYLES[accent];
@@ -213,8 +215,10 @@ export const HeroStatCard: React.FC<HeroStatCardProps> = ({
 
   return (
     <div
+      onClick={onClick}
       className={classNames(
         'hero-stat-card group relative rounded-2xl transition-colors duration-300',
+        onClick ? 'cursor-pointer' : '',
         className
       )}
     >

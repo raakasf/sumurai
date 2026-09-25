@@ -77,6 +77,30 @@ describe('TransactionFilter', () => {
     });
   });
 
+  describe('filterBySubcategory', () => {
+    const transactionsWithSubs: Transaction[] = [
+      { id: '1', date: '2024-01-15', name: 'Starbucks', amount: 5, category: { primary: 'Food & Dining', detailed: 'Coffee Shops' } },
+      { id: '2', date: '2024-01-20', name: 'Chipotle', amount: 12, category: { primary: 'Food & Dining', detailed: 'Fast Food' } },
+      { id: '3', date: '2024-01-25', name: 'Peets', amount: 6, category: { primary: 'Food & Dining' }, custom_subcategory: 'Coffee Shops' },
+    ];
+
+    it('should filter transactions by subcategory matching detailed or custom_subcategory', () => {
+      const result = TransactionFilter.filterBySubcategory(transactionsWithSubs, 'Coffee Shops');
+      expect(result).toHaveLength(2);
+      expect(result.map(t => t.id)).toEqual(['1', '3']);
+    });
+
+    it('should be case-insensitive for subcategory', () => {
+      const result = TransactionFilter.filterBySubcategory(transactionsWithSubs, 'coffee shops');
+      expect(result).toHaveLength(2);
+    });
+
+    it('should return empty array when subcategory does not match', () => {
+      const result = TransactionFilter.filterBySubcategory(transactionsWithSubs, 'Bars');
+      expect(result).toHaveLength(0);
+    });
+  });
+
   describe('filterByDateRange', () => {
     it('should filter transactions within date range', () => {
       const result = TransactionFilter.filterByDateRange(

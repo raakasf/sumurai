@@ -7,8 +7,11 @@ export class CategoryService {
     return Array.isArray(result) ? result : [];
   }
 
-  static async createCategory(name: string): Promise<UserCategory> {
-    return ApiClient.post<UserCategory>('/categories', { name });
+  static async createCategory(name: string, parentCategory?: string): Promise<UserCategory> {
+    return ApiClient.post<UserCategory>('/categories', {
+      name,
+      ...(parentCategory ? { parent_category: parentCategory } : {}),
+    });
   }
 
   static async deleteCategory(id: string): Promise<void> {
@@ -17,10 +20,12 @@ export class CategoryService {
 
   static async setTransactionCategory(
     transactionId: string,
-    categoryName: string
+    categoryName: string,
+    subcategoryName?: string
   ): Promise<void> {
     await ApiClient.put(`/transactions/${transactionId}/category`, {
       category_name: categoryName,
+      ...(subcategoryName ? { subcategory_name: subcategoryName } : {}),
     });
   }
 
@@ -33,16 +38,21 @@ export class CategoryService {
     return Array.isArray(result) ? result : [];
   }
 
-  static async createRule(pattern: string, categoryName: string): Promise<CategoryRule> {
+  static async createRule(
+    pattern: string,
+    categoryName: string,
+    subcategoryName?: string
+  ): Promise<CategoryRule> {
     return ApiClient.post<CategoryRule>('/category-rules', {
       pattern,
       category_name: categoryName,
+      ...(subcategoryName ? { subcategory_name: subcategoryName } : {}),
     });
   }
 
   static async updateRule(
     id: string,
-    patch: { pattern?: string; category_name?: string }
+    patch: { pattern?: string; category_name?: string; subcategory_name?: string }
   ): Promise<CategoryRule> {
     return ApiClient.put<CategoryRule>(`/category-rules/${id}`, patch);
   }

@@ -271,20 +271,34 @@ impl RealPlaidClient {
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_string());
 
-                    // Extract category information from Plaid API personal_finance_category
-                    let category_primary = t
-                        .get("personal_finance_category")
-                        .and_then(|pfc| pfc.get("primary"))
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("OTHER")
-                        .to_string();
+                    let (category_primary, category_detailed) = {
+                        let primary = t
+                            .get("personal_finance_category")
+                            .and_then(|pfc| pfc.get("primary"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("OTHER");
 
-                    let category_detailed = t
-                        .get("personal_finance_category")
-                        .and_then(|pfc| pfc.get("detailed"))
-                        .and_then(|v| v.as_str())
-                        .unwrap_or(&category_primary)
-                        .to_string();
+                        let detailed = t
+                            .get("personal_finance_category")
+                            .and_then(|pfc| pfc.get("detailed"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or(primary);
+
+                        if primary.eq_ignore_ascii_case("RENT_AND_UTILITIES") {
+                            let mapped_detailed = if detailed.to_uppercase().contains("WATER") {
+                                "Water"
+                            } else if detailed.to_uppercase().contains("TELEPHONE") || detailed.to_uppercase().contains("PHONE") {
+                                "Phone"
+                            } else if detailed.to_uppercase().contains("INTERNET") {
+                                "Internet"
+                            } else {
+                                "Utilities"
+                            };
+                            ("Bills & Utilities".to_string(), mapped_detailed.to_string())
+                        } else {
+                            (primary.to_string(), detailed.to_string())
+                        }
+                    };
 
                     let category_confidence = t
                         .get("personal_finance_category")

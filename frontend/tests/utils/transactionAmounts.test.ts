@@ -118,7 +118,7 @@ describe('transactionAmounts', () => {
       amount: 1500,
       account_name: 'Checking',
       account_type: 'depository',
-      category: { primary: 'RENT_AND_UTILITIES' },
+      category: { primary: 'Bills & Utilities' },
     });
 
     expect(getDisplayAmount(rent)).toBe(-1500);

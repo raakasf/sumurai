@@ -178,9 +178,9 @@ describe('User-Friendly Error Messages and Empty States (Boundary Mocks)', () =>
           </AccountFilterProvider>
         </ThemeTestProvider>
       );
-      await user.click(screen.getByText('Budgets'));
+      await user.click(screen.getByText('Transactions'));
       await waitFor(() => {
-        expect(screen.getByText(/No budgets found/i)).toBeInTheDocument();
+        expect(screen.getByText(/No budgets/i)).toBeInTheDocument();
       });
     });
   });

@@ -32,11 +32,12 @@ import { formatDateOnly } from '../utils/dateOnly';
 import type { MonthYearSelection } from '../utils/dateRanges';
 
 const getSelectedMonthWindow = (period: MonthYearSelection) => {
+  const isFullYear = period.month === null;
   const start = new Date(0);
-  start.setFullYear(period.year, period.month, 1);
+  start.setFullYear(period.year, isFullYear ? 0 : period.month, 1);
   start.setHours(0, 0, 0, 0);
   const end = new Date(0);
-  end.setFullYear(period.year, period.month + 1, 0);
+  end.setFullYear(period.year, isFullYear ? 12 : period.month + 1, 0);
   end.setHours(0, 0, 0, 0);
   return {
     start,
@@ -268,8 +269,8 @@ const DashboardPage: React.FC<DashboardPageProps> = ({
                               type="button"
                               key={`topcard-${cat.name}`}
                               className={`p-2 rounded-lg border text-left transition-all duration-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-300 dark:focus-visible:ring-sky-400 ${isHovered
-                                  ? 'bg-slate-50 dark:bg-slate-700/40 border-[#93c5fd] dark:border-[#38bdf8] -translate-y-[2px]'
-                                  : 'border-slate-200 dark:border-slate-700'
+                                ? 'bg-slate-50 dark:bg-slate-700/40 border-[#93c5fd] dark:border-[#38bdf8] -translate-y-[2px]'
+                                : 'border-slate-200 dark:border-slate-700'
                                 }`}
                               aria-label={`Show ${cat.name} transactions`}
                               title={`Show ${cat.name} transactions`}

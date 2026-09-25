@@ -18,18 +18,37 @@ export interface BackendTransaction {
   running_balance?: number;
   location?: TransactionLocation;
   custom_category?: string;
+  custom_subcategory?: string;
   rule_category?: string;
+  rule_subcategory?: string;
 }
 
 export class TransactionTransformer {
   static backendToFrontend(bt: BackendTransaction): Transaction {
+    const primary = bt.custom_category ?? bt.rule_category ?? bt.category_primary ?? 'OTHER';
+
+    // Priority: custom override subcategory > rule subcategory > provider detailed (only if no category override)
+    let detailed: string | undefined;
+    if (bt.custom_category || bt.rule_category) {
+      detailed = bt.custom_subcategory ?? bt.rule_subcategory;
+    } else {
+      detailed = bt.custom_subcategory ?? bt.rule_subcategory ?? bt.category_detailed;
+    }
+
     const category: TransactionCategory = {
       // Priority: explicit override > rule match > provider category
-      primary: bt.custom_category ?? bt.rule_category ?? bt.category_primary ?? 'OTHER',
+      primary,
     };
 
-    if (bt.category_detailed) {
-      category.detailed = bt.category_detailed;
+    if (
+      detailed &&
+      detailed.trim().toLowerCase() !== 'other' &&
+      !detailed.trim().toLowerCase().startsWith('other ') &&
+      (primary.trim().toLowerCase() === 'groceries'
+        ? true
+        : detailed.trim().toLowerCase() !== primary.trim().toLowerCase())
+    ) {
+      category.detailed = detailed;
     }
     if (bt.category_confidence) {
       category.confidence_level = bt.category_confidence;
@@ -51,7 +70,9 @@ export class TransactionTransformer {
       running_balance: bt.running_balance,
       location: bt.location,
       custom_category: bt.custom_category,
+      custom_subcategory: bt.custom_subcategory,
       rule_category: bt.rule_category,
+      rule_subcategory: bt.rule_subcategory,
     };
   }
 }

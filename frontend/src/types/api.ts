@@ -29,13 +29,16 @@ export interface Transaction {
   running_balance?: number;
   location?: TransactionLocation;
   custom_category?: string;
+  custom_subcategory?: string;
   rule_category?: string;
+  rule_subcategory?: string;
 }
 
 export interface UserCategory {
   id: string;
   user_id: string;
   name: string;
+  parent_category?: string;
   created_at: string;
 }
 
@@ -44,14 +47,21 @@ export interface CategoryRule {
   user_id: string;
   pattern: string;
   category_name: string;
+  subcategory_name?: string;
   created_at: string;
   updated_at: string;
 }
+
+export type BudgetFrequency = 'monthly' | 'quarterly' | 'semi_annual' | 'annual';
 
 export interface Budget {
   id: string;
   category: string;
   amount: number;
+  frequency?: BudgetFrequency;
+  rollover?: boolean;
+  rollover_start_month?: string;
+  created_at?: string;
 }
 
 // Historically budgets included a `month`. Budgets are now
