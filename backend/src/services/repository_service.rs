@@ -31,6 +31,7 @@ pub trait DatabaseRepository: Send + Sync {
     async fn get_user_by_id(&self, user_id: &Uuid) -> Result<Option<User>>;
     async fn mark_onboarding_complete(&self, user_id: &Uuid) -> Result<()>;
     async fn update_user_provider(&self, user_id: &Uuid, provider: &str) -> Result<()>;
+    async fn get_all_user_ids(&self) -> Result<Vec<Uuid>>;
 
     async fn get_transactions_for_user(&self, user_id: &Uuid) -> Result<Vec<Transaction>>;
     async fn get_transactions_with_account_for_user(
@@ -266,6 +267,51 @@ impl PostgresRepository {
     }
 }
 
+#[derive(sqlx::FromRow)]
+struct ProviderConnectionRow {
+    id: Uuid,
+    user_id: Uuid,
+    item_id: String,
+    is_connected: bool,
+    last_sync_at: Option<chrono::DateTime<chrono::Utc>>,
+    connected_at: Option<chrono::DateTime<chrono::Utc>>,
+    disconnected_at: Option<chrono::DateTime<chrono::Utc>>,
+    institution_id: Option<String>,
+    institution_name: Option<String>,
+    institution_logo_url: Option<String>,
+    sync_cursor: Option<String>,
+    transaction_count: i32,
+    account_count: i32,
+    status: String,
+    last_sync_error: Option<String>,
+    created_at: Option<chrono::DateTime<chrono::Utc>>,
+    updated_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+impl From<ProviderConnectionRow> for ProviderConnection {
+    fn from(r: ProviderConnectionRow) -> Self {
+        Self {
+            id: r.id,
+            user_id: r.user_id,
+            item_id: r.item_id,
+            is_connected: r.is_connected,
+            last_sync_at: r.last_sync_at,
+            connected_at: r.connected_at,
+            disconnected_at: r.disconnected_at,
+            institution_id: r.institution_id,
+            institution_name: r.institution_name,
+            institution_logo_url: r.institution_logo_url,
+            sync_cursor: r.sync_cursor,
+            transaction_count: r.transaction_count,
+            account_count: r.account_count,
+            status: r.status,
+            last_sync_error: r.last_sync_error,
+            created_at: r.created_at,
+            updated_at: r.updated_at,
+        }
+    }
+}
+
 #[async_trait]
 impl DatabaseRepository for PostgresRepository {
     async fn create_user(&self, user: &User) -> Result<()> {
@@ -361,6 +407,13 @@ impl DatabaseRepository for PostgresRepository {
         .await?;
 
         Ok(())
+    }
+
+    async fn get_all_user_ids(&self) -> Result<Vec<Uuid>> {
+        let rows = sqlx::query_scalar::<_, Uuid>("SELECT id FROM users ORDER BY created_at ASC")
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(rows)
     }
 
     async fn upsert_account(&self, account: &Account) -> Result<()> {
@@ -1042,9 +1095,9 @@ impl DatabaseRepository for PostgresRepository {
             INSERT INTO provider_connections (
                 id, user_id, item_id, is_connected, last_sync_at, connected_at,
                 disconnected_at, institution_id, institution_name, transaction_count, account_count,
-                created_at, updated_at
+                status, last_sync_error, created_at, updated_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
             ON CONFLICT (item_id)
             DO UPDATE SET
                 is_connected = EXCLUDED.is_connected,
@@ -1055,6 +1108,8 @@ impl DatabaseRepository for PostgresRepository {
                 institution_name = EXCLUDED.institution_name,
                 transaction_count = EXCLUDED.transaction_count,
                 account_count = EXCLUDED.account_count,
+                status = EXCLUDED.status,
+                last_sync_error = EXCLUDED.last_sync_error,
                 updated_at = EXCLUDED.updated_at
             "#,
         )
@@ -1069,6 +1124,8 @@ impl DatabaseRepository for PostgresRepository {
         .bind(&connection.institution_name)
         .bind(connection.transaction_count)
         .bind(connection.account_count)
+        .bind(&connection.status)
+        .bind(&connection.last_sync_error)
         .bind(connection.created_at)
         .bind(connection.updated_at)
         .execute(&mut *tx)
@@ -1088,30 +1145,11 @@ impl DatabaseRepository for PostgresRepository {
             .execute(&mut *tx)
             .await?;
 
-        let rows = sqlx::query_as::<
-            _,
-            (
-                Uuid,
-                Uuid,
-                String,
-                bool,
-                Option<chrono::DateTime<chrono::Utc>>,
-                Option<chrono::DateTime<chrono::Utc>>,
-                Option<chrono::DateTime<chrono::Utc>>,
-                Option<String>,
-                Option<String>,
-                Option<String>,
-                Option<String>,
-                i32,
-                i32,
-                Option<chrono::DateTime<chrono::Utc>>,
-                Option<chrono::DateTime<chrono::Utc>>,
-            ),
-        >(
+        let rows = sqlx::query_as::<_, ProviderConnectionRow>(
             r#"
             SELECT id, user_id, item_id, is_connected, last_sync_at, connected_at,
                    disconnected_at, institution_id, institution_name, institution_logo_url,
-                   sync_cursor, transaction_count, account_count, created_at, updated_at
+                   sync_cursor, transaction_count, account_count, status, last_sync_error, created_at, updated_at
             FROM provider_connections
             WHERE user_id = $1
             ORDER BY created_at DESC
@@ -1123,44 +1161,7 @@ impl DatabaseRepository for PostgresRepository {
 
         tx.commit().await?;
 
-        Ok(rows
-            .into_iter()
-            .map(
-                |(
-                    id,
-                    user_id,
-                    item_id,
-                    is_connected,
-                    last_sync_at,
-                    connected_at,
-                    disconnected_at,
-                    institution_id,
-                    institution_name,
-                    institution_logo_url,
-                    sync_cursor,
-                    transaction_count,
-                    account_count,
-                    created_at,
-                    updated_at,
-                )| ProviderConnection {
-                    id,
-                    user_id,
-                    item_id,
-                    is_connected,
-                    last_sync_at,
-                    connected_at,
-                    disconnected_at,
-                    institution_id,
-                    institution_name,
-                    institution_logo_url,
-                    sync_cursor,
-                    transaction_count,
-                    account_count,
-                    created_at,
-                    updated_at,
-                },
-            )
-            .collect())
+        Ok(rows.into_iter().map(Into::into).collect())
     }
 
     async fn get_provider_connection_by_id(
@@ -1174,30 +1175,11 @@ impl DatabaseRepository for PostgresRepository {
             .execute(&mut *tx)
             .await?;
 
-        let row = sqlx::query_as::<
-            _,
-            (
-                Uuid,
-                Uuid,
-                String,
-                bool,
-                Option<chrono::DateTime<chrono::Utc>>,
-                Option<chrono::DateTime<chrono::Utc>>,
-                Option<chrono::DateTime<chrono::Utc>>,
-                Option<String>,
-                Option<String>,
-                Option<String>,
-                Option<String>,
-                i32,
-                i32,
-                Option<chrono::DateTime<chrono::Utc>>,
-                Option<chrono::DateTime<chrono::Utc>>,
-            ),
-        >(
+        let row = sqlx::query_as::<_, ProviderConnectionRow>(
             r#"
             SELECT id, user_id, item_id, is_connected, last_sync_at, connected_at,
                    disconnected_at, institution_id, institution_name, institution_logo_url,
-                   sync_cursor, transaction_count, account_count, created_at, updated_at
+                   sync_cursor, transaction_count, account_count, status, last_sync_error, created_at, updated_at
             FROM provider_connections
             WHERE id = $1
             "#,
@@ -1208,41 +1190,7 @@ impl DatabaseRepository for PostgresRepository {
 
         tx.commit().await?;
 
-        Ok(row.map(
-            |(
-                id,
-                user_id,
-                item_id,
-                is_connected,
-                last_sync_at,
-                connected_at,
-                disconnected_at,
-                institution_id,
-                institution_name,
-                institution_logo_url,
-                sync_cursor,
-                transaction_count,
-                account_count,
-                created_at,
-                updated_at,
-            )| ProviderConnection {
-                id,
-                user_id,
-                item_id,
-                is_connected,
-                last_sync_at,
-                connected_at,
-                disconnected_at,
-                institution_id,
-                institution_name,
-                institution_logo_url,
-                sync_cursor,
-                transaction_count,
-                account_count,
-                created_at,
-                updated_at,
-            },
-        ))
+        Ok(row.map(Into::into))
     }
 
     async fn delete_provider_transactions(&self, user_id: &Uuid, item_id: &str) -> Result<i32> {

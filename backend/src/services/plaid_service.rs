@@ -81,7 +81,10 @@ impl RealPlaidClient {
             "user": {
                 "client_user_id": user_id
             },
-            "products": ["transactions"]
+            "products": ["transactions"],
+            "transactions": {
+                "days_requested": 730
+            }
         });
 
         if let Some(redirect_uri) = &self.redirect_uri {
@@ -225,27 +228,48 @@ impl RealPlaidClient {
         start_date: NaiveDate,
         end_date: NaiveDate,
     ) -> Result<Vec<Transaction>> {
-        let request_body = json!({
-            "client_id": self.client_id,
-            "secret": self.secret,
-            "access_token": access_token,
-            "start_date": start_date.format("%Y-%m-%d").to_string(),
-            "end_date": end_date.format("%Y-%m-%d").to_string()
-        });
+        let mut transactions = Vec::new();
+        let mut offset = 0;
+        const PAGE_SIZE: usize = 500;
 
-        let response = self
-            .http_client
-            .post(format!("{}/transactions/get", self.base_url))
-            .header("Content-Type", "application/json")
-            .json(&request_body)
-            .send()
-            .await?;
+        loop {
+            let request_body = json!({
+                "client_id": self.client_id,
+                "secret": self.secret,
+                "access_token": access_token,
+                "start_date": start_date.format("%Y-%m-%d").to_string(),
+                "end_date": end_date.format("%Y-%m-%d").to_string(),
+                "options": {
+                    "count": PAGE_SIZE,
+                    "offset": offset,
+                }
+            });
 
-        if response.status().is_success() {
+            let response = self
+                .http_client
+                .post(format!("{}/transactions/get", self.base_url))
+                .header("Content-Type", "application/json")
+                .json(&request_body)
+                .send()
+                .await?;
+
+            if !response.status().is_success() {
+                let error_text = response
+                    .text()
+                    .await
+                    .unwrap_or_else(|_| "Unknown error".to_string());
+                return Err(anyhow::anyhow!("Plaid API error: {}", error_text));
+            }
+
             let data: serde_json::Value = response.json().await?;
-            let mut transactions = Vec::new();
+            let total_transactions = data
+                .get("total_transactions")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as usize;
 
+            let mut page_count = 0;
             if let Some(transactions_array) = data.get("transactions").and_then(|v| v.as_array()) {
+                page_count = transactions_array.len();
                 for t in transactions_array {
                     let amount = t.get("amount").and_then(|v| v.as_f64()).unwrap_or(0.0);
 
@@ -336,14 +360,13 @@ impl RealPlaidClient {
                 }
             }
 
-            Ok(transactions)
-        } else {
-            let error_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
-            Err(anyhow::anyhow!("Plaid API error: {}", error_text))
+            offset += page_count;
+            if offset >= total_transactions || page_count == 0 {
+                break;
+            }
         }
+
+        Ok(transactions)
     }
 
     pub async fn get_item_info(

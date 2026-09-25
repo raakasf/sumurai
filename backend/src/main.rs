@@ -64,7 +64,7 @@ use crate::models::{
         ExchangeTokenResponse, LinkTokenRequest, LinkTokenResponse, ProviderConnectRequest,
         ProviderConnectResponse, ProviderConnectionStatus, ProviderInfoResponse,
         ProviderSelectRequest, ProviderSelectResponse, ProviderStatusResponse,
-        SyncTransactionsRequest,
+        SyncAllResponse, SyncTransactionsRequest,
     },
     transaction::{SyncTransactionsResponse, TransactionWithAccount, TransactionsQuery},
 };
@@ -187,6 +187,8 @@ async fn main() -> anyhow::Result<()> {
         provider_registry,
     };
 
+    spawn_midnight_sync_worker(state.clone());
+
     let app = create_app(state);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
@@ -239,6 +241,10 @@ pub fn create_app(state: AppState) -> Router {
         .route(
             "/api/providers/sync-transactions",
             post(sync_authenticated_provider_transactions),
+        )
+        .route(
+            "/api/providers/sync-all",
+            post(sync_all_authenticated_provider_transactions),
         )
         .route(
             "/api/providers/disconnect",
@@ -1993,6 +1999,181 @@ async fn sync_authenticated_provider_transactions(
     }
 }
 
+pub async fn sync_all_user_connections(state: &AppState, user_id: &Uuid) -> Result<usize, String> {
+    let connections = state
+        .db_repository
+        .get_all_provider_connections_by_user(user_id)
+        .await
+        .map_err(|e| format!("Failed to get connections for user {}: {}", user_id, e))?;
+
+    let mut synced_count = 0;
+
+    for mut conn in connections {
+        if !conn.is_connected {
+            continue;
+        }
+
+        let provider = provider_for_connection(&conn.item_id);
+        tracing::info!(
+            "Syncing connection {} ({}) for user {} (provider: {})",
+            conn.id,
+            conn.institution_name.as_deref().unwrap_or("unknown"),
+            user_id,
+            provider
+        );
+
+        if provider == "teller" {
+            match state
+                .connection_service
+                .sync_teller_connection(user_id, "background_sync", &mut conn)
+                .await
+            {
+                Ok(_) => {
+                    synced_count += 1;
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Teller sync failed for connection {} and user {}: {:?}",
+                        conn.id,
+                        user_id,
+                        e
+                    );
+                }
+            }
+        } else {
+            let sync_params = SyncConnectionParams {
+                provider,
+                user_id,
+                jwt_id: "background_sync",
+            };
+            match state
+                .connection_service
+                .sync_provider_connection(sync_params, state.sync_service.as_ref(), &mut conn)
+                .await
+            {
+                Ok(_) => {
+                    synced_count += 1;
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Plaid sync failed for connection {} and user {}: {:?}",
+                        conn.id,
+                        user_id,
+                        e
+                    );
+                }
+            }
+        }
+
+        // Brief delay between connections to prevent hammering third-party APIs
+        tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+    }
+
+    // Invalidate user-scoped cache patterns
+    let _ = state.cache_service.invalidate_pattern("*_balances_overview*").await;
+    let _ = state.cache_service.invalidate_pattern("*_bank_accounts_*").await;
+    let _ = state.cache_service.invalidate_pattern("*_bank_connection_*").await;
+    let _ = state.cache_service.invalidate_pattern(&format!("budgets:user:{}", user_id)).await;
+
+    Ok(synced_count)
+}
+
+pub async fn run_midnight_sync(state: &AppState) -> anyhow::Result<()> {
+    tracing::info!("Starting scheduled midnight sync for all users...");
+    let user_ids = state.db_repository.get_all_user_ids().await?;
+    tracing::info!("Found {} users to sync in midnight refresh", user_ids.len());
+
+    let mut total_connections_synced = 0;
+    for user_id in user_ids {
+        match sync_all_user_connections(state, &user_id).await {
+            Ok(count) => {
+                total_connections_synced += count;
+            }
+            Err(e) => {
+                tracing::warn!("Failed to sync connections for user {}: {}", user_id, e);
+            }
+        }
+    }
+
+    tracing::info!(
+        "Scheduled midnight sync completed. Successfully synced {} connections across users.",
+        total_connections_synced
+    );
+    Ok(())
+}
+
+pub fn duration_until_next_midnight() -> std::time::Duration {
+    let now = chrono::Local::now();
+    let tomorrow = now.date_naive().succ_opt().unwrap_or(now.date_naive());
+    let next_midnight_naive = tomorrow.and_hms_opt(0, 0, 0).unwrap_or_else(|| {
+        now.date_naive().and_hms_opt(23, 59, 59).unwrap()
+    });
+
+    match next_midnight_naive.and_local_timezone(chrono::Local) {
+        chrono::LocalResult::Single(next) => {
+            let diff = next - now;
+            diff.to_std().unwrap_or(std::time::Duration::from_secs(86400))
+        }
+        chrono::LocalResult::Ambiguous(earliest, _) => {
+            let diff = earliest - now;
+            diff.to_std().unwrap_or(std::time::Duration::from_secs(86400))
+        }
+        chrono::LocalResult::None => std::time::Duration::from_secs(86400),
+    }
+}
+
+pub fn spawn_midnight_sync_worker(state: AppState) {
+    tokio::spawn(async move {
+        loop {
+            let delay = duration_until_next_midnight();
+            tracing::info!(
+                "Scheduled midnight sync: next run in {} seconds (at midnight local time)",
+                delay.as_secs()
+            );
+            tokio::time::sleep(delay).await;
+
+            tracing::info!("Triggering scheduled midnight sync...");
+            if let Err(e) = run_midnight_sync(&state).await {
+                tracing::error!("Scheduled midnight sync encountered error: {}", e);
+            }
+
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        }
+    });
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/providers/sync-all",
+    description = "Refreshes all active accounts and transactions for the authenticated user.",
+    responses(
+        (status = 200, description = "All accounts and transactions refreshed successfully", body = SyncAllResponse),
+        (status = 401, description = "Unauthorized"),
+        (status = 500, description = "Failed to sync accounts", body = ApiErrorResponse),
+    ),
+    security(("bearer_auth" = [])),
+    tag = "Financial Providers"
+)]
+async fn sync_all_authenticated_provider_transactions(
+    State(state): State<AppState>,
+    auth_context: AuthContext,
+) -> Result<Json<SyncAllResponse>, (StatusCode, Json<ApiErrorResponse>)> {
+    let user_id = auth_context.user_id;
+    tracing::info!("Sync all connections requested for user {}", user_id);
+
+    match sync_all_user_connections(&state, &user_id).await {
+        Ok(synced_count) => Ok(Json(SyncAllResponse {
+            success: true,
+            synced_connections: synced_count,
+            message: format!("Successfully synced {} connections", synced_count),
+        })),
+        Err(e) => {
+            tracing::error!("Failed to sync all connections for user {}: {}", user_id, e);
+            Err(ApiErrorResponse::internal_server_error("Failed to sync connections"))
+        }
+    }
+}
+
 #[utoipa::path(
     get,
     path = "/api/analytics/spending/current-month",
@@ -2587,15 +2768,38 @@ async fn load_connection_statuses(
 
     Ok(connections
         .into_iter()
-        .filter(|conn| conn.is_connected && provider_for_connection(&conn.item_id) == provider)
-        .map(|conn| ProviderConnectionStatus {
-            is_connected: conn.is_connected,
-            last_sync_at: conn.last_sync_at.map(|dt| dt.to_rfc3339()),
-            institution_name: conn.institution_name,
-            connection_id: Some(conn.id.to_string()),
-            transaction_count: conn.transaction_count,
-            account_count: conn.account_count,
-            sync_in_progress: false,
+        .filter(|conn| provider_for_connection(&conn.item_id) == provider)
+        .map(|conn| {
+            let status = if !conn.is_connected {
+                "error".to_string()
+            } else if let Some(ref err) = conn.last_sync_error {
+                let err_lower = err.to_lowercase();
+                if err_lower.contains("mfa")
+                    || err_lower.contains("reauth")
+                    || err_lower.contains("re-authentication")
+                    || err_lower.contains("login_required")
+                {
+                    "needs_reauth".to_string()
+                } else {
+                    "error".to_string()
+                }
+            } else if !conn.status.is_empty() {
+                conn.status.clone()
+            } else {
+                "connected".to_string()
+            };
+
+            ProviderConnectionStatus {
+                is_connected: conn.is_connected,
+                last_sync_at: conn.last_sync_at.map(|dt| dt.to_rfc3339()),
+                institution_name: conn.institution_name,
+                connection_id: Some(conn.id.to_string()),
+                transaction_count: conn.transaction_count,
+                account_count: conn.account_count,
+                sync_in_progress: false,
+                error_message: conn.last_sync_error,
+                status: Some(status),
+            }
         })
         .collect())
 }

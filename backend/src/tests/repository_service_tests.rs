@@ -74,6 +74,9 @@ async fn given_user_with_budgets_when_deleting_then_budgets_cascade() {
         user_id: user.id,
         category: "Food".to_string(),
         amount: rust_decimal_macros::dec!(500.00),
+        frequency: "monthly".to_string(),
+        rollover: false,
+        rollover_start_month: None,
         created_at: Utc::now(),
         updated_at: Utc::now(),
     };

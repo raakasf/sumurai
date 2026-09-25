@@ -104,7 +104,12 @@ export function AuthenticatedApp({ onLogout, initialTab }: AuthenticatedAppProps
               {tab === 'accounts' && (
                 <AccountsPage onError={setError} onAccountSelect={openTransactionsForAccount} />
               )}
-              {tab === 'settings' && <SettingsPage onLogout={onLogout} />}
+              {tab === 'settings' && (
+                <SettingsPage
+                  onLogout={onLogout}
+                  onNavigateToAccounts={() => handleTabChange('accounts')}
+                />
+              )}
             </motion.section>
           </AnimatePresence>
         </AppLayout>

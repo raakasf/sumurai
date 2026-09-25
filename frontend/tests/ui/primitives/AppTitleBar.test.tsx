@@ -253,6 +253,104 @@ describe('AppTitleBar', () => {
         'bg-[linear-gradient(115deg,#38bdf8_0%,#22d3ee_46%,#a855f7_100%)]'
       );
     });
+
+    describe('account issues behavior', () => {
+      const mockIssues = [
+        {
+          id: 'conn-1',
+          institutionName: 'Chase Bank',
+          status: 'needs_reauth' as const,
+          errorMessage: 'Credentials expired, re-authentication needed',
+        },
+        {
+          id: 'conn-2',
+          institutionName: 'Wells Fargo',
+          status: 'error' as const,
+          errorMessage: 'API sync error (500)',
+        },
+      ];
+
+      it('does not render warning badge when there are no issues', () => {
+        render(
+          <AppTitleBar
+            state="authenticated"
+            scrolled={false}
+            themeMode="light"
+            onThemeToggle={() => { }}
+            currentTab="dashboard"
+            onTabChange={() => { }}
+            accountIssues={[]}
+          />
+        );
+        expect(screen.queryByTestId('account-issues-badge')).not.toBeInTheDocument();
+      });
+
+      it('renders warning badge with issue count when issues exist', () => {
+        render(
+          <AppTitleBar
+            state="authenticated"
+            scrolled={false}
+            themeMode="light"
+            onThemeToggle={() => { }}
+            currentTab="dashboard"
+            onTabChange={() => { }}
+            accountIssues={mockIssues}
+          />
+        );
+        const badge = screen.getByTestId('account-issues-badge');
+        expect(badge).toBeInTheDocument();
+        expect(badge).toHaveTextContent('2');
+      });
+
+      it('navigates directly to settings when clicked without issues', async () => {
+        const onTabChange = jest.fn();
+        const user = userEvent.setup();
+        render(
+          <AppTitleBar
+            state="authenticated"
+            scrolled={false}
+            themeMode="light"
+            onThemeToggle={() => { }}
+            currentTab="dashboard"
+            onTabChange={onTabChange}
+          />
+        );
+        await user.click(screen.getByLabelText('Settings'));
+        expect(onTabChange).toHaveBeenCalledWith('settings');
+      });
+
+      it('opens popover when gear button clicked with issues, and actions work', async () => {
+        const onTabChange = jest.fn();
+        const user = userEvent.setup();
+        render(
+          <AppTitleBar
+            state="authenticated"
+            scrolled={false}
+            themeMode="light"
+            onThemeToggle={() => { }}
+            currentTab="dashboard"
+            onTabChange={onTabChange}
+            accountIssues={mockIssues}
+          />
+        );
+
+        // Click gear icon with issues
+        const settingsButton = screen.getByLabelText(/Settings \(2 account issues\)/i);
+        await user.click(settingsButton);
+
+        // Expect popover to be visible
+        expect(screen.getByTestId('account-issues-popover')).toBeInTheDocument();
+        expect(screen.getByText('Account Issues')).toBeInTheDocument();
+        expect(screen.getByText('Chase Bank')).toBeInTheDocument();
+        expect(screen.getByText('Wells Fargo')).toBeInTheDocument();
+        expect(screen.getByText('Re-auth needed')).toBeInTheDocument();
+        expect(screen.getByText('Sync error')).toBeInTheDocument();
+
+        // Click "Fix in Accounts"
+        await user.click(screen.getByText('Fix in Accounts'));
+        expect(onTabChange).toHaveBeenCalledWith('accounts');
+      });
+    });
   });
 
   describe('scroll state variants', () => {

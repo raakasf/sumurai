@@ -3,6 +3,7 @@ import { cn } from '@/ui/primitives';
 import { CurrencySelector } from '../components/CurrencySelector';
 import { HeaderAccountFilter } from '../components/HeaderAccountFilter';
 import { useTheme } from '../context/ThemeContext';
+import { useAccountIssues } from '../hooks/useAccountIssues';
 import { useScrollDetection } from '../hooks/useScrollDetection';
 import { AppFooter, AppTitleBar } from '../ui/primitives';
 
@@ -25,6 +26,7 @@ export function AppLayout({
 }: AppLayoutProps) {
   const scrolled = useScrollDetection();
   const { mode, toggle } = useTheme();
+  const { issues: accountIssues } = useAccountIssues();
 
   return (
     <div className={className}>
@@ -37,6 +39,7 @@ export function AppLayout({
           onLogout={onLogout}
           currentTab={currentTab}
           onTabChange={onTabChange}
+          accountIssues={accountIssues}
           accountFilterNode={
             <div className={cn('flex', 'items-center', 'gap-2')}>
               <HeaderAccountFilter scrolled={scrolled} />
