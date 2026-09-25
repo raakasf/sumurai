@@ -80,6 +80,8 @@ fn create_test_transaction_with_account_details(
         provider: Some(provider.to_string()),
         custom_category: custom_category.map(str::to_string),
         rule_category: None,
+        custom_subcategory: None,
+        rule_subcategory: None,
     }
 }
 

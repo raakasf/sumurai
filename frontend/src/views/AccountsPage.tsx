@@ -158,7 +158,6 @@ const AccountsPage = ({ onError, onAccountSelect }: AccountsPageProps) => {
   const [manualRateError, setManualRateError] = useState<string | null>(null);
   const [manualRateDate, setManualRateDate] = useState<string | null>(null);
   const pendingConnectProviderRef = useRef<FinancialProvider | null>(null);
-  const autoSyncAttemptedRef = useRef(false);
 
   const loadManualInvestments = useCallback(async () => {
     try {
@@ -287,9 +286,9 @@ const AccountsPage = ({ onError, onAccountSelect }: AccountsPageProps) => {
         setManualForm((prev) =>
           prev.currency === manualForm.currency
             ? {
-                ...prev,
-                conversion_rate: nativeToUsdRate.toFixed(8),
-              }
+              ...prev,
+              conversion_rate: nativeToUsdRate.toFixed(8),
+            }
             : prev
         );
         setManualRateDate(next.date);
@@ -529,23 +528,6 @@ const AccountsPage = ({ onError, onAccountSelect }: AccountsPageProps) => {
       latestSync: latestSyncIso,
     };
   }, [banks, manualInvestments.length, manualPropertyAccounts.length]);
-
-  useEffect(() => {
-    if (
-      autoSyncAttemptedRef.current ||
-      selectedProvider !== 'plaid' ||
-      flowLoading ||
-      syncingAll ||
-      summary.connectedInstitutions === 0
-    ) {
-      return;
-    }
-
-    autoSyncAttemptedRef.current = true;
-    void syncAll().catch((err) => {
-      console.warn('Auto sync on account refresh failed', err);
-    });
-  }, [flowLoading, selectedProvider, summary.connectedInstitutions, syncAll, syncingAll]);
 
   if (providerLoading) {
     return (

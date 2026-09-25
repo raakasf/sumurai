@@ -110,6 +110,8 @@ async fn given_sync_service_with_provider_when_sync_then_maps_accounts_correctly
         user_id: Uuid::new_v4(),
         item_id: "item_123".to_string(),
         is_connected: true,
+        status: "connected".to_string(),
+        last_sync_error: None,
         last_sync_at: None,
         connected_at: Some(Utc::now()),
         disconnected_at: None,

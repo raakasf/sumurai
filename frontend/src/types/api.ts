@@ -140,6 +140,16 @@ export interface ProviderConnectionStatus {
   transaction_count: number;
   account_count: number;
   sync_in_progress: boolean;
+  error_message?: string | null;
+  status?: 'connected' | 'needs_reauth' | 'error';
+}
+
+export interface AccountIssue {
+  id: string;
+  institutionName: string;
+  status: 'connected' | 'needs_reauth' | 'error';
+  errorMessage?: string | null;
+  lastSyncAt?: string | null;
 }
 
 export interface ProviderStatusResponse {

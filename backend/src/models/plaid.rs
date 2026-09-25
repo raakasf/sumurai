@@ -39,6 +39,8 @@ pub struct ProviderConnection {
     pub sync_cursor: Option<String>,
     pub transaction_count: i32,
     pub account_count: i32,
+    pub status: String,
+    pub last_sync_error: Option<String>,
     pub created_at: Option<DateTime<Utc>>,
     pub updated_at: Option<DateTime<Utc>>,
 }
@@ -124,6 +126,14 @@ pub struct ClearSyncedDataResponse {
     pub user_id: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[schema(example = json!({"success": true, "synced_connections": 2, "message": "Successfully synced 2 connections"}))]
+pub struct SyncAllResponse {
+    pub success: bool,
+    pub synced_connections: usize,
+    pub message: String,
+}
+
 impl ProviderConnection {
     #[allow(dead_code)]
     pub fn new(user_id: Uuid, item_id: &str) -> Self {
@@ -142,6 +152,8 @@ impl ProviderConnection {
             sync_cursor: None,
             transaction_count: 0,
             account_count: 0,
+            status: "connected".to_string(),
+            last_sync_error: None,
             created_at: Some(now),
             updated_at: Some(now),
         }
@@ -181,6 +193,10 @@ pub struct ProviderConnectionStatus {
     pub transaction_count: i32,
     pub account_count: i32,
     pub sync_in_progress: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]

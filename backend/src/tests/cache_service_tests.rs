@@ -18,6 +18,8 @@ async fn given_bank_connection_when_caching_with_jwt_scope_then_stores_with_corr
         user_id: Uuid::new_v4(),
         item_id: "test-item".to_string(),
         is_connected: true,
+        status: "connected".to_string(),
+        last_sync_error: None,
         last_sync_at: Some(Utc::now()),
         connected_at: Some(Utc::now()),
         disconnected_at: None,

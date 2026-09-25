@@ -211,6 +211,8 @@ async fn given_authenticated_user_when_get_transactions_with_account_ids_then_re
                 provider: Some("plaid".to_string()),
                 custom_category: None,
                 rule_category: None,
+                custom_subcategory: None,
+                rule_subcategory: None,
             }];
             Box::pin(async { Ok(filtered_transactions) })
         });

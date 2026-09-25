@@ -91,6 +91,23 @@ impl ConnectionService {
         self.provider_registry.get(provider)
     }
 
+    pub async fn record_connection_error(
+        &self,
+        connection: &mut ProviderConnection,
+        error_msg: String,
+        status: &str,
+    ) {
+        connection.status = status.to_string();
+        connection.last_sync_error = Some(error_msg);
+        if let Err(e) = self.db_repository.save_provider_connection(connection).await {
+            tracing::warn!(
+                connection_id = %connection.id,
+                "Failed to record connection error to database: {}",
+                e
+            );
+        }
+    }
+
     #[tracing::instrument(
         skip(self),
         fields(connection_id = %connection_id)
@@ -473,11 +490,25 @@ impl ConnectionService {
             .resolve_provider(params.provider)
             .ok_or_else(|| ProviderSyncError::ProviderUnavailable(params.provider.to_string()))?;
 
-        let fetched_accounts = provider_impl
+        let fetched_accounts = match provider_impl
             .as_ref()
             .get_accounts(&provider_credentials)
             .await
-            .map_err(ProviderSyncError::ProviderRequest)?;
+        {
+            Ok(accs) => accs,
+            Err(e) => {
+                let err_str = e.to_string();
+                let status = if err_str.to_lowercase().contains("login_required")
+                    || err_str.to_lowercase().contains("reauth")
+                {
+                    "needs_reauth"
+                } else {
+                    "error"
+                };
+                self.record_connection_error(connection, err_str, status).await;
+                return Err(ProviderSyncError::ProviderRequest(e));
+            }
+        };
 
         for mut account in fetched_accounts {
             account.user_id = Some(*params.user_id);
@@ -499,10 +530,24 @@ impl ConnectionService {
             .await
             .map_err(ProviderSyncError::AccountLookup)?;
 
-        let (mut transactions, new_cursor) = sync_service
+        let (mut transactions, new_cursor) = match sync_service
             .sync_bank_connection_transactions(&provider_credentials, connection, &db_accounts)
             .await
-            .map_err(ProviderSyncError::SyncFailure)?;
+        {
+            Ok(res) => res,
+            Err(e) => {
+                let err_str = e.to_string();
+                let status = if err_str.to_lowercase().contains("login_required")
+                    || err_str.to_lowercase().contains("reauth")
+                {
+                    "needs_reauth"
+                } else {
+                    "error"
+                };
+                self.record_connection_error(connection, err_str, status).await;
+                return Err(ProviderSyncError::SyncFailure(e));
+            }
+        };
 
         for txn in &mut transactions {
             txn.user_id = Some(*params.user_id);
@@ -576,6 +621,8 @@ impl ConnectionService {
         connection.update_sync_info(total_transactions, total_accounts);
         connection.sync_cursor = Some(new_cursor);
         connection.last_sync_at = Some(sync_timestamp);
+        connection.status = "connected".to_string();
+        connection.last_sync_error = None;
 
         if let Err(e) = self
             .db_repository
@@ -662,11 +709,25 @@ impl ConnectionService {
             ))
         })?;
 
-        let mut fetched_accounts = provider
+        let mut fetched_accounts = match provider
             .as_ref()
             .get_accounts(&provider_credentials)
             .await
-            .map_err(TellerSyncError::ProviderRequest)?;
+        {
+            Ok(accs) => accs,
+            Err(e) => {
+                let err_str = e.to_string();
+                let status = if err_str.contains("mfa_required")
+                    || err_str.contains("Enrollment is not healthy")
+                {
+                    "needs_reauth"
+                } else {
+                    "error"
+                };
+                self.record_connection_error(connection, err_str, status).await;
+                return Err(TellerSyncError::ProviderRequest(e));
+            }
+        };
 
         for account in &mut fetched_accounts {
             account.user_id = Some(*user_id);
@@ -726,11 +787,25 @@ impl ConnectionService {
             })
             .collect();
 
-        let mut teller_transactions = provider
+        let teller_transactions = match provider
             .as_ref()
             .get_transactions(&provider_credentials, sync_start_date, sync_end_date)
             .await
-            .map_err(TellerSyncError::ProviderRequest)?;
+        {
+            Ok(txns) => txns,
+            Err(e) => {
+                let err_str = e.to_string();
+                let status = if err_str.contains("mfa_required")
+                    || err_str.contains("Enrollment is not healthy")
+                {
+                    "needs_reauth"
+                } else {
+                    "error"
+                };
+                self.record_connection_error(connection, err_str, status).await;
+                return Err(TellerSyncError::ProviderRequest(e));
+            }
+        };
 
         let mut synced_transactions: Vec<Transaction> = Vec::new();
 
@@ -847,6 +922,8 @@ impl ConnectionService {
             random_suffix
         ));
         connection.last_sync_at = Some(sync_timestamp);
+        connection.status = "connected".to_string();
+        connection.last_sync_error = None;
 
         self.db_repository
             .save_provider_connection(connection)

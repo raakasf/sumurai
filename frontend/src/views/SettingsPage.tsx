@@ -1,5 +1,6 @@
 import { type FormEvent, useState } from 'react';
 import { PasswordChecker } from '@/components/PasswordChecker';
+import { useAccountIssues } from '@/hooks/useAccountIssues';
 import { usePasswordValidation } from '@/hooks/usePasswordValidation';
 import { AuthService } from '@/services/authService';
 import { SettingsService } from '@/services/SettingsService';
@@ -8,9 +9,11 @@ import { cn } from '@/ui/primitives/utils';
 
 interface SettingsPageProps {
   onLogout?: () => void;
+  onNavigateToAccounts?: () => void;
 }
 
-export default function SettingsPage({ onLogout }: SettingsPageProps) {
+export default function SettingsPage({ onLogout, onNavigateToAccounts }: SettingsPageProps) {
+  const { issues, hasIssues } = useAccountIssues();
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -103,6 +106,45 @@ export default function SettingsPage({ onLogout }: SettingsPageProps) {
   return (
     <div className={cn('max-w-2xl', 'mx-auto')}>
       <div className={cn('flex', 'flex-col', 'gap-6')}>
+        {hasIssues && (
+          <GlassCard
+            variant="default"
+            padding="md"
+            className="border-amber-400/50 bg-amber-50/50 dark:bg-amber-950/20"
+          >
+            <div className="flex flex-col gap-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="flex h-2.5 w-2.5 rounded-full bg-amber-500 animate-pulse" />
+                  <h3 className="text-sm font-semibold text-amber-900 dark:text-amber-200">
+                    Bank Connection Issues Detected
+                  </h3>
+                </div>
+                <span className="rounded-full bg-amber-100 dark:bg-amber-900/40 px-2.5 py-0.5 text-xs font-semibold text-amber-700 dark:text-amber-300">
+                  {issues.length} {issues.length === 1 ? 'alert' : 'alerts'}
+                </span>
+              </div>
+              <p className="text-xs text-amber-800 dark:text-amber-300">
+                {issues.length === 1 ? 'An account has' : `${issues.length} accounts have`}{' '}
+                connection or authentication issues. Update credentials or re-authenticate in the
+                Accounts tab.
+              </p>
+              {onNavigateToAccounts && (
+                <div>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="xs"
+                    onClick={onNavigateToAccounts}
+                  >
+                    Go to Accounts Tab
+                  </Button>
+                </div>
+              )}
+            </div>
+          </GlassCard>
+        )}
+
         <GlassCard variant="default" padding="lg">
           <div className={cn('space-y-5')}>
             <div className={cn('space-y-3')}>

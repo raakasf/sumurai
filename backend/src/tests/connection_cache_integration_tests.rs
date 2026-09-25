@@ -19,6 +19,8 @@ fn create_test_connection(user_id: Uuid) -> ProviderConnection {
         user_id,
         item_id: "test_item_123".to_string(),
         is_connected: true,
+        status: "connected".to_string(),
+        last_sync_error: None,
         last_sync_at: Some(Utc::now()),
         connected_at: Some(Utc::now()),
         disconnected_at: None,
