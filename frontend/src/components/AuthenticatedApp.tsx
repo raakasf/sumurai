@@ -2,7 +2,6 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { useState } from 'react';
 import { cn } from '@/ui/primitives';
 import AccountsPage from '@/views/AccountsPage';
-import BudgetsPage from '@/views/BudgetsPage';
 import DashboardPage from '@/views/DashboardPage';
 import SettingsPage from '@/views/SettingsPage';
 import TransactionsPage from '@/views/TransactionsPage';
@@ -13,7 +12,7 @@ import { getCurrentMonthSelection, type MonthYearSelection } from '../utils/date
 import { ErrorBoundary } from './ErrorBoundary';
 import Card from './ui/Card';
 
-export type TabKey = 'dashboard' | 'trends' | 'transactions' | 'budgets' | 'accounts' | 'settings';
+export type TabKey = 'dashboard' | 'trends' | 'transactions' | 'accounts' | 'settings';
 
 interface AuthenticatedAppProps {
   onLogout: () => void;
@@ -33,17 +32,18 @@ export function AuthenticatedApp({ onLogout, initialTab }: AuthenticatedAppProps
     setTab('transactions');
   };
 
-  const openTransactionsForCategory = (category: string) => {
+  const openTransactionsForCategory = (category: string, targetPeriod?: MonthYearSelection) => {
+    if (targetPeriod) {
+      setPeriod(targetPeriod);
+    }
     setTransactionAccountId(null);
     setTransactionCategory(category);
     setTab('transactions');
   };
 
   const handleTabChange = (nextTab: TabKey) => {
-    if (nextTab === 'transactions') {
-      setTransactionAccountId(null);
-      setTransactionCategory(null);
-    }
+    setTransactionAccountId(null);
+    setTransactionCategory(null);
     setTab(nextTab);
   };
 
@@ -87,7 +87,12 @@ export function AuthenticatedApp({ onLogout, initialTab }: AuthenticatedAppProps
                   onCategorySelect={openTransactionsForCategory}
                 />
               )}
-              {tab === 'trends' && <TrendsPage />}
+              {tab === 'trends' && (
+                <TrendsPage
+                  period={period}
+                  onPeriodChange={setPeriod}
+                />
+              )}
               {tab === 'transactions' && (
                 <TransactionsPage
                   initialAccountId={transactionAccountId}
@@ -96,7 +101,6 @@ export function AuthenticatedApp({ onLogout, initialTab }: AuthenticatedAppProps
                   onPeriodChange={setPeriod}
                 />
               )}
-              {tab === 'budgets' && <BudgetsPage />}
               {tab === 'accounts' && (
                 <AccountsPage onError={setError} onAccountSelect={openTransactionsForAccount} />
               )}

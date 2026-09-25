@@ -1,5 +1,5 @@
 import type { AnalyticsTopMerchantsResponse } from '../../../types/api';
-import { formatCategoryName } from '../../../utils/categories';
+import { resolveMajorCategory } from '../../../utils/categories';
 
 export type DonutDatum = { name: string; value: number };
 
@@ -21,7 +21,7 @@ export function categoriesToDonut(categories: CategoryDatum[] = []): DonutDatum[
       continue;
     }
 
-    const name = formatCategoryName(rawName);
+    const name = resolveMajorCategory(rawName);
     categoryTotals.set(name, (categoryTotals.get(name) || 0) + value);
   }
 

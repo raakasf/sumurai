@@ -35,12 +35,25 @@ export const MonthYearSelector: React.FC<MonthYearSelectorProps> = ({
   const availableMonths =
     value.year === currentYear ? months.slice(0, currentMonth + 1) : months;
 
+  const isAllYear = value.month === null;
   const setMonth = (month: number) => onChange({ ...value, month });
+  const toggleAllYear = () => {
+    if (isAllYear) {
+      const targetMonth = value.year === currentYear ? currentMonth : 0;
+      onChange({ ...value, month: targetMonth });
+    } else {
+      onChange({ ...value, month: null });
+    }
+  };
   const setYear = (year: number) => {
     if (!Number.isFinite(year)) return;
     const nextYear = Math.min(Math.trunc(year), currentYear);
     const nextMonth =
-      nextYear === currentYear ? Math.min(value.month, currentMonth) : value.month;
+      value.month === null
+        ? null
+        : nextYear === currentYear
+          ? Math.min(value.month, currentMonth)
+          : value.month;
     onChange({ year: nextYear, month: nextMonth });
   };
 
@@ -88,7 +101,7 @@ export const MonthYearSelector: React.FC<MonthYearSelectorProps> = ({
           style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
         >
           {availableMonths.map((label, month) => {
-            const selected = value.month === month;
+            const selected = isAllYear || value.month === month;
             return (
               <button
                 type="button"
@@ -105,7 +118,9 @@ export const MonthYearSelector: React.FC<MonthYearSelectorProps> = ({
                   'transition-all',
                   'duration-200',
                   selected
-                    ? 'bg-primary-100 text-slate-900 shadow dark:bg-slate-600 dark:text-slate-100'
+                    ? isAllYear
+                      ? 'bg-primary-100/75 text-slate-900 shadow-sm dark:bg-slate-600/75 dark:text-slate-100'
+                      : 'bg-primary-100 text-slate-900 shadow dark:bg-slate-600 dark:text-slate-100'
                     : 'text-slate-700 hover:-translate-y-[1px] hover:bg-white/60 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-700/60 dark:hover:text-slate-100'
                 )}
                 aria-pressed={selected}
@@ -162,7 +177,9 @@ export const MonthYearSelector: React.FC<MonthYearSelectorProps> = ({
           >
             <ChevronLeft className={cn('h-4', 'w-4')} />
           </button>
-          <div
+          <button
+            type="button"
+            onClick={toggleAllYear}
             className={cn(
               'grid',
               'h-8',
@@ -172,13 +189,23 @@ export const MonthYearSelector: React.FC<MonthYearSelectorProps> = ({
               'text-center',
               'text-sm',
               'font-semibold',
-              'text-slate-900',
-              'dark:text-slate-100'
+              'transition-all',
+              'duration-200',
+              'cursor-pointer',
+              isAllYear
+                ? 'bg-primary-100 text-slate-900 shadow dark:bg-slate-600 dark:text-slate-100 ring-2 ring-primary-500/40'
+                : 'text-slate-700 hover:-translate-y-[1px] hover:bg-white/60 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-700/60 dark:hover:text-slate-100'
             )}
-            aria-live="polite"
+            title={
+              isAllYear
+                ? 'Entire year selected — click to select single month'
+                : 'Click to select entire year'
+            }
+            aria-pressed={isAllYear}
+            aria-label={`Select entire year ${value.year}`}
           >
             {value.year}
-          </div>
+          </button>
           <button
             type="button"
             onClick={() => setYear(value.year + 1)}

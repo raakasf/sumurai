@@ -86,7 +86,9 @@ pub struct TransactionWithAccount {
     pub account_mask: Option<String>,
     pub provider: Option<String>,
     pub custom_category: Option<String>,
+    pub custom_subcategory: Option<String>,
     pub rule_category: Option<String>,
+    pub rule_subcategory: Option<String>,
 }
 
 pub struct TransactionsQuery {
@@ -283,17 +285,32 @@ impl Transaction {
             .unwrap_or_else(|| chrono::Utc::now().date_naive());
 
         let categories = plaid_txn["category"].as_array();
-        let category_primary = categories
+        let raw_primary = categories
             .and_then(|arr| arr.first())
             .and_then(|v| v.as_str())
             .unwrap_or("OTHER")
             .to_string();
 
-        let category_detailed = categories
+        let raw_detailed = categories
             .and_then(|arr| arr.get(1))
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
+
+        let (category_primary, category_detailed) = if raw_primary.eq_ignore_ascii_case("RENT_AND_UTILITIES") {
+            let mapped_detailed = if raw_detailed.to_uppercase().contains("WATER") {
+                "Water"
+            } else if raw_detailed.to_uppercase().contains("TELEPHONE") || raw_detailed.to_uppercase().contains("PHONE") {
+                "Phone"
+            } else if raw_detailed.to_uppercase().contains("INTERNET") {
+                "Internet"
+            } else {
+                "Utilities"
+            };
+            ("Bills & Utilities".to_string(), mapped_detailed.to_string())
+        } else {
+            (raw_primary, raw_detailed)
+        };
 
         Self {
             id: Uuid::new_v4(),

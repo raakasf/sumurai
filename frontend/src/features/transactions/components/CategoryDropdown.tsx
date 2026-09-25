@@ -1,48 +1,88 @@
-import { AdjustmentsHorizontalIcon, PlusIcon, XMarkIcon } from '@heroicons/react/24/outline';
+import {
+  AdjustmentsHorizontalIcon,
+  CheckIcon,
+  MagnifyingGlassIcon,
+  PlusIcon,
+  XMarkIcon,
+} from '@heroicons/react/24/outline';
 import { AnimatePresence, motion } from 'framer-motion';
+import {
+  Activity,
+  ArrowLeftRight,
+  Briefcase,
+  Car,
+  DollarSign,
+  Film,
+  Gift,
+  GraduationCap,
+  Hammer,
+  Heart,
+  Home,
+  PiggyBank,
+  Plane,
+  Receipt,
+  Scale,
+  Scissors,
+  ShieldCheck,
+  ShoppingBag,
+  ShoppingCart,
+  Sparkles,
+  Utensils,
+  Zap,
+} from 'lucide-react';
 import type React from 'react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { cn } from '@/ui/primitives';
-import { ConflictError } from '../../../services/ApiClient';
 import type { UserCategory } from '../../../types/api';
-import { formatCategoryName, getTagThemeForCategory } from '../../../utils/categories';
+import {
+  CATEGORIES_TAXONOMY,
+  formatCategoryName,
+  getTagThemeForCategory,
+  resolveMajorCategory,
+} from '../../../utils/categories';
 
 type OverrideType = 'none' | 'rule' | 'explicit';
 
 interface CategoryDropdownProps {
   currentCategory: string;
+  currentSubcategory?: string;
   overrideType: OverrideType;
   merchantName?: string;
   userCategories: UserCategory[];
-  onSelect: (categoryName: string) => Promise<void>;
+  onSelect: (categoryName: string, subcategoryName?: string) => Promise<void>;
   onReset: () => Promise<void>;
-  onCreateAndSelect: (name: string) => Promise<void>;
-  onCreateRule: (pattern: string, categoryName: string) => Promise<void>;
+  onCreateAndSelect: (name: string, parentCategory?: string) => Promise<void>;
+  onCreateRule: (pattern: string, categoryName: string, subcategoryName?: string) => Promise<void>;
   onDeleteCategory: (categoryId: string) => Promise<void>;
 }
 
-const BUILT_IN_CATEGORIES = [
-  'FOOD_AND_DRINK',
-  'SHOPPING',
-  'TRAVEL',
-  'ENTERTAINMENT',
-  'GENERAL_MERCHANDISE',
-  'GENERAL_SERVICES',
-  'TRANSFER_IN',
-  'TRANSFER_OUT',
-  'INCOME',
-  'RENT_AND_UTILITIES',
-  'HEALTHCARE',
-  'PERSONAL_CARE',
-  'EDUCATION',
-  'OTHER',
-];
+// Icon mapping for each major category
+function getCategoryIcon(name: string) {
+  const norm = name.toLowerCase();
+  if (norm.includes('bill') || norm.includes('util')) return <Zap className="h-4 w-4 text-amber-500" />;
+  if (norm.includes('childcare')) return <Heart className="h-4 w-4 text-rose-500" />;
+  if (norm.includes('earned income')) return <Briefcase className="h-4 w-4 text-emerald-500" />;
+  if (norm.includes('education')) return <GraduationCap className="h-4 w-4 text-blue-500" />;
+  if (norm.includes('entertainment')) return <Film className="h-4 w-4 text-purple-500" />;
+  if (norm.includes('food')) return <Utensils className="h-4 w-4 text-orange-500" />;
+  if (norm.includes('gift')) return <Gift className="h-4 w-4 text-pink-500" />;
+  if (norm.includes('grocer')) return <ShoppingCart className="h-4 w-4 text-lime-500" />;
+  if (norm.includes('improvement')) return <Hammer className="h-4 w-4 text-yellow-600" />;
+  if (norm.includes('management')) return <Home className="h-4 w-4 text-indigo-500" />;
+  if (norm.includes('insurance')) return <ShieldCheck className="h-4 w-4 text-teal-500" />;
+  if (norm.includes('medical')) return <Activity className="h-4 w-4 text-red-500" />;
+  if (norm.includes('personal care')) return <Scissors className="h-4 w-4 text-violet-500" />;
+  if (norm.includes('pet')) return <Sparkles className="h-4 w-4 text-amber-600" />;
+  if (norm.includes('shopping')) return <ShoppingBag className="h-4 w-4 text-cyan-500" />;
+  if (norm.includes('tax refund')) return <PiggyBank className="h-4 w-4 text-green-500" />;
+  if (norm.includes('tax')) return <Scale className="h-4 w-4 text-red-600" />;
+  if (norm.includes('transportation')) return <Car className="h-4 w-4 text-sky-500" />;
+  if (norm.includes('transfer')) return <ArrowLeftRight className="h-4 w-4 text-slate-500" />;
+  if (norm.includes('travel')) return <Plane className="h-4 w-4 text-indigo-400" />;
+  return <Receipt className="h-4 w-4 text-slate-400" />;
+}
 
-// Trim the trailing numeric/date tokens from a merchant name and append *
-// so the pattern matches all transactions from the same merchant family.
-// e.g. "MD DIR ACH CONTRIB 040926 000029739552008 486 A6068227701" → "MD DIR ACH CONTRIB*"
-// e.g. "STARBUCKS #1234" → "STARBUCKS*"
 function suggestPattern(name: string): string {
   const tokens = name.trim().split(/\s+/);
   const cut = tokens.findIndex((t) => /^\d{4,}/.test(t) || /^#?\d{3,}/.test(t));
@@ -52,6 +92,7 @@ function suggestPattern(name: string): string {
 
 export const CategoryDropdown: React.FC<CategoryDropdownProps> = ({
   currentCategory,
+  currentSubcategory,
   overrideType,
   merchantName,
   userCategories,
@@ -59,23 +100,41 @@ export const CategoryDropdown: React.FC<CategoryDropdownProps> = ({
   onReset,
   onCreateAndSelect,
   onCreateRule,
-  onDeleteCategory,
+  onDeleteCategory: _onDeleteCategory,
 }) => {
   const [open, setOpen] = useState(false);
-  const [newName, setNewName] = useState('');
-  const [creating, setCreating] = useState(false);
+  const [search, setSearch] = useState('');
+  const [addingSubcategoryParent, setAddingSubcategoryParent] = useState<string | null>(null);
+  const [newSubcategoryName, setNewSubcategoryName] = useState('');
   const [creatingRule, setCreatingRule] = useState(false);
   const [rulePattern, setRulePattern] = useState('');
   const [ruleCategory, setRuleCategory] = useState('');
+  const [ruleSubcategory, setRuleSubcategory] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [dropdownPos, setDropdownPos] = useState({ top: 0, left: 0 });
   const buttonRef = useRef<HTMLButtonElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   const updatePosition = useCallback(() => {
     if (!buttonRef.current) return;
     const rect = buttonRef.current.getBoundingClientRect();
-    setDropdownPos({ top: rect.bottom + 4, left: rect.left });
+    const dropdownHeight = 440;
+    const dropdownWidth = 320;
+
+    // Check if dropdown would overflow bottom of viewport
+    let top = rect.bottom + 6;
+    if (top + dropdownHeight > window.innerHeight && rect.top - dropdownHeight - 6 > 0) {
+      top = rect.top - dropdownHeight - 6;
+    }
+
+    // Check if dropdown would overflow right of viewport
+    let left = rect.left;
+    if (left + dropdownWidth > window.innerWidth - 12) {
+      left = Math.max(12, window.innerWidth - dropdownWidth - 12);
+    }
+
+    setDropdownPos({ top, left });
   }, []);
 
   useEffect(() => {
@@ -90,6 +149,14 @@ export const CategoryDropdown: React.FC<CategoryDropdownProps> = ({
   }, [open, updatePosition]);
 
   useEffect(() => {
+    if (open) {
+      setTimeout(() => {
+        searchInputRef.current?.focus();
+      }, 50);
+    }
+  }, [open]);
+
+  useEffect(() => {
     if (!open) return;
     const handler = (e: MouseEvent) => {
       if (
@@ -98,11 +165,10 @@ export const CategoryDropdown: React.FC<CategoryDropdownProps> = ({
         !(e.target as Element).closest('[data-category-dropdown]')
       ) {
         setOpen(false);
-        setCreating(false);
+        setSearch('');
+        setAddingSubcategoryParent(null);
+        setNewSubcategoryName('');
         setCreatingRule(false);
-        setNewName('');
-        setRulePattern('');
-        setRuleCategory('');
         setError(null);
       }
     };
@@ -110,12 +176,17 @@ export const CategoryDropdown: React.FC<CategoryDropdownProps> = ({
     return () => document.removeEventListener('mousedown', handler);
   }, [open]);
 
+  const resolvedCurrentMajor = useMemo(
+    () => resolveMajorCategory(currentCategory),
+    [currentCategory]
+  );
+
   const handleSelect = useCallback(
-    async (name: string) => {
+    async (majorCategory: string, subcategory?: string) => {
       setSaving(true);
       setError(null);
       try {
-        await onSelect(name);
+        await onSelect(majorCategory, subcategory);
         setOpen(false);
       } catch {
         setError('Failed to update category.');
@@ -139,28 +210,24 @@ export const CategoryDropdown: React.FC<CategoryDropdownProps> = ({
     }
   }, [onReset]);
 
-  const handleCreate = useCallback(
-    async (e: React.FormEvent) => {
-      e.preventDefault();
-      const name = newName.trim();
+  const handleCreateSubcategory = useCallback(
+    async (parentCategory: string) => {
+      const name = newSubcategoryName.trim();
       if (!name) return;
       setSaving(true);
       setError(null);
       try {
-        await onCreateAndSelect(name);
-        setNewName('');
-        setCreating(false);
+        await onCreateAndSelect(name, parentCategory);
+        setNewSubcategoryName('');
+        setAddingSubcategoryParent(null);
         setOpen(false);
-      } catch (err: unknown) {
-        const msg = err instanceof ConflictError
-          ? 'A category with that name already exists.'
-          : 'Failed to create category.';
-        setError(msg);
+      } catch {
+        setError('Failed to create sub-category.');
       } finally {
         setSaving(false);
       }
     },
-    [newName, onCreateAndSelect]
+    [newSubcategoryName, onCreateAndSelect]
   );
 
   const handleCreateRule = useCallback(
@@ -168,271 +235,349 @@ export const CategoryDropdown: React.FC<CategoryDropdownProps> = ({
       e.preventDefault();
       const pattern = rulePattern.trim();
       const category = ruleCategory.trim();
+      const subcategory = ruleSubcategory.trim() || undefined;
       if (!pattern || !category) return;
       setSaving(true);
       setError(null);
       try {
-        await onCreateRule(pattern, category);
+        await onCreateRule(pattern, category, subcategory);
         setRulePattern('');
         setRuleCategory('');
+        setRuleSubcategory('');
         setCreatingRule(false);
         setOpen(false);
-      } catch {
-        setError('Failed to create rule.');
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : 'Failed to save rule.';
+        setError(msg);
       } finally {
         setSaving(false);
       }
     },
-    [rulePattern, ruleCategory, onCreateRule]
+    [rulePattern, ruleCategory, ruleSubcategory, onCreateRule]
   );
 
   const openRuleForm = useCallback(() => {
     setCreatingRule(true);
-    setCreating(false);
     setRulePattern(suggestPattern(merchantName ?? ''));
-    setRuleCategory(currentCategory);
+    setRuleCategory(resolvedCurrentMajor);
+    setRuleSubcategory(currentSubcategory ?? '');
     setError(null);
-  }, [merchantName, currentCategory]);
+  }, [merchantName, resolvedCurrentMajor, currentSubcategory]);
 
-  const catName = formatCategoryName(currentCategory);
+  // Build the hierarchical list combining CATEGORIES_TAXONOMY and userCategories
+  const categoriesList = useMemo(() => {
+    const list = CATEGORIES_TAXONOMY.map((cat) => {
+      const customSubs = userCategories
+        .filter((uc) => uc.parent_category?.toLowerCase() === cat.name.toLowerCase())
+        .map((uc) => uc.name);
+
+      const combinedSubs = Array.from(new Set([...cat.subcategories, ...customSubs]))
+        .filter(
+          (sub) =>
+            !sub.toLowerCase().startsWith('other ') &&
+            sub.toLowerCase() !== 'uncategorized' &&
+            (cat.name.toLowerCase() === 'groceries' ? true : sub.trim().toLowerCase() !== cat.name.toLowerCase())
+        );
+      return {
+        ...cat,
+        subcategories: combinedSubs,
+      };
+    });
+
+    const s = search.trim().toLowerCase();
+    if (!s) return list;
+
+    // Filter categories and subcategories
+    return list
+      .map((cat) => {
+        const catMatches = cat.name.toLowerCase().includes(s);
+        const filteredSubs = cat.subcategories.filter((sub) =>
+          sub.toLowerCase().includes(s)
+        );
+        if (catMatches) {
+          return cat;
+        }
+        if (filteredSubs.length > 0) {
+          return {
+            ...cat,
+            subcategories: filteredSubs,
+          };
+        }
+        return null;
+      })
+      .filter((cat): cat is typeof list[0] => cat !== null);
+  }, [userCategories, search]);
+
+  const catName = formatCategoryName(resolvedCurrentMajor);
   const theme = getTagThemeForCategory(catName);
 
-  const builtInOptions = BUILT_IN_CATEGORIES.map((c) => ({
-    value: c,
-    label: formatCategoryName(c),
-  }));
-
-  const customOptions = userCategories.map((uc) => ({
-    value: uc.name,
-    label: uc.name,
-  }));
+  // Label shown on button
+  const displayLabel = useMemo(() => {
+    if (currentSubcategory && currentSubcategory.toLowerCase() !== catName.toLowerCase()) {
+      return `${catName} • ${currentSubcategory}`;
+    }
+    return catName;
+  }, [catName, currentSubcategory]);
 
   const dropdown = (
     <AnimatePresence>
       {open && (
         <motion.div
           data-category-dropdown
-          initial={{ opacity: 0, y: -4, scale: 0.97 }}
+          initial={{ opacity: 0, y: -6, scale: 0.98 }}
           animate={{ opacity: 1, y: 0, scale: 1 }}
-          exit={{ opacity: 0, y: -4, scale: 0.97 }}
-          transition={{ duration: 0.13 }}
-          style={{ position: 'fixed', top: dropdownPos.top, left: dropdownPos.left, zIndex: 9999 }}
+          exit={{ opacity: 0, y: -6, scale: 0.98 }}
+          transition={{ duration: 0.15, ease: 'easeOut' }}
+          style={{
+            position: 'fixed',
+            top: dropdownPos.top,
+            left: dropdownPos.left,
+            zIndex: 9999,
+          }}
           className={cn(
-            'min-w-[200px] max-w-xs overflow-hidden rounded-xl',
-            'border border-slate-200/80 bg-white shadow-xl',
-            'dark:border-slate-700/80 dark:bg-slate-800'
+            'flex flex-col w-80 max-h-[440px] overflow-hidden rounded-2xl',
+            'border border-slate-200/90 bg-white/95 shadow-[0_25px_60px_-15px_rgba(0,0,0,0.3)] backdrop-blur-xl',
+            'dark:border-slate-700/90 dark:bg-slate-900/95 dark:shadow-[0_25px_60px_-15px_rgba(0,0,0,0.6)]'
           )}
         >
-          <div className="max-h-64 overflow-y-auto py-1">
-            {overrideType !== 'none' && (
+          {/* Search bar */}
+          <div className="relative border-b border-slate-200/80 px-3 py-2.5 dark:border-slate-800">
+            <MagnifyingGlassIcon className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            <input
+              ref={searchInputRef}
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search category"
+              className={cn(
+                'w-full rounded-xl bg-slate-100/80 py-1.5 pl-8 pr-3 text-xs text-slate-800',
+                'placeholder:text-slate-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-400/70',
+                'dark:bg-slate-800/80 dark:text-slate-100 dark:placeholder:text-slate-500 dark:focus:bg-slate-800'
+              )}
+            />
+          </div>
+
+          {/* Quick actions: Reset or Rule */}
+          <div className="flex items-center justify-between border-b border-slate-100 px-3 py-1.5 text-xs text-slate-500 dark:border-slate-800 dark:text-slate-400">
+            {overrideType === 'explicit' ? (
               <button
                 type="button"
                 onClick={handleReset}
                 disabled={saving}
-                className={cn(
-                  'flex w-full items-center gap-2 px-3 py-2 text-left text-xs',
-                  'text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-700/50'
-                )}
+                className="flex items-center gap-1 text-[11px] font-medium text-rose-500 hover:text-rose-600 dark:text-rose-400"
               >
-                <XMarkIcon className="h-3.5 w-3.5 shrink-0" />
-                Reset to original
+                <XMarkIcon className="h-3 w-3" />
+                Reset override
               </button>
+            ) : overrideType === 'rule' ? (
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-violet-600 dark:text-violet-400">
+                Rule matched
+              </span>
+            ) : (
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+                Categories
+              </span>
             )}
 
-            {customOptions.length > 0 && (
-              <>
-                <div className="px-3 py-1 text-[10px] font-semibold uppercase tracking-widest text-slate-400 dark:text-slate-500">
-                  My categories
-                </div>
-                {customOptions.map((opt) => {
-                  const t = getTagThemeForCategory(opt.label);
-                  const uc = userCategories.find((c) => c.name === opt.value);
-                  return (
-                    <div key={opt.value} className="group/cat-row flex items-center">
-                      <button
-                        type="button"
-                        disabled={saving}
-                        onClick={() => handleSelect(opt.value)}
-                        className={cn(
-                          'flex flex-1 items-center gap-2 px-3 py-1.5 text-left text-xs',
-                          'text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-700/50',
-                          currentCategory === opt.value && 'font-semibold'
-                        )}
-                      >
-                        <span className={`h-2 w-2 shrink-0 rounded-full ${t.dot}`} aria-hidden="true" />
-                        {opt.label}
-                      </button>
-                      {uc && (
-                        <button
-                          type="button"
-                          disabled={saving}
-                          title="Delete category"
-                          onClick={async (e) => {
-                            e.stopPropagation();
-                            await onDeleteCategory(uc.id);
-                          }}
-                          className={cn(
-                            'mr-1 hidden rounded p-1 text-slate-400 group-hover/cat-row:flex',
-                            'hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-900/30 dark:hover:text-red-400'
-                          )}
-                        >
-                          <XMarkIcon className="h-3 w-3" />
-                        </button>
-                      )}
-                    </div>
-                  );
-                })}
-              </>
-            )}
-
-            <div className="px-3 py-1 text-[10px] font-semibold uppercase tracking-widest text-slate-400 dark:text-slate-500">
-              Categories
-            </div>
-            {builtInOptions.map((opt) => {
-              const t = getTagThemeForCategory(opt.label);
-              return (
-                <button
-                  key={opt.value}
-                  type="button"
-                  disabled={saving}
-                  onClick={() => handleSelect(opt.value)}
-                  className={cn(
-                    'flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs',
-                    'text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-700/50',
-                    currentCategory === opt.value && 'font-semibold'
-                  )}
-                >
-                  <span className={`h-2 w-2 shrink-0 rounded-full ${t.dot}`} aria-hidden="true" />
-                  {opt.label}
-                </button>
-              );
-            })}
+            <button
+              type="button"
+              onClick={openRuleForm}
+              className="flex items-center gap-1 text-[11px] font-medium text-violet-600 hover:text-violet-700 dark:text-violet-400"
+            >
+              <AdjustmentsHorizontalIcon className="h-3 w-3" />
+              Auto-rule
+            </button>
           </div>
 
-          <div className="border-t border-slate-200/80 p-2 dark:border-slate-700/80">
-            {error && (
-              <p className="mb-1.5 px-1 text-[11px] text-red-500">{error}</p>
-            )}
+          {/* Error notice */}
+          {error && (
+            <div className="bg-red-50 px-3 py-1 text-[11px] text-red-600 dark:bg-red-900/30 dark:text-red-400">
+              {error}
+            </div>
+          )}
 
-            {creatingRule ? (
-              <form onSubmit={handleCreateRule} className="flex flex-col gap-1.5">
-                <p className="px-1 text-[10px] font-semibold uppercase tracking-widest text-slate-400 dark:text-slate-500">
-                  New auto-rule
-                </p>
-                <input
-                  autoFocus
-                  value={rulePattern}
-                  onChange={(e) => setRulePattern(e.target.value)}
-                  placeholder="Glob pattern (e.g. *AMAZON*)"
-                  maxLength={200}
-                  className={cn(
-                    'min-w-0 rounded-lg border border-slate-300 bg-white px-2 py-1',
-                    'text-xs text-slate-800 placeholder:text-slate-400 focus:outline-none',
-                    'focus:ring-2 focus:ring-sky-400/60',
-                    'dark:border-slate-600 dark:bg-slate-700 dark:text-slate-100'
-                  )}
-                />
+          {/* Create rule panel */}
+          {creatingRule ? (
+            <form onSubmit={handleCreateRule} className="flex flex-col gap-2 p-3 bg-slate-50 dark:bg-slate-800/50">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-semibold text-slate-700 dark:text-slate-200">
+                  New auto-rule for merchant
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setCreatingRule(false)}
+                  className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                >
+                  <XMarkIcon className="h-4 w-4" />
+                </button>
+              </div>
+              <input
+                value={rulePattern}
+                onChange={(e) => setRulePattern(e.target.value)}
+                placeholder="Merchant pattern (e.g. STARBUCKS*)"
+                className="rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-violet-400 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-100"
+              />
+              <div className="grid grid-cols-2 gap-1.5">
                 <input
                   value={ruleCategory}
                   onChange={(e) => setRuleCategory(e.target.value)}
-                  placeholder="Category name"
-                  maxLength={80}
-                  className={cn(
-                    'min-w-0 rounded-lg border border-slate-300 bg-white px-2 py-1',
-                    'text-xs text-slate-800 placeholder:text-slate-400 focus:outline-none',
-                    'focus:ring-2 focus:ring-sky-400/60',
-                    'dark:border-slate-600 dark:bg-slate-700 dark:text-slate-100'
-                  )}
+                  placeholder="Category"
+                  className="rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-violet-400 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-100"
                 />
-                <div className="flex gap-1.5">
-                  <button
-                    type="submit"
-                    disabled={saving || !rulePattern.trim() || !ruleCategory.trim()}
-                    className={cn(
-                      'flex-1 rounded-lg bg-violet-500 px-2 py-1 text-xs font-medium text-white',
-                      'transition hover:bg-violet-600 disabled:opacity-50'
-                    )}
-                  >
-                    {saving ? '…' : 'Save rule'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setCreatingRule(false);
-                      setRulePattern('');
-                      setRuleCategory('');
-                      setError(null);
-                    }}
-                    className="rounded-lg px-1.5 py-1 text-xs text-slate-500 transition hover:text-slate-700 dark:text-slate-400"
-                  >
-                    <XMarkIcon className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-              </form>
-            ) : creating ? (
-              <form onSubmit={handleCreate} className="flex gap-1.5">
                 <input
-                  autoFocus
-                  value={newName}
-                  onChange={(e) => setNewName(e.target.value)}
-                  placeholder="New category…"
-                  maxLength={80}
-                  className={cn(
-                    'min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-2 py-1',
-                    'text-xs text-slate-800 placeholder:text-slate-400 focus:outline-none',
-                    'focus:ring-2 focus:ring-sky-400/60',
-                    'dark:border-slate-600 dark:bg-slate-700 dark:text-slate-100'
-                  )}
+                  value={ruleSubcategory}
+                  onChange={(e) => setRuleSubcategory(e.target.value)}
+                  placeholder="Subcategory (opt)"
+                  className="rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-violet-400 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-100"
                 />
-                <button
-                  type="submit"
-                  disabled={saving || !newName.trim()}
-                  className={cn(
-                    'rounded-lg bg-sky-500 px-2 py-1 text-xs font-medium text-white',
-                    'transition hover:bg-sky-600 disabled:opacity-50'
-                  )}
-                >
-                  {saving ? '…' : 'Add'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setCreating(false);
-                    setNewName('');
-                    setError(null);
-                  }}
-                  className="rounded-lg px-1.5 py-1 text-xs text-slate-500 transition hover:text-slate-700 dark:text-slate-400"
-                >
-                  <XMarkIcon className="h-3.5 w-3.5" />
-                </button>
-              </form>
-            ) : (
-              <div className="flex flex-col gap-0.5">
-                <button
-                  type="button"
-                  onClick={() => setCreating(true)}
-                  className={cn(
-                    'flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs',
-                    'text-sky-600 transition hover:bg-sky-50 dark:text-sky-400 dark:hover:bg-sky-900/30'
-                  )}
-                >
-                  <PlusIcon className="h-3.5 w-3.5" />
-                  New category
-                </button>
-                <button
-                  type="button"
-                  onClick={openRuleForm}
-                  className={cn(
-                    'flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs',
-                    'text-violet-600 transition hover:bg-violet-50 dark:text-violet-400 dark:hover:bg-violet-900/30'
-                  )}
-                >
-                  <AdjustmentsHorizontalIcon className="h-3.5 w-3.5" />
-                  Auto-rule for this merchant
-                </button>
               </div>
-            )}
-          </div>
+              <button
+                type="submit"
+                disabled={saving || !rulePattern.trim() || !ruleCategory.trim()}
+                className="rounded-lg bg-violet-600 py-1.5 text-xs font-semibold text-white transition hover:bg-violet-700 disabled:opacity-50"
+              >
+                {saving ? 'Saving...' : 'Save Rule'}
+              </button>
+            </form>
+          ) : (
+            /* Categories & Subcategories Tree */
+            <div className="flex-1 overflow-y-auto px-2 py-1 scrollbar-thin">
+              {categoriesList.length === 0 ? (
+                <div className="py-6 text-center text-xs text-slate-400">
+                  No matching categories found
+                </div>
+              ) : (
+                categoriesList.map((cat) => {
+                  const isCurrentMajor =
+                    resolvedCurrentMajor.toLowerCase() === cat.name.toLowerCase();
+
+                  return (
+                    <div key={cat.name} className="mb-2">
+                      {/* Major Category Header (can click to select category directly) */}
+                      <button
+                        type="button"
+                        disabled={saving}
+                        onClick={() => handleSelect(cat.name, undefined)}
+                        className={cn(
+                          'sticky top-0 z-10 flex w-full items-center gap-2 rounded-lg bg-white/95 px-2 py-1.5 text-left text-xs font-semibold backdrop-blur-md transition-colors dark:bg-slate-900/95',
+                          isCurrentMajor && (!currentSubcategory || currentSubcategory.toLowerCase() === cat.name.toLowerCase())
+                            ? 'text-sky-600 dark:text-sky-400 bg-sky-50/80 dark:bg-sky-950/50'
+                            : 'text-slate-900 hover:bg-slate-100/70 dark:text-slate-100 dark:hover:bg-slate-800/60'
+                        )}
+                        title={`Select ${cat.name}`}
+                      >
+                        {getCategoryIcon(cat.name)}
+                        <span className="flex-1 truncate">
+                          {cat.name} <span className="font-normal text-[11px] text-slate-400">({cat.type})</span>
+                        </span>
+                        <span
+                          className={cn(
+                            'flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full border transition-all',
+                            isCurrentMajor && (!currentSubcategory || currentSubcategory.toLowerCase() === cat.name.toLowerCase())
+                              ? 'border-sky-500 bg-sky-500 text-white dark:border-sky-400 dark:bg-sky-400'
+                              : 'border-slate-300 dark:border-slate-600'
+                          )}
+                        >
+                          {isCurrentMajor && (!currentSubcategory || currentSubcategory.toLowerCase() === cat.name.toLowerCase()) && (
+                            <span className="h-1.5 w-1.5 rounded-full bg-white" />
+                          )}
+                        </span>
+                      </button>
+
+                      {/* Sub-categories */}
+                      <div className="ml-5 space-y-0.5 border-l border-slate-100 pl-2 dark:border-slate-800">
+                        {cat.subcategories.map((sub) => {
+                          const isSelected =
+                            isCurrentMajor &&
+                            currentSubcategory?.toLowerCase() === sub.toLowerCase();
+
+                          return (
+                            <button
+                              key={sub}
+                              type="button"
+                              disabled={saving}
+                              onClick={() => handleSelect(cat.name, sub)}
+                              className={cn(
+                                'flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-xs transition-colors',
+                                isSelected
+                                  ? 'bg-sky-50 font-medium text-sky-700 dark:bg-sky-950/40 dark:text-sky-300'
+                                  : 'text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800/60'
+                              )}
+                            >
+                              <span className="truncate">{sub}</span>
+                              {/* Radio indicator matching screenshot */}
+                              <span
+                                className={cn(
+                                  'flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full border transition-all',
+                                  isSelected
+                                    ? 'border-sky-500 bg-sky-500 text-white dark:border-sky-400 dark:bg-sky-400'
+                                    : 'border-slate-300 dark:border-slate-600'
+                                )}
+                              >
+                                {isSelected && <CheckIcon className="h-2.5 w-2.5 stroke-[3]" />}
+                              </span>
+                            </button>
+                          );
+                        })}
+
+                        {/* + Add Sub Category button */}
+                        {addingSubcategoryParent === cat.name ? (
+                          <div className="mt-1 flex items-center gap-1 px-1">
+                            <input
+                              autoFocus
+                              type="text"
+                              value={newSubcategoryName}
+                              onChange={(e) => setNewSubcategoryName(e.target.value)}
+                              placeholder="New sub-category..."
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  e.preventDefault();
+                                  handleCreateSubcategory(cat.name);
+                                } else if (e.key === 'Escape') {
+                                  setAddingSubcategoryParent(null);
+                                }
+                              }}
+                              className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-sky-400 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+                            />
+                            <button
+                              type="button"
+                              disabled={saving || !newSubcategoryName.trim()}
+                              onClick={() => handleCreateSubcategory(cat.name)}
+                              className="rounded-md bg-sky-500 px-2 py-1 text-[11px] font-medium text-white hover:bg-sky-600 disabled:opacity-50"
+                            >
+                              Add
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setAddingSubcategoryParent(null);
+                                setNewSubcategoryName('');
+                              }}
+                              className="p-1 text-slate-400 hover:text-slate-600"
+                            >
+                              <XMarkIcon className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setAddingSubcategoryParent(cat.name);
+                              setNewSubcategoryName('');
+                            }}
+                            className="flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-sky-600 hover:text-sky-700 dark:text-sky-400"
+                          >
+                            <PlusIcon className="h-3 w-3" />
+                            Add Sub Category
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          )}
         </motion.div>
       )}
     </AnimatePresence>
@@ -443,13 +588,13 @@ export const CategoryDropdown: React.FC<CategoryDropdownProps> = ({
       <button
         ref={buttonRef}
         type="button"
-        aria-label={`Change category: ${catName}`}
+        aria-label={`Change category: ${displayLabel}`}
         onClick={() => {
           setOpen((v) => !v);
           setError(null);
         }}
         className={cn(
-          'group/cat inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 transition-all duration-200',
+          'group/cat inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 transition-all duration-200',
           'backdrop-blur-sm ring-1 ring-white/60 dark:ring-white/10',
           'hover:ring-2 hover:ring-sky-400/60 dark:hover:ring-sky-400/50 cursor-pointer',
           theme.tag
@@ -459,7 +604,7 @@ export const CategoryDropdown: React.FC<CategoryDropdownProps> = ({
           className={`h-2 w-2 rounded-full shadow-[0_0_0_1px_rgba(255,255,255,0.85)] dark:shadow-[0_0_0_1px_rgba(15,23,42,0.7)] ${theme.dot}`}
           aria-hidden="true"
         />
-        <span className="max-w-[120px] truncate">{catName}</span>
+        <span className="max-w-[170px] truncate">{displayLabel}</span>
         {overrideType === 'rule' && (
           <span title="Auto-rule applied" className="ml-0.5 opacity-60">
             <AdjustmentsHorizontalIcon className="h-2.5 w-2.5" />

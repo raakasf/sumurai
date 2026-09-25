@@ -4,6 +4,7 @@ import { useAccountFilter } from '../../../hooks/useAccountFilter';
 import { BudgetService } from '../../../services/BudgetService';
 import { TransactionService } from '../../../services/TransactionService';
 import type { Budget, Transaction } from '../../../types/api';
+import { CATEGORIES_TAXONOMY, resolveMajorCategory } from '../../../utils/categories';
 import { optimisticCreate } from '../../../utils/optimistic';
 
 export interface BudgetProgressEntry extends Budget {
@@ -19,8 +20,18 @@ export interface UseBudgetsResult {
   budgets: Budget[];
   computedBudgets: BudgetProgressEntry[];
   load: () => Promise<void>;
-  add: (category: string, amount: number) => Promise<void>;
-  update: (id: string, amount: number) => Promise<void>;
+  add: (
+    category: string,
+    amount: number,
+    frequency?: Budget['frequency'],
+    rollover?: boolean
+  ) => Promise<void>;
+  update: (
+    id: string,
+    amount: number,
+    frequency?: Budget['frequency'],
+    rollover?: boolean
+  ) => Promise<void>;
   remove: (id: string) => Promise<void>;
   categories: string[];
   categoryOptions: string[];
@@ -162,11 +173,19 @@ export function useBudgets(): UseBudgetsResult {
 
   const categoryOptions = useMemo(() => {
     const unique = new Set<string>();
+    for (const cat of CATEGORIES_TAXONOMY) {
+      if (cat.type === 'Expense') {
+        unique.add(cat.name);
+      }
+    }
     for (const txn of transactions) {
       const primary = txn.category?.primary || 'OTHER';
-      unique.add(primary);
+      const major = resolveMajorCategory(primary);
+      if (major !== 'Uncategorized') {
+        unique.add(major);
+      }
     }
-    return Array.from(unique).sort();
+    return Array.from(unique).sort((a, b) => a.localeCompare(b));
   }, [transactions]);
 
   const computedBudgets = useMemo(() => {
@@ -199,7 +218,12 @@ export function useBudgets(): UseBudgetsResult {
   }, []);
 
   const add = useCallback(
-    async (category: string, amount: number) => {
+    async (
+      category: string,
+      amount: number,
+      frequency?: Budget['frequency'],
+      rollover?: boolean
+    ) => {
       setValidationError(null);
       setError(null);
       const exists = budgets.some(
@@ -210,10 +234,10 @@ export function useBudgets(): UseBudgetsResult {
         setValidationError(msg);
         return Promise.reject(new Error(msg));
       }
-      const temp: Budget = { id: generateId(), category, amount };
+      const temp: Budget = { id: generateId(), category, amount, frequency, rollover };
       try {
         await optimisticCreate(setBudgets, temp, () =>
-          BudgetService.createBudget({ category, amount })
+          BudgetService.createBudget({ category, amount, frequency, rollover })
         );
       } catch (error: unknown) {
         const status = extractStatus(error);
@@ -231,12 +255,28 @@ export function useBudgets(): UseBudgetsResult {
   );
 
   const update = useCallback(
-    async (id: string, amount: number) => {
+    async (
+      id: string,
+      amount: number,
+      frequency?: Budget['frequency'],
+      rollover?: boolean
+    ) => {
       setError(null);
       const snapshot = budgets;
-      setBudgets((prev) => prev.map((b) => (b.id === id ? { ...b, amount } : b)));
+      setBudgets((prev) =>
+        prev.map((b) =>
+          b.id === id
+            ? {
+              ...b,
+              amount,
+              frequency: frequency !== undefined ? frequency : b.frequency,
+              rollover: rollover !== undefined ? rollover : b.rollover,
+            }
+            : b
+        )
+      );
       try {
-        const updated = await BudgetService.updateBudget(id, { amount });
+        const updated = await BudgetService.updateBudget(id, { amount, frequency, rollover });
         setBudgets((prev) => prev.map((b) => (b.id === id ? updated : b)));
       } catch (error: unknown) {
         setBudgets(snapshot);

@@ -171,14 +171,6 @@ impl AnalyticsService {
         percentage.round_dp(1)
     }
 
-    fn get_category_name(transaction: &Transaction) -> String {
-        if transaction.category_primary.is_empty() {
-            "Uncategorized".to_string()
-        } else {
-            transaction.category_primary.clone()
-        }
-    }
-
     fn normalize_category_key(category: &str) -> String {
         category
             .chars()
@@ -187,19 +179,105 @@ impl AnalyticsService {
             .collect()
     }
 
+    pub fn resolve_major_category(cat: &str) -> String {
+        let norm = Self::normalize_category_key(cat);
+        match norm.as_str() {
+            "billsutilities" | "billsandutilities" | "billsutilitiesexpense" | "ai" | "internet"
+            | "otherbillsutilities" | "otherbillsandutilities" | "phone" | "television" | "utilities"
+            | "water" | "rentutilities" | "rentandutilities" | "rentutilitieswater"
+            | "uncategorized" => "Bills & Utilities".to_string(),
+
+            "childcare" | "childcareexpense" | "babysupplies" | "babysitterdaycare"
+            | "babysitteranddaycare" | "childsupport" | "kidsactivities" | "otherchildcare" => {
+                "Childcare".to_string()
+            }
+
+            "earnedincome" | "earnedincomeincome" | "bonus" | "paycheck" | "income" => {
+                "Earned Income".to_string()
+            }
+
+            "education" | "educationexpense" | "bookssupplies" | "booksandsupplies"
+            | "othereducation" | "studentloans" | "tuition" => "Education".to_string(),
+
+            "entertainment" | "entertainmentexpense" | "amusement" | "arts" | "moviesdvds"
+            | "moviesanddvds" | "music" | "newspapermagazines" | "newspaperandmagazines"
+            | "otherentertainment" | "subscription" | "subscriptions" => "Entertainment".to_string(),
+
+            "fooddining" | "foodanddining" | "fooddiningexpense" | "foodanddiningexpense"
+            | "alcoholbars" | "alcoholandbars" | "coffeeshops" | "fastfood"
+            | "otherfooddining" | "otherfoodanddining" | "restaurants" | "restaurant" => {
+                "Food & Dining".to_string()
+            }
+
+            "giftsdonations" | "giftsanddonations" | "giftsdonationsexpense"
+            | "giftsanddonationsexpense" | "charity" | "childrenallowance" | "gifts"
+            | "othergiftsdonations" | "othergiftsanddonations" => "Gifts & Donations".to_string(),
+
+            "groceries" | "groceriesexpense" => "Groceries".to_string(),
+
+            "homeimprovement" | "homeimprovementexpense" | "furnishings" | "homeimprovements"
+            | "homesupplies" | "lawngarden" | "lawnandgarden" | "otherhome" | "plantsneeds"
+            | "plantsandneeds" => "Home Improvement".to_string(),
+
+            "homemanagement" | "homemanagementexpense" | "homeservices" | "mortgagerent"
+            | "mortgageandrent" => "Home Management".to_string(),
+
+            "insurance" | "insuranceexpense" | "autoinsurance" | "healthinsurance"
+            | "homeinsurance" | "lifeinsurance" => "Insurance".to_string(),
+
+            "medical" | "medicalexpense" | "dentist" | "doctor" | "eyecare" | "labs"
+            | "mentalhealth" | "othermedical" | "pharmacy" => "Medical".to_string(),
+
+            "pets" | "petsexpense" | "boarding" | "otherpets" => "Pets".to_string(),
+
+            "shopping" | "shoppingexpense" | "books" | "clothing" | "decor" | "electronics"
+            | "hobbies" | "home" | "kitchen" | "othershopping" | "toys"
+            | "personalcare" | "personalcareexpense" | "hair" | "laundry" | "otherpersonalcare"
+            | "spamassage" | "spaandmassage" => "Shopping".to_string(),
+
+            "taxes" | "taxesexpense" | "taxfiling" | "propertytax" | "salestax" | "statetax"
+            | "localtax" | "federaltax" | "othertaxes" => "Taxes".to_string(),
+
+            "taxrefund" | "taxrefundincome" => "Tax Refund".to_string(),
+
+            "transportation" | "transportationexpense" | "autopayment" | "carinsurance"
+            | "carmaintainance" | "carmaintenance" | "carregistration" | "gas"
+            | "otherautotransport" | "otherautoandtransport" | "othertransportation" | "parking"
+            | "publictransport" | "toll" | "trafficticket" => "Transportation".to_string(),
+
+            "transfer" | "transferexcludefrombudget" | "cashspendingtransfer" | "creditcardbill"
+            | "creditcardbills" | "creditcardpayment" | "creditcardpayments" | "cryptodeposit"
+            | "cryptoother" | "cryptowithdrawal" | "investment" | "investments"
+            | "investmentdeposit" | "investmentwithdrawal" | "mortgagepayment" | "othertransfer"
+            | "transferin" | "transferout" | "loanpaymentscreditcardpayment" => "Transfer".to_string(),
+
+            "travel" | "travelexpense" | "airtravel" | "hotel" | "othertravel"
+            | "rentalcartransportation" | "rentalcarandtransportation" => "Travel".to_string(),
+
+            _ => {
+                let trimmed = cat.trim();
+                if trimmed.is_empty() {
+                    "Uncategorized".to_string()
+                } else {
+                    trimmed.to_string()
+                }
+            }
+        }
+    }
+
+    fn get_category_name(transaction: &Transaction) -> String {
+        if transaction.category_primary.is_empty() {
+            "Uncategorized".to_string()
+        } else {
+            Self::resolve_major_category(&transaction.category_primary)
+        }
+    }
+
     pub fn is_spending_excluded_category(category: &str) -> bool {
+        let resolved = Self::resolve_major_category(category);
         matches!(
-            Self::normalize_category_key(category).as_str(),
-            "creditcardbill"
-                | "creditcardbills"
-                | "creditcardpayment"
-                | "creditcardpayments"
-                | "investment"
-                | "investments"
-                | "transferin"
-                | "transferout"
-                | "loanpaymentscreditcardpayment"
-                | "income"
+            resolved.as_str(),
+            "Transfer" | "Tax Refund" | "Earned Income"
         )
     }
 
@@ -211,19 +289,20 @@ impl AnalyticsService {
     }
 
     fn get_effective_category_name(transaction: &TransactionWithAccount) -> String {
-        transaction
+        let raw = transaction
             .custom_category
             .as_ref()
             .or(transaction.rule_category.as_ref())
             .filter(|category| !category.is_empty())
-            .cloned()
+            .map(|s| s.as_str())
             .unwrap_or_else(|| {
                 if transaction.category_primary.is_empty() {
-                    "Uncategorized".to_string()
+                    "Uncategorized"
                 } else {
-                    transaction.category_primary.clone()
+                    &transaction.category_primary
                 }
-            })
+            });
+        Self::resolve_major_category(raw)
     }
 
     fn is_spending_transaction_with_account(transaction: &TransactionWithAccount) -> bool {

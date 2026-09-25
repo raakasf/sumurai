@@ -67,10 +67,11 @@ async fn given_valid_payload_when_update_budget_then_returns_budget() {
     mock.expect_get_budgets_for_user()
         .returning(|_| Box::pin(async { Ok(vec![]) }));
     mock.expect_update_budget_for_user()
-        .returning(move |id, _uid, amount| {
+        .returning(move |id, _uid, amount, _freq, _roll, _start_m| {
             let user_id = user_id;
+            let amt = amount.unwrap_or(rust_decimal_macros::dec!(100));
             Box::pin(async move {
-                Ok(Budget::new(user_id, "Groceries".to_string(), amount).into_with_id(id))
+                Ok(Budget::new(user_id, "Groceries".to_string(), amt).into_with_id(id))
             })
         });
 

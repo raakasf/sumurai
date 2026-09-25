@@ -17,13 +17,15 @@ pub struct UserCategory {
     pub id: Uuid,
     pub user_id: Uuid,
     pub name: String,
+    pub parent_category: Option<String>,
     pub created_at: DateTime<Utc>,
 }
 
 #[derive(Deserialize, ToSchema)]
-#[schema(example = json!({"name": "Travel"}))]
+#[schema(example = json!({"name": "AI", "parent_category": "Bills & Utilities"}))]
 pub struct CreateCategoryRequest {
     pub name: String,
+    pub parent_category: Option<String>,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -34,9 +36,10 @@ pub struct DeleteCategoryResponse {
 }
 
 #[derive(Deserialize, ToSchema)]
-#[schema(example = json!({"category_name": "Travel"}))]
+#[schema(example = json!({"category_name": "Food & Dining", "subcategory_name": "Coffee Shops"}))]
 pub struct UpdateTransactionCategoryRequest {
     pub category_name: String,
+    pub subcategory_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, ToSchema)]
@@ -44,7 +47,8 @@ pub struct UpdateTransactionCategoryRequest {
     "id": "22222222-3333-4444-5555-666666666666",
     "user_id": "99999999-8888-7777-6666-555555555555",
     "pattern": "MD DIR ACH CONTRIB*",
-    "category_name": "Income",
+    "category_name": "Education",
+    "subcategory_name": "Tuition",
     "created_at": "2024-01-01T12:00:00Z",
     "updated_at": "2024-01-01T12:00:00Z"
 }))]
@@ -53,22 +57,25 @@ pub struct CategoryRule {
     pub user_id: Uuid,
     pub pattern: String,
     pub category_name: String,
+    pub subcategory_name: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
 
 #[derive(Deserialize, ToSchema)]
-#[schema(example = json!({"pattern": "MD DIR ACH CONTRIB*", "category_name": "Income"}))]
+#[schema(example = json!({"pattern": "MD DIR ACH CONTRIB*", "category_name": "Education", "subcategory_name": "Tuition"}))]
 pub struct CreateCategoryRuleRequest {
     pub pattern: String,
     pub category_name: String,
+    pub subcategory_name: Option<String>,
 }
 
 #[derive(Deserialize, ToSchema)]
-#[schema(example = json!({"pattern": "MD DIR ACH*", "category_name": "Income"}))]
+#[schema(example = json!({"pattern": "MD DIR ACH*", "category_name": "Education", "subcategory_name": "Tuition"}))]
 pub struct UpdateCategoryRuleRequest {
     pub pattern: Option<String>,
     pub category_name: Option<String>,
+    pub subcategory_name: Option<String>,
 }
 
 #[derive(Serialize, ToSchema)]

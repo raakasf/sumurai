@@ -82,7 +82,7 @@ async fn given_budgets_and_user_isolation_when_updating_then_respects_access_con
     repository
         .expect_update_budget_for_user()
         .times(1)
-        .returning(|_, _, _| {
+        .returning(|_, _, _, _, _, _| {
             Box::pin(async { Err(anyhow::anyhow!("Budget not found or access denied")) })
         });
 

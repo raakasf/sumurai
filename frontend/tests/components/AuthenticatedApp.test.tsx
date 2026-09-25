@@ -166,14 +166,8 @@ describe('AuthenticatedApp shell', () => {
     await user.click(screen.getByRole('button', { name: /^transactions$/i }));
     expect(await screen.findByTestId('transactions-page')).toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: /^budgets$/i }));
-    expect(await screen.findByTestId('budgets-page')).toBeInTheDocument();
-
     await user.click(screen.getByRole('button', { name: /^accounts$/i }));
     expect(await screen.findByTestId('accounts-page')).toBeInTheDocument();
-    await waitFor(() => {
-      expect(screen.queryByTestId('budgets-page')).not.toBeInTheDocument();
-    });
   });
 
   it('renders accounts tab without errors', async () => {

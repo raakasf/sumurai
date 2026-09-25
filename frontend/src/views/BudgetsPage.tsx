@@ -19,9 +19,14 @@ import { BudgetList, type BudgetWithProgress } from '../features/budgets/compone
 import { useBudgets } from '../features/budgets/hooks/useBudgets';
 import { useCurrency } from '../hooks/useCurrency';
 import { PageLayout } from '../layouts/PageLayout';
-import { formatCategoryName } from '../utils/categories';
+import { formatCategoryName, resolveMajorCategory } from '../utils/categories';
+import type { MonthYearSelection } from '../utils/dateRanges';
 
-export default function BudgetsPage() {
+interface BudgetsPageProps {
+  onCategorySelect?: (category: string, period?: MonthYearSelection) => void;
+}
+
+export default function BudgetsPage({ onCategorySelect }: BudgetsPageProps = {}) {
   const { format } = useCurrency();
   const {
     isLoading,
@@ -329,11 +334,10 @@ export default function BudgetsPage() {
             )}
           >
             <div
-              className={`absolute inset-y-0 left-0 rounded-full transition-all duration-500 ${
-                stats.totalSpent > stats.totalBudgeted
+              className={`absolute inset-y-0 left-0 rounded-full transition-all duration-500 ${stats.totalSpent > stats.totalBudgeted
                   ? 'bg-gradient-to-r from-rose-400 via-rose-500 to-rose-600 shadow-[0_0_12px_rgba(244,63,94,0.35)]'
                   : 'bg-gradient-to-r from-sky-400 via-cyan-400 to-violet-500 shadow-[0_0_12px_rgba(14,165,233,0.35)]'
-              }`}
+                }`}
               style={{ width: `${Math.min(100, utilization * 100)}%` }}
             />
           </div>
@@ -599,6 +603,14 @@ export default function BudgetsPage() {
                 onCancelEdit={cancel}
                 onSaveEdit={onSaveEdit}
                 onDelete={onDelete}
+                onCategorySelect={(cat) => {
+                  if (onCategorySelect) {
+                    onCategorySelect(resolveMajorCategory(cat), {
+                      month: month.getMonth(),
+                      year: month.getFullYear(),
+                    });
+                  }
+                }}
               />
             </>
           ) : (

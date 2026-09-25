@@ -20,10 +20,10 @@ interface Props {
   duplicateCandidateIds: string[];
   onMarkDuplicate: (transactionId: string) => Promise<void>;
   userCategories: UserCategory[];
-  onCategorySelect: (transactionId: string, categoryName: string) => Promise<void>;
+  onCategorySelect: (transactionId: string, categoryName: string, subcategoryName?: string) => Promise<void>;
   onCategoryReset: (transactionId: string) => Promise<void>;
-  onCategoryCreate: (transactionId: string, name: string) => Promise<void>;
-  onCategoryRule: (transactionId: string, pattern: string, categoryName: string) => Promise<void>;
+  onCategoryCreate: (transactionId: string, name: string, parentCategory?: string) => Promise<void>;
+  onCategoryRule: (transactionId: string, pattern: string, categoryName: string, subcategoryName?: string) => Promise<void>;
   onCategoryDelete: (categoryId: string) => Promise<void>;
 }
 
@@ -75,7 +75,7 @@ export const TransactionsTable: React.FC<Props> = ({
                 <tr className={cn('border-b', 'border-slate-300', 'dark:border-slate-600')}>
                   <th
                     className={cn(
-                      'w-[15%]',
+                      'w-[12%]',
                       'whitespace-nowrap',
                       'px-4',
                       'py-3',
@@ -90,7 +90,7 @@ export const TransactionsTable: React.FC<Props> = ({
                   </th>
                   <th
                     className={cn(
-                      'w-[30%]',
+                      'w-[22%]',
                       'px-4',
                       'py-3',
                       'text-left',
@@ -104,7 +104,7 @@ export const TransactionsTable: React.FC<Props> = ({
                   </th>
                   <th
                     className={cn(
-                      'w-[15%]',
+                      'w-[13%]',
                       'whitespace-nowrap',
                       'px-4',
                       'py-3',
@@ -119,7 +119,7 @@ export const TransactionsTable: React.FC<Props> = ({
                   </th>
                   <th
                     className={cn(
-                      'w-[20%]',
+                      'w-[25%]',
                       'whitespace-nowrap',
                       'px-4',
                       'py-3',
@@ -134,7 +134,7 @@ export const TransactionsTable: React.FC<Props> = ({
                   </th>
                   <th
                     className={cn(
-                      'w-[20%]',
+                      'w-[28%]',
                       'whitespace-nowrap',
                       'px-4',
                       'py-3',
@@ -173,11 +173,10 @@ export const TransactionsTable: React.FC<Props> = ({
                     return (
                       <tr
                         key={r.id}
-                        className={`group relative border-b border-slate-200/70 transition-all duration-150 ease-out hover:-translate-y-[2px] hover:ring-2 hover:ring-sky-400/60 dark:border-slate-700/50 dark:hover:ring-sky-400/50 ${
-                          i % 2
-                            ? 'bg-slate-100 dark:bg-slate-700/20'
-                            : 'bg-white dark:bg-transparent'
-                        }`}
+                        className={`group relative border-b border-slate-200/70 transition-all duration-150 ease-out hover:-translate-y-[2px] hover:ring-2 hover:ring-sky-400/60 dark:border-slate-700/50 dark:hover:ring-sky-400/50 ${i % 2
+                          ? 'bg-slate-100 dark:bg-slate-700/20'
+                          : 'bg-white dark:bg-transparent'
+                          }`}
                       >
                         <td
                           className={cn(
@@ -195,24 +194,44 @@ export const TransactionsTable: React.FC<Props> = ({
                           {formatDateOnly(r.date)}
                         </td>
                         <td
-                          className={cn('truncate', 'px-4', 'py-3', 'align-middle')}
+                          className={cn('max-w-0', 'px-4', 'py-3', 'align-middle')}
                           title={r.name || r.merchant || '-'}
                         >
                           <div className={cn('flex', 'min-w-0', 'items-center', 'gap-2')}>
-                            <span
+                            <div
                               className={cn(
-                                'block',
                                 'min-w-0',
-                                'truncate',
-                                'font-medium',
-                                'text-slate-900',
-                                'transition-colors',
-                                'duration-500',
-                                'dark:text-white'
+                                'flex-1',
+                                'overflow-x-auto',
+                                'whitespace-nowrap',
+                                'py-0.5'
                               )}
+                              style={{
+                                scrollbarWidth: 'none',
+                                msOverflowStyle: 'none',
+                              }}
+                              onWheel={(e) => {
+                                const el = e.currentTarget;
+                                if (el.scrollWidth > el.clientWidth) {
+                                  if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+                                    el.scrollLeft += e.deltaY;
+                                  }
+                                }
+                              }}
                             >
-                              {r.name || r.merchant || '-'}
-                            </span>
+                              <span
+                                className={cn(
+                                  'inline-block',
+                                  'font-medium',
+                                  'text-slate-900',
+                                  'transition-colors',
+                                  'duration-500',
+                                  'dark:text-white'
+                                )}
+                              >
+                                {r.name || r.merchant || '-'}
+                              </span>
+                            </div>
                             {isDuplicateCandidate && (
                               <span
                                 className={cn(
@@ -236,13 +255,12 @@ export const TransactionsTable: React.FC<Props> = ({
                           </div>
                         </td>
                         <td
-                          className={`whitespace-nowrap px-4 py-3 text-right align-middle tabular-nums font-semibold transition-colors duration-500 ${
-                            displayAmount > 0
-                              ? 'text-green-600 dark:text-green-400'
-                              : displayAmount < 0
-                                ? 'text-red-600 dark:text-red-400'
-                                : 'text-slate-600 dark:text-slate-400'
-                          }`}
+                          className={`whitespace-nowrap px-4 py-3 text-right align-middle tabular-nums font-semibold transition-colors duration-500 ${displayAmount > 0
+                            ? 'text-green-600 dark:text-green-400'
+                            : displayAmount < 0
+                              ? 'text-red-600 dark:text-red-400'
+                              : 'text-slate-600 dark:text-slate-400'
+                            }`}
                         >
                           {format(displayAmount)}
                         </td>
@@ -276,13 +294,14 @@ export const TransactionsTable: React.FC<Props> = ({
                           <div className={cn('flex', 'items-center', 'gap-2')}>
                             <CategoryDropdown
                               currentCategory={r.category?.primary ?? 'OTHER'}
+                              currentSubcategory={r.category?.detailed ?? r.custom_subcategory ?? r.rule_subcategory}
                               overrideType={overrideType}
                               merchantName={r.merchant || r.name}
                               userCategories={userCategories}
-                              onSelect={(name) => onCategorySelect(r.id, name)}
+                              onSelect={(categoryName, subcategoryName) => onCategorySelect(r.id, categoryName, subcategoryName)}
                               onReset={() => onCategoryReset(r.id)}
-                              onCreateAndSelect={(name) => onCategoryCreate(r.id, name)}
-                              onCreateRule={(pattern, categoryName) => onCategoryRule(r.id, pattern, categoryName)}
+                              onCreateAndSelect={(name, parentCategory) => onCategoryCreate(r.id, name, parentCategory)}
+                              onCreateRule={(pattern, categoryName, subcategoryName) => onCategoryRule(r.id, pattern, categoryName, subcategoryName)}
                               onDeleteCategory={onCategoryDelete}
                             />
                             {isDuplicateCandidate && (
