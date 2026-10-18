@@ -12,7 +12,7 @@ import {
   YAxis,
 } from 'recharts';
 import type { DotItemDotProps } from 'recharts/types/util/types';
-import { cn, EmptyState } from '@/ui/primitives';
+import { cn, EmptyState, InfoTooltip } from '@/ui/primitives';
 import BalancesOverview from '../components/BalancesOverview';
 import MonthYearSelector from '../components/MonthYearSelector';
 import Card from '../components/ui/Card';
@@ -41,10 +41,7 @@ const getSelectedMonthWindow = (period: MonthYearSelection) => {
   end.setHours(0, 0, 0, 0);
   return {
     start,
-    horizonDays: Math.max(
-      0,
-      Math.round((end.getTime() - start.getTime()) / 86400000)
-    ),
+    horizonDays: Math.max(0, Math.round((end.getTime() - start.getTime()) / 86400000)),
   };
 };
 
@@ -197,16 +194,22 @@ const DashboardPage: React.FC<DashboardPageProps> = ({
             <Card className="h-full">
               <div className={cn('mb-4', 'flex', 'items-center', 'justify-between')}>
                 <div>
-                  <h3
-                    className={cn(
-                      'text-base',
-                      'font-semibold',
-                      'text-slate-900',
-                      'dark:text-slate-100'
-                    )}
-                  >
-                    Spending Over Time
-                  </h3>
+                  <div className={cn('flex', 'items-center', 'gap-1.5')}>
+                    <h3
+                      className={cn(
+                        'text-base',
+                        'font-semibold',
+                        'text-slate-900',
+                        'dark:text-slate-100'
+                      )}
+                    >
+                      Spending Over Time
+                    </h3>
+                    <InfoTooltip
+                      content="Pending transactions are excluded from dashboard totals. Only settled (posted) spending is shown."
+                      ariaLabel="Pending transactions spending explanation"
+                    />
+                  </div>
                   <p className={cn('text-xs', 'text-slate-600', 'dark:text-slate-400')}>
                     Breakdown by category
                   </p>
@@ -268,10 +271,11 @@ const DashboardPage: React.FC<DashboardPageProps> = ({
                             <button
                               type="button"
                               key={`topcard-${cat.name}`}
-                              className={`p-2 rounded-lg border text-left transition-all duration-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-300 dark:focus-visible:ring-sky-400 ${isHovered
-                                ? 'bg-slate-50 dark:bg-slate-700/40 border-[#93c5fd] dark:border-[#38bdf8] -translate-y-[2px]'
-                                : 'border-slate-200 dark:border-slate-700'
-                                }`}
+                              className={`p-2 rounded-lg border text-left transition-all duration-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-300 dark:focus-visible:ring-sky-400 ${
+                                isHovered
+                                  ? 'bg-slate-50 dark:bg-slate-700/40 border-[#93c5fd] dark:border-[#38bdf8] -translate-y-[2px]'
+                                  : 'border-slate-200 dark:border-slate-700'
+                              }`}
                               aria-label={`Show ${cat.name} transactions`}
                               title={`Show ${cat.name} transactions`}
                               onMouseEnter={() => setHoveredCategory(cat.name)}
@@ -470,12 +474,12 @@ const DashboardPage: React.FC<DashboardPageProps> = ({
                             const spanDays =
                               first && last
                                 ? Math.max(
-                                  1,
-                                  Math.round(
-                                    (new Date(last).getTime() - new Date(first).getTime()) /
-                                    86400000
+                                    1,
+                                    Math.round(
+                                      (new Date(last).getTime() - new Date(first).getTime()) /
+                                        86400000
+                                    )
                                   )
-                                )
                                 : 0;
                             if (!Number.isFinite(d.getTime())) return value;
                             if (spanDays && spanDays <= 92) {
