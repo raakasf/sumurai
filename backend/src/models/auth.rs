@@ -10,17 +10,21 @@ use uuid::Uuid;
 use serde_json::json;
 
 #[derive(Deserialize, ToSchema)]
-#[schema(example = json!({"email": "user@example.com", "password": "SecurePass123!"}))]
+#[schema(example = json!({"email": "user@example.com", "password": "SecurePass123!", "remember_me": true}))]
 pub struct RegisterRequest {
     pub email: String,
     pub password: String,
+    #[serde(default)]
+    pub remember_me: Option<bool>,
 }
 
 #[derive(Deserialize, ToSchema)]
-#[schema(example = json!({"email": "user@example.com", "password": "SecurePass123!"}))]
+#[schema(example = json!({"email": "user@example.com", "password": "SecurePass123!", "remember_me": true}))]
 pub struct LoginRequest {
     pub email: String,
     pub password: String,
+    #[serde(default)]
+    pub remember_me: Option<bool>,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -50,6 +54,8 @@ pub struct Claims {
     pub exp: usize,
     pub iat: usize,
     pub jti: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remember_me: Option<bool>,
 }
 
 impl Claims {
@@ -62,6 +68,7 @@ pub struct AuthToken {
     pub token: String,
     pub jwt_id: String,
     pub expires_at: chrono::DateTime<chrono::Utc>,
+    pub remember_me: bool,
 }
 
 #[derive(Debug)]

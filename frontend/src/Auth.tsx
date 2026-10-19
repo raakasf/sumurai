@@ -21,6 +21,7 @@ interface LoginScreenProps {
 export function LoginScreen({ onNavigateToRegister, onLoginSuccess }: LoginScreenProps) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [rememberMe, setRememberMe] = useState(true);
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
@@ -30,8 +31,12 @@ export function LoginScreen({ onNavigateToRegister, onLoginSuccess }: LoginScree
     setIsLoading(true);
 
     try {
-      const response = await AuthService.login({ email, password });
-      AuthService.storeToken(response.token);
+      const response = await AuthService.login({
+        email,
+        password,
+        remember_me: rememberMe,
+      });
+      AuthService.storeToken(response.token, undefined, rememberMe);
       onLoginSuccess?.(response);
     } catch (error) {
       const errorMessage =
@@ -124,6 +129,39 @@ export function LoginScreen({ onNavigateToRegister, onLoginSuccess }: LoginScree
                 placeholder="••••••••"
                 disabled={isLoading}
               />
+            </div>
+
+            <div className={cn('flex', 'items-center', 'gap-2', 'pt-1', 'pb-1')}>
+              <input
+                type="checkbox"
+                id="remember-me"
+                name="remember_me"
+                checked={rememberMe}
+                onChange={(e) => setRememberMe(e.target.checked)}
+                disabled={isLoading}
+                className={cn(
+                  'h-4',
+                  'w-4',
+                  'rounded',
+                  'border-slate-300',
+                  'dark:border-slate-600',
+                  'text-sky-600',
+                  'focus:ring-sky-500',
+                  'cursor-pointer'
+                )}
+              />
+              <label
+                htmlFor="remember-me"
+                className={cn(
+                  'text-sm',
+                  'text-slate-600',
+                  'dark:text-slate-300',
+                  'cursor-pointer',
+                  'select-none'
+                )}
+              >
+                Remember me (never expires)
+              </label>
             </div>
 
             <Button

@@ -6,12 +6,26 @@ import { BrowserStorageAdapter } from './boundaries';
 interface LoginCredentials {
   email: string;
   password: string;
+  remember_me?: boolean;
 }
 
 interface RegisterCredentials {
   email: string;
   password: string;
+  remember_me?: boolean;
 }
+
+const isRememberMeToken = (token: string): boolean => {
+  try {
+    const base64Url = token.split('.')[1];
+    const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+    const jsonPayload = atob(base64);
+    const parsed = JSON.parse(jsonPayload);
+    return parsed?.remember_me === true || parsed?.never_expires === true;
+  } catch {
+    return false;
+  }
+};
 
 interface AuthResponse {
   token: string;
@@ -80,7 +94,23 @@ export class AuthService {
     }
   }
 
-  static storeToken(token: string, refreshToken?: string): void {
+  static storeToken(token: string, refreshToken?: string, rememberMe?: boolean): void {
+    if (typeof window !== 'undefined') {
+      const shouldRemember =
+        typeof rememberMe === 'boolean'
+          ? rememberMe
+          : isRememberMeToken(token) || window.localStorage?.getItem('sumurai_remember_me') === 'true';
+
+      if (shouldRemember) {
+        try {
+          window.localStorage?.setItem('sumurai_remember_me', 'true');
+        } catch {}
+      } else if (rememberMe === false) {
+        try {
+          window.localStorage?.removeItem('sumurai_remember_me');
+        } catch {}
+      }
+    }
     AuthService.deps.storage.setItem('auth_token', token);
     if (refreshToken) {
       AuthService.deps.storage.setItem('refresh_token', refreshToken);
@@ -95,7 +125,14 @@ export class AuthService {
   static clearToken(): void {
     AuthService.deps.storage.removeItem('auth_token');
     AuthService.deps.storage.removeItem('refresh_token');
-    localStorage.removeItem('plaid_user_id');
+    if (typeof window !== 'undefined') {
+      try {
+        window.localStorage?.removeItem('auth_token');
+        window.localStorage?.removeItem('refresh_token');
+        window.localStorage?.removeItem('sumurai_remember_me');
+        window.localStorage?.removeItem('plaid_user_id');
+      } catch {}
+    }
     AuthService.refreshPromise = null;
     AuthService.encryptedTokenHash = null;
     AuthService.encryptedTokenHashPromise = null;

@@ -223,7 +223,11 @@ impl RedisCache {
     pub async fn set_jwt_token(&self, jwt_id: &str, token: &str, ttl_seconds: u64) -> Result<()> {
         let mut conn = self.connection_manager.clone();
         let key = self.jwt_session_key(jwt_id);
-        conn.set_ex::<_, _, ()>(&key, token, ttl_seconds).await?;
+        if ttl_seconds == 0 {
+            conn.set::<_, _, ()>(&key, token).await?;
+        } else {
+            conn.set_ex::<_, _, ()>(&key, token, ttl_seconds).await?;
+        }
         Ok(())
     }
 
@@ -237,7 +241,11 @@ impl RedisCache {
     pub async fn set_session_valid(&self, jwt_id: &str, ttl_seconds: u64) -> Result<()> {
         let mut conn = self.connection_manager.clone();
         let key = self.jwt_valid_key(jwt_id);
-        conn.set_ex::<_, _, ()>(&key, "1", ttl_seconds).await?;
+        if ttl_seconds == 0 {
+            conn.set::<_, _, ()>(&key, "1").await?;
+        } else {
+            conn.set_ex::<_, _, ()>(&key, "1", ttl_seconds).await?;
+        }
         Ok(())
     }
 

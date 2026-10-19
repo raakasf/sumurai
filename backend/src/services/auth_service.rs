@@ -10,10 +10,12 @@ use uuid::Uuid;
 
 const MIN_SECRET_LENGTH: usize = 32;
 const TOKEN_EXPIRATION_HOURS: i64 = 24;
+const NEVER_EXPIRE_DURATION_DAYS: i64 = 365 * 100;
 
 #[derive(Debug)]
 pub struct AuthService {
     secret_key: String,
+    never_expire_default: bool,
 }
 
 impl AuthService {
@@ -21,7 +23,13 @@ impl AuthService {
         if secret_key.len() < MIN_SECRET_LENGTH {
             return Err(AuthError::InvalidSecret);
         }
-        Ok(Self { secret_key })
+        let never_expire_default = std::env::var("AUTH_SESSION_NEVER_EXPIRES")
+            .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+            .unwrap_or(false);
+        Ok(Self {
+            secret_key,
+            never_expire_default,
+        })
     }
 
     #[tracing::instrument(skip(self, password))]
@@ -48,8 +56,22 @@ impl AuthService {
 
     #[tracing::instrument(skip(self))]
     pub fn generate_token(&self, user_id: Uuid) -> Result<AuthToken, AuthError> {
+        self.generate_token_with_remember_me(user_id, self.never_expire_default)
+    }
+
+    #[tracing::instrument(skip(self))]
+    pub fn generate_token_with_remember_me(
+        &self,
+        user_id: Uuid,
+        remember_me: bool,
+    ) -> Result<AuthToken, AuthError> {
+        let is_never_expire = remember_me || self.never_expire_default;
         let now = Utc::now();
-        let expiration = now + Duration::hours(TOKEN_EXPIRATION_HOURS);
+        let expiration = if is_never_expire {
+            now + Duration::days(NEVER_EXPIRE_DURATION_DAYS)
+        } else {
+            now + Duration::hours(TOKEN_EXPIRATION_HOURS)
+        };
         let jwt_id = Uuid::new_v4().to_string();
 
         let claims = Claims {
@@ -57,6 +79,7 @@ impl AuthService {
             exp: expiration.timestamp() as usize,
             iat: now.timestamp() as usize,
             jti: jwt_id.clone(),
+            remember_me: if is_never_expire { Some(true) } else { None },
         };
 
         let token = encode(
@@ -70,6 +93,7 @@ impl AuthService {
             token,
             jwt_id,
             expires_at: expiration,
+            remember_me: is_never_expire,
         };
 
         attach_encrypted_token_to_current_span(&hash_token(&auth_token.token));
@@ -93,6 +117,7 @@ impl AuthService {
             exp: expiration.timestamp() as usize,
             iat: now.timestamp() as usize,
             jti: jwt_id.clone(),
+            remember_me: None,
         };
 
         let token = encode(
@@ -106,6 +131,7 @@ impl AuthService {
             token,
             jwt_id,
             expires_at: expiration,
+            remember_me: false,
         };
 
         attach_encrypted_token_to_current_span(&hash_token(&auth_token.token));
@@ -130,9 +156,11 @@ impl AuthService {
                 let encrypted_token = hash_token(token);
                 attach_encrypted_token_to_current_span(&encrypted_token);
 
-                let now = Utc::now().timestamp() as usize;
-                if token_data.claims.exp < now {
-                    return Err(AuthError::TokenExpired);
+                if token_data.claims.remember_me != Some(true) {
+                    let now = Utc::now().timestamp() as usize;
+                    if token_data.claims.exp < now {
+                        return Err(AuthError::TokenExpired);
+                    }
                 }
 
                 Ok(token_data.claims)
@@ -173,10 +201,12 @@ impl AuthService {
                 let encrypted_token = hash_token(token);
                 attach_encrypted_token_to_current_span(&encrypted_token);
 
-                let now = Utc::now().timestamp() as usize;
-                let grace_period = 300;
-                if token_data.claims.exp + grace_period < now {
-                    return Err(AuthError::TokenExpired);
+                if token_data.claims.remember_me != Some(true) {
+                    let now = Utc::now().timestamp() as usize;
+                    let grace_period = 300;
+                    if token_data.claims.exp + grace_period < now {
+                        return Err(AuthError::TokenExpired);
+                    }
                 }
 
                 Ok(token_data.claims)

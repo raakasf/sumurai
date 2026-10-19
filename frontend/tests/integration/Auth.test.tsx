@@ -92,9 +92,46 @@ describe('Authentication Components', () => {
             expect(init).toMatchObject({
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ email: 'test@example.com', password: 'TestPassword123!' }),
+              body: JSON.stringify({ email: 'test@example.com', password: 'TestPassword123!', remember_me: true }),
             });
             expect(mockSessionStorage.setItem).toHaveBeenCalledWith('auth_token', mockJwt);
+          });
+        });
+      });
+
+      describe('When remember me is unchecked', () => {
+        it('Then it should submit remember_me as false', async () => {
+          const mockJwt = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.test';
+          fetchMock = installFetchRoutes({
+            'POST /api/auth/login': new Response(JSON.stringify({ token: mockJwt }), {
+              status: 200,
+              headers: { 'Content-Type': 'application/json' },
+            }),
+          });
+
+          render(<LoginScreen onNavigateToRegister={jest.fn()} />);
+
+          const user = userEvent.setup();
+          await user.type(screen.getByLabelText(/email/i), 'test@example.com');
+          await user.type(screen.getByLabelText(/password/i), 'TestPassword123!');
+          const rememberCheckbox = screen.getByLabelText(/remember me/i);
+          expect(rememberCheckbox).toBeChecked();
+          await user.click(rememberCheckbox);
+          expect(rememberCheckbox).not.toBeChecked();
+
+          await user.click(screen.getByRole('button', { name: /sign in/i }));
+
+          await waitFor(() => {
+            const call = (fetchMock as any).mock.calls.find(
+              (c: any[]) => String(c[0]) === '/api/auth/login'
+            );
+            expect(call).toBeTruthy();
+            const [, init] = call;
+            expect(init).toMatchObject({
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ email: 'test@example.com', password: 'TestPassword123!', remember_me: false }),
+            });
           });
         });
       });
@@ -127,7 +164,7 @@ describe('Authentication Components', () => {
           expect(init).toMatchObject({
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email: 'invalid@example.com', password: 'wrongpassword' }),
+            body: JSON.stringify({ email: 'invalid@example.com', password: 'wrongpassword', remember_me: true }),
           });
         });
       });
