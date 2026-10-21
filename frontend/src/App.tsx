@@ -35,6 +35,9 @@ const parseJWT = (token: string) => {
 const isTokenExpired = (token: string): boolean => {
   const payload = parseJWT(token);
   if (payload?.remember_me || payload?.never_expires) return false;
+  if (typeof window !== 'undefined' && window.localStorage?.getItem('sumurai_remember_me') === 'true') {
+    return false;
+  }
   if (!payload?.exp) return true;
   return Math.floor(Date.now() / 1000) >= payload.exp;
 };
@@ -75,6 +78,23 @@ function AppContent({ initialTab, initialAuthScreen }: AppContentProps) {
 
       if (typeof window !== 'undefined' && !window.sessionStorage?.getItem('auth_token')) {
         window.sessionStorage?.setItem('auth_token', token);
+      }
+
+      const payload = parseJWT(token);
+      const isRemember =
+        Boolean(payload?.remember_me || payload?.never_expires) ||
+        (typeof window !== 'undefined' && window.localStorage?.getItem('sumurai_remember_me') === 'true');
+
+      if (isRemember) {
+        setIsAuthenticated(true);
+        setIsLoading(false);
+        // Verify in background; only de-authenticate if the backend explicitly reports 401
+        void AuthService.validateSession().then((isValid) => {
+          if (!isValid && !AuthService.getToken()) {
+            setIsAuthenticated(false);
+          }
+        });
+        return;
       }
 
       const isValid = await AuthService.validateSession();

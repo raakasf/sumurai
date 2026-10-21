@@ -189,7 +189,8 @@ export class AuthService {
         return false;
       }
       console.warn('Session validation failed:', error);
-      return false;
+      // Transient network or server errors should not invalidate active sessions
+      return true;
     }
   }
 

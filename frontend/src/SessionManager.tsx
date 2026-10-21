@@ -147,12 +147,18 @@ const getTokenExpiryTime = (token: string): number | null => {
   if (payload?.remember_me || payload?.never_expires) {
     return null;
   }
+  if (typeof window !== 'undefined' && window.localStorage?.getItem('sumurai_remember_me') === 'true') {
+    return null;
+  }
   return payload?.exp || null;
 };
 
 const isTokenExpired = (token: string): boolean => {
   const payload = parseJWT(token);
   if (payload?.remember_me || payload?.never_expires) {
+    return false;
+  }
+  if (typeof window !== 'undefined' && window.localStorage?.getItem('sumurai_remember_me') === 'true') {
     return false;
   }
   const expiry = payload?.exp || null;
@@ -165,6 +171,9 @@ const getTimeUntilExpiry = (token: string): number => {
   if (payload?.remember_me || payload?.never_expires) {
     return Infinity;
   }
+  if (typeof window !== 'undefined' && window.localStorage?.getItem('sumurai_remember_me') === 'true') {
+    return Infinity;
+  }
   const expiry = payload?.exp || null;
   if (!expiry) return 0;
   return Math.max(0, expiry - Math.floor(Date.now() / 1000));
@@ -175,6 +184,11 @@ export function SessionManager({ children, onLogout }: SessionManagerProps) {
   const [timeRemaining, setTimeRemaining] = useState(0);
 
   const checkSessionExpiry = useCallback(() => {
+    const isRemember =
+      typeof window !== 'undefined' && window.localStorage?.getItem('sumurai_remember_me') === 'true';
+    if (isRemember) {
+      return;
+    }
     const token =
       AuthService.getToken() ||
       (typeof window !== 'undefined'
