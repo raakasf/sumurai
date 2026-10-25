@@ -96,6 +96,33 @@ fn given_valid_jwt_when_validating_then_extracts_claims() {
     let claims = result.unwrap();
     assert_eq!(claims.sub, user_id.to_string());
     assert_eq!(claims.jti, auth_token.jwt_id);
+    assert_eq!(claims.remember_me, None);
+}
+
+#[test]
+fn given_remember_me_when_generating_token_then_creates_non_expiring_jwt_with_claims() {
+    let auth_service = AuthService::new(
+        "this_is_a_very_long_secret_key_for_jwt_auth_service_testing_12345".to_string(),
+    )
+    .unwrap();
+    let user_id = Uuid::new_v4();
+    let auth_token = auth_service
+        .generate_token_with_remember_me(user_id, true)
+        .unwrap();
+
+    assert!(auth_token.remember_me);
+    // Expires roughly 100 years in the future (> 50 years)
+    assert!(auth_token.expires_at > Utc::now() + chrono::Duration::days(365 * 50));
+
+    let result = auth_service.validate_token(&auth_token.token);
+    assert!(result.is_ok());
+    let claims = result.unwrap();
+    assert_eq!(claims.sub, user_id.to_string());
+    assert_eq!(claims.remember_me, Some(true));
+
+    let refresh_result = auth_service.validate_token_for_refresh(&auth_token.token);
+    assert!(refresh_result.is_ok());
+    assert_eq!(refresh_result.unwrap().remember_me, Some(true));
 }
 
 #[test]

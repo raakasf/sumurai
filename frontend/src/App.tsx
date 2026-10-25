@@ -34,6 +34,10 @@ const parseJWT = (token: string) => {
 
 const isTokenExpired = (token: string): boolean => {
   const payload = parseJWT(token);
+  if (payload?.remember_me || payload?.never_expires) return false;
+  if (typeof window !== 'undefined' && window.localStorage?.getItem('sumurai_remember_me') === 'true') {
+    return false;
+  }
   if (!payload?.exp) return true;
   return Math.floor(Date.now() / 1000) >= payload.exp;
 };
@@ -55,12 +59,41 @@ function AppContent({ initialTab, initialAuthScreen }: AppContentProps) {
 
   useEffect(() => {
     const checkAuth = async () => {
-      const token = sessionStorage.getItem('auth_token');
+      const token =
+        AuthService.getToken() ||
+        (typeof window !== 'undefined'
+          ? (window.sessionStorage?.getItem('auth_token') ??
+             window.localStorage?.getItem('auth_token'))
+          : null);
 
       if (!token || isTokenExpired(token)) {
         setIsAuthenticated(false);
-        sessionStorage.removeItem('auth_token');
+        AuthService.clearToken();
+        if (typeof window !== 'undefined') {
+          window.sessionStorage?.removeItem('auth_token');
+        }
         setIsLoading(false);
+        return;
+      }
+
+      if (typeof window !== 'undefined' && !window.sessionStorage?.getItem('auth_token')) {
+        window.sessionStorage?.setItem('auth_token', token);
+      }
+
+      const payload = parseJWT(token);
+      const isRemember =
+        Boolean(payload?.remember_me || payload?.never_expires) ||
+        (typeof window !== 'undefined' && window.localStorage?.getItem('sumurai_remember_me') === 'true');
+
+      if (isRemember) {
+        setIsAuthenticated(true);
+        setIsLoading(false);
+        // Verify in background; only de-authenticate if the backend explicitly reports 401
+        void AuthService.validateSession().then((isValid) => {
+          if (!isValid && !AuthService.getToken()) {
+            setIsAuthenticated(false);
+          }
+        });
         return;
       }
 
@@ -74,6 +107,9 @@ function AppContent({ initialTab, initialAuthScreen }: AppContentProps) {
       try {
         const refreshResponse = await AuthService.refreshToken();
         AuthService.storeToken(refreshResponse.token);
+        if (typeof window !== 'undefined') {
+          window.sessionStorage?.setItem('auth_token', refreshResponse.token);
+        }
         setIsAuthenticated(true);
         setShowOnboarding(!refreshResponse.onboarding_completed);
       } catch (error) {
@@ -90,7 +126,9 @@ function AppContent({ initialTab, initialAuthScreen }: AppContentProps) {
 
   const handleAuthSuccess = useCallback(
     (authResponse: { token: string; onboarding_completed: boolean }) => {
-      sessionStorage.setItem('auth_token', authResponse.token);
+      if (typeof window !== 'undefined') {
+        window.sessionStorage?.setItem('auth_token', authResponse.token);
+      }
       setIsAuthenticated(true);
       setShowOnboarding(!authResponse.onboarding_completed);
     },
@@ -104,6 +142,10 @@ function AppContent({ initialTab, initialAuthScreen }: AppContentProps) {
       console.error('Logout error:', error);
     }
 
+    AuthService.clearToken();
+    if (typeof window !== 'undefined') {
+      window.sessionStorage?.clear();
+    }
     setIsAuthenticated(false);
     setShowOnboarding(false);
     setAuthScreen('login');

@@ -46,7 +46,10 @@ export function SessionExpiryModal({
     try {
       const result = await AuthService.refreshToken();
       if (result?.token) {
-        sessionStorage.setItem('auth_token', result.token);
+        AuthService.storeToken(result.token);
+        if (typeof window !== 'undefined') {
+          window.sessionStorage?.setItem('auth_token', result.token);
+        }
         return true;
       }
     } catch {
@@ -56,12 +59,18 @@ export function SessionExpiryModal({
   };
 
   const handleSessionExpired = () => {
-    sessionStorage.clear();
+    AuthService.clearToken();
+    if (typeof window !== 'undefined') {
+      window.sessionStorage?.clear();
+    }
     onLogout();
   };
 
   const handleLogout = () => {
-    sessionStorage.clear();
+    AuthService.clearToken();
+    if (typeof window !== 'undefined') {
+      window.sessionStorage?.clear();
+    }
     onLogout();
   };
 
@@ -135,17 +144,37 @@ const parseJWT = (token: string) => {
 
 const getTokenExpiryTime = (token: string): number | null => {
   const payload = parseJWT(token);
+  if (payload?.remember_me || payload?.never_expires) {
+    return null;
+  }
+  if (typeof window !== 'undefined' && window.localStorage?.getItem('sumurai_remember_me') === 'true') {
+    return null;
+  }
   return payload?.exp || null;
 };
 
 const isTokenExpired = (token: string): boolean => {
-  const expiry = getTokenExpiryTime(token);
+  const payload = parseJWT(token);
+  if (payload?.remember_me || payload?.never_expires) {
+    return false;
+  }
+  if (typeof window !== 'undefined' && window.localStorage?.getItem('sumurai_remember_me') === 'true') {
+    return false;
+  }
+  const expiry = payload?.exp || null;
   if (!expiry) return true;
   return Math.floor(Date.now() / 1000) >= expiry;
 };
 
 const getTimeUntilExpiry = (token: string): number => {
-  const expiry = getTokenExpiryTime(token);
+  const payload = parseJWT(token);
+  if (payload?.remember_me || payload?.never_expires) {
+    return Infinity;
+  }
+  if (typeof window !== 'undefined' && window.localStorage?.getItem('sumurai_remember_me') === 'true') {
+    return Infinity;
+  }
+  const expiry = payload?.exp || null;
   if (!expiry) return 0;
   return Math.max(0, expiry - Math.floor(Date.now() / 1000));
 };
@@ -155,14 +184,27 @@ export function SessionManager({ children, onLogout }: SessionManagerProps) {
   const [timeRemaining, setTimeRemaining] = useState(0);
 
   const checkSessionExpiry = useCallback(() => {
-    const token = sessionStorage.getItem('auth_token');
+    const isRemember =
+      typeof window !== 'undefined' && window.localStorage?.getItem('sumurai_remember_me') === 'true';
+    if (isRemember) {
+      return;
+    }
+    const token =
+      AuthService.getToken() ||
+      (typeof window !== 'undefined'
+        ? (window.sessionStorage?.getItem('auth_token') ??
+           window.localStorage?.getItem('auth_token'))
+        : null);
     if (!token) {
       onLogout();
       return;
     }
 
     if (isTokenExpired(token)) {
-      sessionStorage.clear();
+      AuthService.clearToken();
+      if (typeof window !== 'undefined') {
+        window.sessionStorage?.clear();
+      }
       onLogout();
       return;
     }
@@ -189,7 +231,10 @@ export function SessionManager({ children, onLogout }: SessionManagerProps) {
       setTimeRemaining((prev) => {
         const newTime = prev - 1;
         if (newTime <= 0) {
-          sessionStorage.clear();
+          AuthService.clearToken();
+          if (typeof window !== 'undefined') {
+            window.sessionStorage?.clear();
+          }
           onLogout();
           return 0;
         }

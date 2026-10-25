@@ -587,17 +587,25 @@ async fn register_user(
         ));
     }
 
-    let auth_token = state.auth_service.generate_token(user_id).map_err(|e| {
-        tracing::error!("Token generation failed for user {}: {}", user_id, e);
-        ApiErrorResponse::internal_server_error("Failed to generate authentication token")
-    })?;
+    let remember_me = req.remember_me.unwrap_or(false);
+    let auth_token = state
+        .auth_service
+        .generate_token_with_remember_me(user_id, remember_me)
+        .map_err(|e| {
+            tracing::error!("Token generation failed for user {}: {}", user_id, e);
+            ApiErrorResponse::internal_server_error("Failed to generate authentication token")
+        })?;
 
     let encrypted_token = hash_token(&auth_token.token);
     attach_encrypted_token_to_current_span(&encrypted_token);
 
-    let ttl = (auth_token.expires_at - Utc::now()).num_seconds().max(0) as u64;
-    if ttl > 0 {
-        // Set session validity flag in cache with JWT TTL
+    let ttl = if auth_token.remember_me {
+        0
+    } else {
+        (auth_token.expires_at - Utc::now()).num_seconds().max(0) as u64
+    };
+    if auth_token.remember_me || ttl > 0 {
+        // Set session validity flag in cache with JWT TTL (0 = non-expiring)
         if let Err(e) = state
             .cache_service
             .set_session_valid(&auth_token.jwt_id, ttl)
@@ -620,6 +628,7 @@ async fn register_user(
 
     tracing::info!(
         encrypted_token = %encrypted_token,
+        remember_me = %auth_token.remember_me,
         "User registered successfully"
     );
 
@@ -677,17 +686,25 @@ async fn login_user(
         return Err(ApiErrorResponse::unauthorized("Invalid email or password"));
     }
 
-    let auth_token = state.auth_service.generate_token(user.id).map_err(|e| {
-        tracing::error!("Token generation failed for user {}: {}", user.id, e);
-        ApiErrorResponse::internal_server_error("Failed to generate authentication token")
-    })?;
+    let remember_me = req.remember_me.unwrap_or(false);
+    let auth_token = state
+        .auth_service
+        .generate_token_with_remember_me(user.id, remember_me)
+        .map_err(|e| {
+            tracing::error!("Token generation failed for user {}: {}", user.id, e);
+            ApiErrorResponse::internal_server_error("Failed to generate authentication token")
+        })?;
 
     let encrypted_token = hash_token(&auth_token.token);
     attach_encrypted_token_to_current_span(&encrypted_token);
 
-    let ttl = (auth_token.expires_at - Utc::now()).num_seconds().max(0) as u64;
-    if ttl > 0 {
-        // Set session validity flag in cache with JWT TTL
+    let ttl = if auth_token.remember_me {
+        0
+    } else {
+        (auth_token.expires_at - Utc::now()).num_seconds().max(0) as u64
+    };
+    if auth_token.remember_me || ttl > 0 {
+        // Set session validity flag in cache with JWT TTL (0 = non-expiring)
         if let Err(e) = state
             .cache_service
             .set_session_valid(&auth_token.jwt_id, ttl)
@@ -710,6 +727,7 @@ async fn login_user(
 
     tracing::info!(
         encrypted_token = %encrypted_token,
+        remember_me = %auth_token.remember_me,
         "User authenticated successfully"
     );
 
@@ -825,19 +843,21 @@ async fn refresh_user_session(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::UNAUTHORIZED)?;
 
+    let remember_me = claims.remember_me.unwrap_or(false);
     let auth_token = state
         .auth_service
-        .generate_token(user_id)
+        .generate_token_with_remember_me(user_id, remember_me)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let encrypted_token = hash_token(&auth_token.token);
     attach_encrypted_token_to_current_span(&encrypted_token);
 
-    let expires_at = chrono::Utc::now() + chrono::Duration::hours(1);
-
-    // Cache refreshed JWT in Redis with TTL
-    let ttl = (auth_token.expires_at - Utc::now()).num_seconds().max(0) as u64;
-    if ttl > 0 {
+    let ttl = if auth_token.remember_me {
+        0
+    } else {
+        (auth_token.expires_at - Utc::now()).num_seconds().max(0) as u64
+    };
+    if auth_token.remember_me || ttl > 0 {
         if let Err(e) = state
             .cache_service
             .set_session_valid(&auth_token.jwt_id, ttl)
@@ -855,15 +875,18 @@ async fn refresh_user_session(
         }
     }
 
+    let expires_at = auth_token.expires_at.to_rfc3339();
+
     tracing::info!(
         encrypted_token = %encrypted_token,
+        remember_me = %auth_token.remember_me,
         "User session refreshed"
     );
 
     Ok(Json(auth_models::AuthResponse {
         token: auth_token.token,
         user_id: claims.user_id(),
-        expires_at: expires_at.to_rfc3339(),
+        expires_at,
         onboarding_completed: user.onboarding_completed,
     }))
 }

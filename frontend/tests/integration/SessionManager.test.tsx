@@ -304,4 +304,28 @@ describe('Session Management & Expiry Modal', () => {
       });
     });
   });
+
+  describe('Never-Expiring Session (Remember Me)', () => {
+    it('Then it should not show expiry warning modal when token has remember_me set', async () => {
+      const mockSessionStorage = jest.mocked(globalThis.sessionStorage);
+
+      const now = Math.floor(Date.now() / 1000);
+      const payload = { jti: 'test-session-id', iat: now, remember_me: true };
+      const encodedPayload = btoa(JSON.stringify(payload));
+      const mockToken = `eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.${encodedPayload}.test`;
+
+      mockSessionStorage.getItem.mockReturnValue(mockToken);
+
+      const onLogout = jest.fn();
+      render(
+        <SessionManager onLogout={onLogout}>
+          <div>App Content</div>
+        </SessionManager>
+      );
+
+      expect(screen.getByText('App Content')).toBeInTheDocument();
+      expect(screen.queryByText(/session expiring/i)).not.toBeInTheDocument();
+      expect(onLogout).not.toHaveBeenCalled();
+    });
+  });
 });
