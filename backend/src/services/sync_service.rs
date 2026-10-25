@@ -8,7 +8,7 @@ use crate::models::{account::Account, plaid::ProviderConnection, transaction::Tr
 use crate::providers::{FinancialDataProvider, ProviderCredentials, ProviderRegistry};
 
 const MAX_SYNC_YEARS: i64 = 5;
-const SAFETY_MARGIN_DAYS: i64 = 2;
+const SAFETY_MARGIN_DAYS: i64 = 14;
 pub const DEFAULT_FIRST_SYNC_DAYS: i64 = 730;
 
 pub struct SyncService {

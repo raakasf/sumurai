@@ -762,7 +762,23 @@ impl DatabaseRepository for PostgresRepository {
                 FROM pending_tx p
                 INNER JOIN posted_tx post
                     ON post.account_id = p.account_id
-                    AND post.amount = p.amount
+                    AND (
+                        post.amount = p.amount
+                        OR (
+                            SIGN(post.amount) = SIGN(p.amount)
+                            AND ABS(post.amount - p.amount) <= 3.00
+                        )
+                        OR (
+                            p.amount > 0
+                            AND post.amount >= p.amount
+                            AND post.amount <= p.amount * 1.20
+                        )
+                        OR (
+                            p.amount < 0
+                            AND post.amount <= p.amount
+                            AND post.amount >= p.amount * 1.20
+                        )
+                    )
                     AND ABS(post.date - p.date) <= 7
                     AND (
                         p.merchant_key = post.merchant_key
@@ -777,7 +793,7 @@ impl DatabaseRepository for PostgresRepository {
                             OR (p.merchant_key LIKE '%amazon%' AND post.merchant_key LIKE '%amazon%')
                         )
                     )
-                ORDER BY p.id, ABS(post.date - p.date) ASC, post.date ASC
+                ORDER BY p.id, ABS(post.amount - p.amount) ASC, ABS(post.date - p.date) ASC, post.date ASC
             ),
             updated AS (
                 UPDATE transactions t
@@ -817,6 +833,24 @@ impl DatabaseRepository for PostgresRepository {
         .bind(user_id)
         .bind(connection_id)
         .fetch_one(&mut *tx)
+        .await?;
+
+        // Automatically purge orphaned pending transactions older than 14 days
+        sqlx::query(
+            r#"
+            DELETE FROM transactions t
+            USING accounts a
+            WHERE a.id = t.account_id
+              AND t.user_id = $1
+              AND t.pending = TRUE
+              AND t.duplicate_of_transaction_id IS NULL
+              AND t.date < CURRENT_DATE - INTERVAL '14 days'
+              AND ($2::uuid IS NULL OR a.provider_connection_id = $2)
+            "#,
+        )
+        .bind(user_id)
+        .bind(connection_id)
+        .execute(&mut *tx)
         .await?;
 
         tx.commit().await?;
