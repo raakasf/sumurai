@@ -172,7 +172,7 @@ mod date_range_calculation_tests {
         let last_sync = Utc::now() - Duration::days(7); // 7 days ago
 
         let (start_date, end_date) = sync_service.calculate_sync_date_range(Some(last_sync));
-        let expected_start = (last_sync - Duration::days(2)).date_naive();
+        let expected_start = (last_sync - Duration::days(14)).date_naive();
         let expected_end = Utc::now().date_naive();
 
         assert_eq!(start_date, expected_start);
@@ -243,7 +243,7 @@ mod sync_recent_transactions_integration_tests {
 
         let (start_date, end_date) = sync_service.calculate_sync_date_range(Some(last_sync));
         let expected_end = Utc::now().date_naive();
-        let expected_start = (last_sync - Duration::days(2)).date_naive();
+        let expected_start = (last_sync - Duration::days(14)).date_naive();
 
         assert_eq!(start_date, expected_start);
         assert_eq!(end_date, expected_end);
