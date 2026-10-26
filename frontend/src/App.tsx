@@ -122,7 +122,7 @@ function AppContent({ initialTab, initialAuthScreen }: AppContentProps) {
   if (isLoading) {
     return (
       <GradientShell>
-        <div className={cn('flex', 'min-h-screen', 'items-center', 'justify-center', 'px-4')}>
+        <div className={cn('flex', 'min-h-[100dvh]', 'items-center', 'justify-center', 'px-4')}>
           <GlassCard
             variant="accent"
             rounded="lg"
@@ -140,7 +140,7 @@ function AppContent({ initialTab, initialAuthScreen }: AppContentProps) {
   if (!isAuthenticated) {
     return (
       <GradientShell className={cn('text-slate-900', 'dark:text-slate-100')}>
-        <div className={cn('flex', 'flex-col', 'min-h-screen')}>
+        <div className={cn('flex', 'flex-col', 'min-h-[100dvh]')}>
           <AppTitleBar
             state="unauthenticated"
             scrolled={false}

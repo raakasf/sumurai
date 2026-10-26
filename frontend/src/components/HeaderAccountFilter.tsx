@@ -113,12 +113,13 @@ export function HeaderAccountFilter({ scrolled }: HeaderAccountFilterProps) {
         aria-haspopup="dialog"
         aria-expanded={isOpen}
       >
-        <Building2 className={cn('h-4', 'w-4')} />
-        <span>{displayText}</span>
+        <Building2 className={cn('h-4', 'w-4', 'shrink-0')} />
+        <span className="truncate max-w-[90px] xs:max-w-[130px] sm:max-w-none">{displayText}</span>
         <ChevronDown
           className={cn(
             'h-4',
             'w-4',
+            'shrink-0',
             'transition-transform',
             'duration-200',
             isOpen && 'rotate-180'
@@ -141,7 +142,9 @@ export function HeaderAccountFilter({ scrolled }: HeaderAccountFilterProps) {
               'top-full',
               'right-0',
               'mt-2',
-              'w-80',
+              'w-[calc(100vw-2rem)]',
+              'max-w-sm',
+              'sm:w-80',
               'max-h-96',
               'flex',
               'flex-col',

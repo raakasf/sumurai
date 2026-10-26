@@ -198,7 +198,10 @@ export const SankeyChart: React.FC<SankeyChartProps> = ({ nodes, links, height }
   };
 
   return (
-    <div className="w-full relative overflow-x-auto py-2">
+    <div
+      className="w-full relative overflow-x-auto touch-pan-x py-2"
+      style={{ WebkitOverflowScrolling: 'touch' }}
+    >
       <div
         style={{
           minWidth: hasSubcategories ? '920px' : '760px',

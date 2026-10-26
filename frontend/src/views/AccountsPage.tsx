@@ -801,13 +801,13 @@ const AccountsPage = ({ onError, onAccountSelect }: AccountsPageProps) => {
   const pendingInstitutions = Math.max(0, summary.institutions - summary.connectedInstitutions);
 
   const actions = (
-    <>
+    <div className="flex flex-wrap items-center gap-2 sm:gap-3 w-full sm:w-auto">
       {hasConnections && (
         <button
           type="button"
           onClick={syncAll}
           disabled={syncingAll || flowLoading}
-          className={syncButtonClasses}
+          className={cn(syncButtonClasses, 'flex-1 sm:flex-initial justify-center')}
         >
           <RefreshCw className={`h-4 w-4 ${syncingAll ? 'animate-spin' : ''}`} />
           {syncingAll ? 'Syncing...' : 'Sync all'}
@@ -817,16 +817,16 @@ const AccountsPage = ({ onError, onAccountSelect }: AccountsPageProps) => {
         type="button"
         onClick={() => void handleConnectProvider('plaid')}
         disabled={connectDisabled}
-        className={connectButtonClasses}
+        className={cn(connectButtonClasses, 'flex-1 sm:flex-initial justify-center')}
       >
         <Plus className={cn('h-4', 'w-4')} />
         <span>Launch Plaid Link</span>
       </button>
-    </>
+    </div>
   );
 
   const statsGrid = (
-    <div className={cn('grid', 'gap-3', 'sm:grid-cols-3')}>
+    <div className={cn('grid', 'gap-2.5 sm:gap-3', 'grid-cols-1', 'sm:grid-cols-3')}>
       {flowError && (
         <div
           className={cn(

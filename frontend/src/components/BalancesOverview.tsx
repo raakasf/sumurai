@@ -329,13 +329,7 @@ export function BalancesOverview() {
         </Alert>
       )}
 
-      <div
-        className={cn(
-          'grid',
-          'gap-3',
-          '[grid-template-columns:repeat(auto-fit,minmax(180px,1fr))]'
-        )}
-      >
+      <div className={cn('grid', 'gap-2.5 sm:gap-3', 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-6')}>
         {overviewCards.map((card) => (
           <HeroStatCard
             key={card.key}

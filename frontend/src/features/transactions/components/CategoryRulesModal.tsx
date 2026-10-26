@@ -14,4 +14,3 @@ export const CategoryRulesModal: React.FC<CategoryRulesModalProps> = ({ isOpen }
 };
 
 export default CategoryRulesModal;
-

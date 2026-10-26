@@ -764,7 +764,15 @@ const TransactionsPage: React.FC<TransactionsPageProps> = ({
         subtitle="Search and filter transactions across all connected accounts."
         error={error}
         stats={
-          <div className={cn('grid', 'gap-3', 'sm:grid-cols-2', 'lg:grid-cols-5')}>
+          <div
+            className={cn(
+              'grid',
+              'gap-2.5 sm:gap-3',
+              'grid-cols-2',
+              'sm:grid-cols-2',
+              'lg:grid-cols-5'
+            )}
+          >
             <HeroStatCard
               index={1}
               title="Transactions"
@@ -827,17 +835,19 @@ const TransactionsPage: React.FC<TransactionsPageProps> = ({
               }
             />
 
-            <HeroStatCard
-              index={5}
-              title={budgetCardData.title}
-              icon={<Target className={cn('h-4', 'w-4')} />}
-              value={budgetCardData.value}
-              suffix={budgetCardData.suffix}
-              subtext={budgetCardData.subtext}
-              pills={budgetCardData.pills}
-              accent={budgetCardData.accent}
-              onClick={() => handleOpenBudgetModal()}
-            />
+            <div className="col-span-2 sm:col-span-1">
+              <HeroStatCard
+                index={5}
+                title={budgetCardData.title}
+                icon={<Target className={cn('h-4', 'w-4')} />}
+                value={budgetCardData.value}
+                suffix={budgetCardData.suffix}
+                subtext={budgetCardData.subtext}
+                pills={budgetCardData.pills}
+                accent={budgetCardData.accent}
+                onClick={() => handleOpenBudgetModal()}
+              />
+            </div>
           </div>
         }
       >
@@ -894,14 +904,16 @@ const TransactionsPage: React.FC<TransactionsPageProps> = ({
               className={cn(
                 'border-b',
                 'border-slate-200/70',
-                'px-6',
+                'px-4 sm:px-6',
                 'pb-4',
-                'pt-6',
+                'pt-4 sm:pt-6',
                 'space-y-3',
                 'dark:border-slate-700/50'
               )}
             >
-              <div className={cn('flex', 'items-center', 'gap-4')}>
+              <div
+                className={cn('flex', 'flex-col md:flex-row', 'md:items-center', 'gap-3 sm:gap-4')}
+              >
                 <div className={cn('flex-1', 'min-w-0')}>
                   <TransactionsFilters
                     categories={categories}
@@ -912,20 +924,30 @@ const TransactionsPage: React.FC<TransactionsPageProps> = ({
                     showSubcategories={false}
                   />
                 </div>
-                <div className={cn('flex', 'flex-shrink-0', 'items-center', 'gap-2')}>
-                  <TransactionsFilters
-                    search={search}
-                    onSearch={setSearch}
-                    showSearch
-                    showCategories={false}
-                    showSubcategories={false}
-                  />
+                <div
+                  className={cn(
+                    'flex',
+                    'w-full md:w-auto',
+                    'items-center',
+                    'justify-between md:justify-end',
+                    'gap-2'
+                  )}
+                >
+                  <div className="flex-1 md:w-52 md:flex-none">
+                    <TransactionsFilters
+                      search={search}
+                      onSearch={setSearch}
+                      showSearch
+                      showCategories={false}
+                      showSubcategories={false}
+                    />
+                  </div>
                   <Button
                     type="button"
                     variant="secondary"
                     size="sm"
                     onClick={() => setIsRulesModalOpen(true)}
-                    className="flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold text-slate-700 hover:text-violet-600 dark:text-slate-300 dark:hover:text-violet-400"
+                    className="flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold text-slate-700 hover:text-violet-600 dark:text-slate-300 dark:hover:text-violet-400"
                     title="Manage auto-categorization rules"
                   >
                     <SlidersHorizontal className="h-3.5 w-3.5 text-violet-500" />
@@ -949,7 +971,14 @@ const TransactionsPage: React.FC<TransactionsPageProps> = ({
               </div>
 
               {/* Account filter */}
-              <div className={cn('flex', 'items-center', 'gap-3')}>
+              <div
+                className={cn(
+                  'flex',
+                  'flex-col sm:flex-row',
+                  'items-start sm:items-center',
+                  'gap-1.5 sm:gap-3'
+                )}
+              >
                 <span
                   className={cn(
                     'flex-shrink-0',
@@ -961,12 +990,12 @@ const TransactionsPage: React.FC<TransactionsPageProps> = ({
                     'transition-colors',
                     'duration-500',
                     'dark:text-slate-400',
-                    'w-28'
+                    'w-auto sm:w-28'
                   )}
                 >
                   Account
                 </span>
-                <div className={cn('min-w-0', 'flex-1')}>
+                <div className={cn('min-w-0', 'w-full sm:w-auto', 'flex-1')}>
                   <div
                     className={cn(
                       'scrollbar-hide',

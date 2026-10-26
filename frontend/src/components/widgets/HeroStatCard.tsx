@@ -186,7 +186,7 @@ export const HeroStatCard: React.FC<HeroStatCardProps> = ({
   index,
   accent: accentProp,
   className,
-  minHeightClassName = 'min-h-[120px]',
+  minHeightClassName = 'min-h-[100px] sm:min-h-[120px]',
   onClick,
   infoTooltip,
 }) => {
@@ -227,7 +227,7 @@ export const HeroStatCard: React.FC<HeroStatCardProps> = ({
     >
       <div
         className={classNames(
-          'relative h-full w-full overflow-hidden rounded-2xl border-2 bg-white/80 p-4 transform-gpu origin-center will-change-transform transition-transform duration-200 dark:bg-[#111a2f]/70',
+          'relative h-full w-full overflow-hidden rounded-2xl border-2 bg-white/80 p-3.5 sm:p-4 transform-gpu origin-center will-change-transform transition-transform duration-200 dark:bg-[#111a2f]/70',
           styles.border,
           styles.borderDark,
           styles.hoverBorder,
@@ -298,8 +298,9 @@ export const HeroStatCard: React.FC<HeroStatCardProps> = ({
                 'max-w-full',
                 'overflow-visible',
                 'whitespace-nowrap',
-                'text-[clamp(0.78rem,1.15vw,1.5rem)]',
-                'font-semibold',
+                'text-lg sm:text-xl',
+                'font-bold',
+                'tracking-tight',
                 'leading-tight',
                 'text-slate-900',
                 'transition-colors',

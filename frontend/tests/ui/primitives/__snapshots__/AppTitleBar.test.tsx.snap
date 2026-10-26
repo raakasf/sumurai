@@ -35,7 +35,7 @@ exports[`AppTitleBar snapshots matches snapshot for authenticated state 1`] = `
         </div>
         <nav
           aria-label="Primary"
-          class="flex gap-2"
+          class="hidden md:flex gap-2"
         >
           <button
             class="inline-flex items-center justify-center gap-2 font-subheading uppercase transition-all duration-200 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-sky-400/80 dark:focus-visible:ring-offset-slate-900 disabled:cursor-not-allowed disabled:opacity-60 group relative overflow-hidden border border-white/65 bg-[linear-gradient(115deg,#38bdf8_0%,#22d3ee_46%,#a855f7_100%)] text-white shadow-[0_16px_42px_-18px_rgba(14,165,233,0.55)] backdrop-blur-sm before:absolute before:inset-0 before:bg-[linear-gradient(140deg,rgba(255,255,255,0.38)_0%,rgba(255,255,255,0)_60%)] before:opacity-80 before:pointer-events-none dark:border-white/20 dark:shadow-[0_16px_38px_-18px_rgba(56,189,248,0.55)] px-4 py-2 text-sm rounded-full px-4 py-1.5 text-sm after:absolute after:inset-[-28%] after:rounded-[999px] after:bg-[radial-gradient(circle_at_35%_30%,rgba(14,165,233,0.16),transparent_62%)] after:opacity-0 after:transition-opacity after:duration-300 hover:after:opacity-90 dark:after:bg-[radial-gradient(circle_at_35%_30%,rgba(56,189,248,0.22),transparent_62%)] "

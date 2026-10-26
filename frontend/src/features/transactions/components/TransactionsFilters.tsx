@@ -69,7 +69,15 @@ const ScrollablePillRow: React.FC<{
   const isAllSelected = !selectedItem;
 
   return (
-    <div className={cn('flex', 'w-full', 'items-center', 'gap-3')}>
+    <div
+      className={cn(
+        'flex',
+        'w-full',
+        'flex-col sm:flex-row',
+        'items-start sm:items-center',
+        'gap-1.5 sm:gap-3'
+      )}
+    >
       <span
         className={cn(
           'flex-shrink-0',
@@ -81,12 +89,12 @@ const ScrollablePillRow: React.FC<{
           'transition-colors',
           'duration-500',
           'dark:text-slate-400',
-          'w-28'
+          'w-auto sm:w-28'
         )}
       >
         {label}
       </span>
-      <div className={cn('relative', 'min-w-0', 'flex-1')}>
+      <div className={cn('relative', 'w-full min-w-0', 'flex-1')}>
         <div
           ref={scrollContainerRef}
           onScroll={checkScroll}
@@ -97,6 +105,7 @@ const ScrollablePillRow: React.FC<{
             'gap-2',
             'overflow-x-auto',
             'overscroll-contain',
+            'touch-pan-x',
             'pb-1',
             'pl-1',
             'pt-1'

@@ -167,7 +167,7 @@ export function WelcomeStep() {
       <div className={cn('relative flex flex-col self-start')}>
         <div
           className={cn(
-            'mb-3 mt-[52px] flex items-center justify-between text-[11px] font-semibold uppercase tracking-[0.3em] text-[#475569] transition-colors duration-300 ease-out dark:text-[#cbd5e1] sm:mb-4'
+            'mb-3 mt-0 lg:mt-[52px] flex items-center justify-between text-[11px] font-semibold uppercase tracking-[0.3em] text-[#475569] transition-colors duration-300 ease-out dark:text-[#cbd5e1] sm:mb-4'
           )}
         >
           <span>Live Dashboard Preview</span>

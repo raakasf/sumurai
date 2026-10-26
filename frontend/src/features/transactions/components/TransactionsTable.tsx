@@ -71,8 +71,8 @@ export const TransactionsTable: React.FC<Props> = ({
         />
       ) : (
         <>
-          <div className="overflow-x-auto">
-            <table className={cn('min-w-full', 'text-sm', 'table-fixed')}>
+          <div className="overflow-x-auto touch-pan-x" style={{ WebkitOverflowScrolling: 'touch' }}>
+            <table className={cn('min-w-[620px] sm:min-w-full', 'text-sm', 'table-fixed')}>
               <thead
                 className={cn(
                   'bg-slate-200',
@@ -414,13 +414,15 @@ export const TransactionsTable: React.FC<Props> = ({
           <div
             className={cn(
               'flex',
+              'flex-col sm:flex-row',
               'items-center',
               'justify-between',
+              'gap-3 sm:gap-4',
               'border-t',
               'border-slate-200/70',
               'bg-slate-50/50',
-              'px-4',
-              'py-4',
+              'px-4 sm:px-6',
+              'py-3 sm:py-4',
               'transition-colors',
               'duration-500',
               'dark:border-slate-700/50',

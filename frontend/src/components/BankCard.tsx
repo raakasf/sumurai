@@ -147,20 +147,20 @@ export const BankCard: React.FC<BankCardProps> = ({
         </div>
         <div className={cn('flex', 'flex-wrap', 'items-center', 'gap-2', 'md:justify-end')}>
           {onReconnect && (
-            <Button onClick={handleReconnect} disabled={loading} variant="secondary">
+            <Button onClick={handleReconnect} disabled={loading} variant="secondary" size="sm">
               <KeyRound className={cn('h-4 w-4')} />
               Reconnect
             </Button>
           )}
-          <Button onClick={handleSync} disabled={loading} variant="secondary">
+          <Button onClick={handleSync} disabled={loading} variant="secondary" size="sm">
             <RefreshCw className={cn('h-4 w-4', loading && 'animate-spin')} />
             Sync now
           </Button>
-          <Button onClick={() => setExpanded((v) => !v)} variant="secondary">
+          <Button onClick={() => setExpanded((v) => !v)} variant="secondary" size="sm">
             <ChevronDown className={cn('h-4 w-4', expanded && 'rotate-180')} />
             {expanded ? 'Hide' : 'Show'}
           </Button>
-          <Button onClick={() => onDisconnectClick(bank)} variant="danger">
+          <Button onClick={() => onDisconnectClick(bank)} variant="danger" size="sm">
             <Unlink className={cn('h-4 w-4')} />
             Disconnect
           </Button>

@@ -152,7 +152,7 @@ export const AppTitleBar = React.forwardRef<HTMLElement, AppTitleBarProps>(
               </div>
 
               {state === 'authenticated' && (
-                <nav className={cn('flex', 'gap-2')} aria-label="Primary">
+                <nav className={cn('hidden md:flex', 'gap-2')} aria-label="Primary">
                   {TABS.map(({ key, label }) => (
                     <Button
                       key={key}
@@ -260,7 +260,7 @@ export const AppTitleBar = React.forwardRef<HTMLElement, AppTitleBarProps>(
                         exit={{ opacity: 0, y: -6, scale: 0.96 }}
                         transition={{ duration: 0.15, ease: 'easeOut' }}
                         className={cn(
-                          'absolute right-0 top-full z-50 mt-2 w-80 sm:w-96 rounded-2xl',
+                          'absolute right-0 top-full z-50 mt-2 w-[calc(100vw-2rem)] max-w-sm sm:w-96 rounded-2xl',
                           'border border-slate-200/80 bg-white/95 p-4',
                           'shadow-[0_20px_50px_-20px_rgba(15,23,42,0.35)]',
                           'backdrop-blur-md',

@@ -48,11 +48,11 @@ export function LoginScreen({ onNavigateToRegister, onLoginSuccess }: LoginScree
       className={cn(
         'relative',
         'flex',
-        'min-h-screen',
+        'min-h-[calc(100dvh-8rem)]',
         'items-center',
         'justify-center',
         'px-4',
-        'py-12',
+        'py-8 sm:py-12',
         'sm:px-6'
       )}
     >
@@ -201,11 +201,11 @@ export function RegisterScreen({ onNavigateToLogin, onRegisterSuccess }: Registe
       className={cn(
         'relative',
         'flex',
-        'min-h-screen',
+        'min-h-[calc(100dvh-8rem)]',
         'items-center',
         'justify-center',
         'px-4',
-        'py-12',
+        'py-8 sm:py-12',
         'sm:px-6'
       )}
     >

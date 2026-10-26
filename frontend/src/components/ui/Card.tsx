@@ -10,7 +10,7 @@ interface CardProps {
 
 export function Card({ children, className, containerClassName }: CardProps) {
   return (
-    <GlassCard containerClassName={containerClassName} className={cn('p-6', className)}>
+    <GlassCard containerClassName={containerClassName} className={cn('p-4 sm:p-6', className)}>
       {children}
     </GlassCard>
   );

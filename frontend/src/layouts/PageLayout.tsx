@@ -28,11 +28,11 @@ export function PageLayout({
         className={cn(
           'relative',
           'overflow-hidden',
-          'rounded-[2.25rem]',
+          'rounded-2xl',
           'border',
           'border-white/35',
           'bg-white/24',
-          'p-8',
+          'p-4',
           'shadow-[0_32px_110px_-60px_rgba(15,23,42,0.75)]',
           'backdrop-blur-[28px]',
           'backdrop-saturate-[150%]',
@@ -42,7 +42,9 @@ export function PageLayout({
           'dark:border-white/12',
           'dark:bg-[#0f172a]/55',
           'dark:shadow-[0_36px_120px_-62px_rgba(2,6,23,0.85)]',
-          'sm:p-12'
+          'sm:p-8',
+          'lg:p-12',
+          'sm:rounded-[2.25rem]'
         )}
       >
         <div className={cn('pointer-events-none', 'absolute', 'inset-0')}>
@@ -50,7 +52,7 @@ export function PageLayout({
             className={cn(
               'absolute',
               'inset-[1px]',
-              'rounded-[2.2rem]',
+              'rounded-[calc(1rem-1px)] sm:rounded-[2.2rem]',
               'ring-1',
               'ring-white/45',
               'shadow-[inset_0_1px_0_rgba(255,255,255,0.45),inset_0_-1px_0_rgba(15,23,42,0.18)]',
@@ -62,7 +64,7 @@ export function PageLayout({
             className={cn(
               'absolute',
               'inset-0',
-              'rounded-[2.2rem]',
+              'rounded-[calc(1rem-1px)] sm:rounded-[2.2rem]',
               'bg-gradient-to-b',
               'from-white/72',
               'via-white/28',
@@ -76,18 +78,18 @@ export function PageLayout({
           />
         </div>
 
-        <div className={cn('relative', 'z-10', 'flex', 'flex-col', 'gap-5')}>
+        <div className={cn('relative', 'z-10', 'flex', 'flex-col', 'gap-4 sm:gap-5')}>
           <div
             className={cn(
               'flex',
               'flex-col',
-              'gap-5',
+              'gap-4 sm:gap-5',
               'lg:flex-row',
               'lg:items-start',
               'lg:justify-between'
             )}
           >
-            <div className={cn('max-w-2xl', 'space-y-3')}>
+            <div className={cn('max-w-2xl', 'space-y-2 sm:space-y-3')}>
               {badge && (
                 <span
                   className={cn(
@@ -98,7 +100,7 @@ export function PageLayout({
                     'bg-white/75',
                     'px-3',
                     'py-1',
-                    'text-[11px]',
+                    'text-[10px] sm:text-[11px]',
                     'font-semibold',
                     'uppercase',
                     'tracking-[0.32em]',
@@ -111,17 +113,18 @@ export function PageLayout({
                   {badge}
                 </span>
               )}
-              <div className="space-y-2">
+              <div className="space-y-1.5 sm:space-y-2">
                 <h1
                   className={cn(
-                    'text-3xl',
+                    'text-2xl',
                     'font-bold',
                     'text-slate-900',
                     'transition-colors',
                     'duration-300',
                     'ease-out',
                     'dark:text-white',
-                    'sm:text-4xl'
+                    'sm:text-3xl',
+                    'lg:text-4xl'
                   )}
                 >
                   {title}
@@ -129,7 +132,7 @@ export function PageLayout({
                 {subtitle && (
                   <p
                     className={cn(
-                      'text-base',
+                      'text-sm sm:text-base',
                       'leading-relaxed',
                       'text-slate-600',
                       'transition-colors',
@@ -145,7 +148,15 @@ export function PageLayout({
             </div>
 
             {actions && (
-              <div className={cn('flex', 'flex-wrap', 'items-center', 'justify-start', 'gap-3')}>
+              <div
+                className={cn(
+                  'flex',
+                  'flex-wrap',
+                  'items-center',
+                  'justify-start',
+                  'gap-2 sm:gap-3'
+                )}
+              >
                 {actions}
               </div>
             )}

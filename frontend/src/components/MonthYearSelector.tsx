@@ -49,39 +49,48 @@ export const MonthYearSelector: React.FC<MonthYearSelectorProps> = ({
         'fixed',
         'left-0',
         'right-0',
-        'z-50',
+        'z-30',
         'flex',
         'justify-center',
-        'px-4',
-        'transition-opacity',
+        'px-2 sm:px-4',
+        'transition-all',
         'duration-300',
         'ease-out',
+        'bottom-20 md:bottom-6',
         visible ? 'opacity-100' : 'opacity-0 pointer-events-none'
       )}
-      style={{ bottom: 24 }}
     >
-      <div className={cn('flex', 'max-w-full', 'items-center', 'justify-center', 'gap-2')}>
+      <div
+        className={cn(
+          'flex',
+          'w-full',
+          'max-w-xl',
+          'items-center',
+          'justify-center',
+          'gap-1.5 sm:gap-2'
+        )}
+      >
         <div
           className={cn(
             'flex',
-            'w-fit',
-            'max-w-[calc(100vw-12rem)]',
-            'sm:max-w-[42rem]',
-            'gap-1.5',
+            'flex-1',
+            'min-w-0',
+            'gap-1 sm:gap-1.5',
             'overflow-x-auto',
             'rounded-2xl',
             'border',
             'border-slate-200/70',
             'bg-white/80',
-            'px-3',
-            'py-2',
+            'px-2.5 sm:px-3',
+            'py-1.5 sm:py-2',
             'shadow-xl',
             'backdrop-blur-md',
             'ring-1',
             'ring-slate-200/60',
             'dark:border-slate-700/70',
             'dark:bg-slate-800/80',
-            'dark:ring-slate-700/60'
+            'dark:ring-slate-700/60',
+            'touch-pan-x'
           )}
           aria-label="Select month"
           style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
@@ -94,12 +103,12 @@ export const MonthYearSelector: React.FC<MonthYearSelectorProps> = ({
                 key={label}
                 onClick={() => setMonth(month)}
                 className={cn(
-                  'h-8',
-                  'min-w-12',
+                  'h-7 sm:h-8',
+                  'min-w-10 sm:min-w-12',
                   'whitespace-nowrap',
                   'rounded-lg',
-                  'px-3',
-                  'text-sm',
+                  'px-2 sm:px-3',
+                  'text-xs sm:text-sm',
                   'font-medium',
                   'transition-all',
                   'duration-200',
@@ -121,14 +130,14 @@ export const MonthYearSelector: React.FC<MonthYearSelectorProps> = ({
           className={cn(
             'flex',
             'flex-shrink-0',
-            'h-12',
+            'h-10 sm:h-12',
             'items-center',
-            'gap-1',
+            'gap-0.5 sm:gap-1',
             'rounded-2xl',
             'border',
             'border-slate-200/70',
             'bg-white/80',
-            'px-2',
+            'px-1.5 sm:px-2',
             'shadow-xl',
             'backdrop-blur-md',
             'ring-1',
@@ -144,8 +153,7 @@ export const MonthYearSelector: React.FC<MonthYearSelectorProps> = ({
             onClick={() => setYear(value.year - 1)}
             className={cn(
               'grid',
-              'h-8',
-              'w-8',
+              'h-7 w-7 sm:h-8 sm:w-8',
               'place-items-center',
               'rounded-lg',
               'text-slate-700',
@@ -161,19 +169,19 @@ export const MonthYearSelector: React.FC<MonthYearSelectorProps> = ({
             aria-label="Previous year"
             title="Previous year"
           >
-            <ChevronLeft className={cn('h-4', 'w-4')} />
+            <ChevronLeft className={cn('h-3.5 w-3.5 sm:h-4 sm:w-4')} />
           </button>
           <button
             type="button"
             onClick={toggleAllYear}
             className={cn(
               'grid',
-              'h-8',
-              'w-20',
+              'h-7 sm:h-8',
+              'w-14 sm:w-20',
               'place-items-center',
               'rounded-lg',
               'text-center',
-              'text-sm',
+              'text-xs sm:text-sm',
               'font-semibold',
               'transition-all',
               'duration-200',
@@ -198,8 +206,7 @@ export const MonthYearSelector: React.FC<MonthYearSelectorProps> = ({
             disabled={value.year >= currentYear}
             className={cn(
               'grid',
-              'h-8',
-              'w-8',
+              'h-7 w-7 sm:h-8 sm:w-8',
               'place-items-center',
               'rounded-lg',
               'text-slate-700',
@@ -217,7 +224,7 @@ export const MonthYearSelector: React.FC<MonthYearSelectorProps> = ({
             aria-label="Next year"
             title="Next year"
           >
-            <ChevronRight className={cn('h-4', 'w-4')} />
+            <ChevronRight className={cn('h-3.5 w-3.5 sm:h-4 sm:w-4')} />
           </button>
         </div>
       </div>

@@ -243,7 +243,7 @@ export function OnboardingWizard({ onComplete, onLogout }: OnboardingWizardProps
 
   return (
     <GradientShell>
-      <div className={cn('flex', 'flex-col', 'min-h-screen')}>
+      <div className={cn('flex', 'flex-col', 'min-h-[100dvh]')}>
         <AppTitleBar
           state="onboarding"
           scrolled={scrolled}
